@@ -52,3 +52,18 @@ jobs:
       - uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Репозиторий станет публичным: в истории допустимы только служебные адреса GitHub.
+      # Служебный коммит слияния PR пропускается (--no-merges), сами адреса в лог не выводятся.
+      - name: Адреса авторов — только служебные GitHub
+        shell: bash
+        run: |
+          bad=$(git log --no-merges --format='%h %ae %ce' | awk '{
+            for (i = 2; i <= 3; i++)
+              if ($i !~ /@users\.noreply\.github\.com$/ && $i != "noreply@github.com") { print $1; break }
+          }')
+          if [ -n "$bad" ]; then
+            echo "::error::Коммиты с личным адресом автора или коммитера: $(echo $bad)"
+            echo "Задайте git config user.email <id>+<логин>@users.noreply.github.com и перепишите эти коммиты."
+            exit 1
+          fi
+          echo "Все адреса в истории служебные."
