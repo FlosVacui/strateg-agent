@@ -5,6 +5,14 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+# Новый запуск для того же PR отменяет предыдущий; запуски на main не отменяются.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     strategy:
@@ -15,14 +23,16 @@ jobs:
     env:
       PYTHONUTF8: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
       - name: Зависимости
-        run: uv sync
-      - name: Ruff
-        run: |
-          uv run ruff check .
-          uv run ruff format --check .
+        run: uv sync --locked
+      - name: Проверка среды
+        run: uv run strateg doctor
+      - name: Ruff — ошибки
+        run: uv run ruff check .
+      - name: Ruff — формат
+        run: uv run ruff format --check .
       - name: Тесты
         run: uv run pytest -q
       - name: Ссылки в документах
@@ -32,10 +42,13 @@ jobs:
 
   secrets:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+      - uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
