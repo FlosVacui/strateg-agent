@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+
+# Секреты: ключи только в .env, образец — .env.example
+.env
+.env.*
+!.env.example
+
+# Проекты пользователя живут локально; в репозитории — только пример и демо
+projects/*
+!projects/README.md
+!projects/example-*/
+!projects/demo-*/
+
+# Временные файлы
+~$*
+*.tmp
+.DS_Store
+Thumbs.db
