@@ -36,13 +36,18 @@ def _stdout_encoding() -> str:
     return sys.stdout.encoding or locale.getpreferredencoding(False)
 
 
+def _is_windows() -> bool:
+    """Отдельная функция, чтобы тесты подменяли платформу без подмены sys.platform на весь процесс."""
+    return sys.platform == "win32"
+
+
 def detect_console_encoding() -> tuple[str, str]:
     """Уровень и пояснение для кодировки консоли.
 
     Вызывать ДО `sys.stdout.reconfigure`: после перенастройки Python всегда говорит utf-8,
     даже если консоль показывает текст в cp866 или cp1251.
     """
-    if sys.platform == "win32":
+    if _is_windows():
         try:
             cp = _windows_console_cp()
         except (AttributeError, OSError):

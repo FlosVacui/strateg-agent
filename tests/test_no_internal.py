@@ -19,13 +19,38 @@ FORBIDDEN = {
     "личный путь (/)": "C:" + "/" + "Users",
     "имя автора": "Flos" + "Vacui",
 }
-# Исключения: путь файла от корня -> какие ключи FORBIDDEN в нём допустимы. Сейчас пусто.
-EXCEPTIONS: dict[str, set[str]] = {}
+# Исключения: путь файла от корня -> какие ключи FORBIDDEN в нём допустимы.
+# В LICENSE и NOTICE имя автора уместно (развилка Р-1).
+EXCEPTIONS: dict[str, set[str]] = {"LICENSE": {"имя автора"}, "NOTICE": {"имя автора"}}
 
 SKIP_DIRS = {".venv", ".git", "__pycache__", ".pytest_cache", ".ruff_cache", "node_modules"}
 
 
+def _walk() -> list[Path]:
+    return [
+        p for p in ROOT.rglob("*") if p.is_file() and not SKIP_DIRS.intersection(p.relative_to(ROOT).parts)
+    ]
+
+
+def _git_toplevel() -> Path | None:
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=ROOT,
+            capture_output=True,
+            check=True,
+            encoding="utf-8",
+            errors="replace",
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return Path(out).resolve() if out else None
+
+
 def candidate_files() -> list[Path]:
+    # Архив, распакованный внутри чужого репозитория: git покажет файлы родителя — обходим папку.
+    if _git_toplevel() != ROOT.resolve():
+        return _walk()
     try:
         out = subprocess.run(
             ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
@@ -34,11 +59,7 @@ def candidate_files() -> list[Path]:
             check=True,
         ).stdout
     except (OSError, subprocess.CalledProcessError):
-        return [
-            p
-            for p in ROOT.rglob("*")
-            if p.is_file() and not SKIP_DIRS.intersection(p.relative_to(ROOT).parts)
-        ]
+        return _walk()
     names = [n for n in out.decode("utf-8", "replace").split("\0") if n]
     return [ROOT / n for n in names if (ROOT / n).is_file()]
 

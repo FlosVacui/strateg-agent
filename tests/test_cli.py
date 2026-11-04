@@ -51,7 +51,7 @@ def test_doctor_unwritable_projects_is_error(capsys, monkeypatch):
 @pytest.mark.parametrize("cp", [866, 1251])
 def test_doctor_catches_wrong_windows_codepage(capsys, monkeypatch, cp):
     """Кодовая страница cp866/cp1251 — предупреждение, даже когда Python уже перешёл на utf-8."""
-    monkeypatch.setattr(cli.sys, "platform", "win32")
+    monkeypatch.setattr(cli, "_is_windows", lambda: True)
     monkeypatch.setattr(cli, "_windows_console_cp", lambda: cp)
     assert main(["doctor"]) == 0  # предупреждение код не меняет
     out = capsys.readouterr().out
@@ -62,13 +62,13 @@ def test_doctor_catches_wrong_windows_codepage(capsys, monkeypatch, cp):
 
 @pytest.mark.parametrize(("cp", "level"), [(65001, cli.OK), (0, cli.OK), (866, cli.WARN)])
 def test_detect_windows_codepage(monkeypatch, cp, level):
-    monkeypatch.setattr(cli.sys, "platform", "win32")
+    monkeypatch.setattr(cli, "_is_windows", lambda: True)
     monkeypatch.setattr(cli, "_windows_console_cp", lambda: cp)
     assert cli.detect_console_encoding()[0] == level
 
 
 def test_detect_posix_encoding(monkeypatch):
-    monkeypatch.setattr(cli.sys, "platform", "linux")
+    monkeypatch.setattr(cli, "_is_windows", lambda: False)
     monkeypatch.setattr(cli, "_stdout_encoding", lambda: "cp866")
     assert cli.detect_console_encoding()[0] == cli.WARN
     monkeypatch.setattr(cli, "_stdout_encoding", lambda: "UTF-8")
