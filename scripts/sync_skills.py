@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import argparse
 import filecmp
 import shutil
 import sys
@@ -43,7 +44,18 @@ def sync() -> int:
     return 0
 
 
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Копия скиллов .claude/skills → .agents/skills")
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="только проверить совпадение, ничего не менять (код 1 при расхождении)",
+    )
+    args = parser.parse_args(argv)
+    return check() if args.check else sync()
+
+
 if __name__ == "__main__":
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
-    sys.exit(check() if "--check" in sys.argv[1:] else sync())
+    sys.exit(main())

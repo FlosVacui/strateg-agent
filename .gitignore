@@ -7,6 +7,14 @@ __pycache__/
 dist/
 build/
 *.egg-info/
+.coverage
+htmlcov/
+
+# Личные настройки среды
+.claude/settings.local.json
+CLAUDE.local.md
+.vscode/
+.idea/
 
 # Секреты: ключи только в .env, образец — .env.example
 .env
@@ -16,8 +24,8 @@ build/
 # Проекты пользователя живут локально; в репозитории — только пример и демо
 projects/*
 !projects/README.md
-!projects/example-*/
-!projects/demo-*/
+!projects/example/
+!projects/demo/
 
 # Временные файлы
 ~$*
