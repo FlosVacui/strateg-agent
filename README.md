@@ -67,6 +67,7 @@ uv run strateg doctor
 
 ## Документы
 - [Путь пользователя и сценарии работы](docs/user-journey.md)
+- [Архитектура](docs/architecture.md)
 - [Матрица требований и доказательств](docs/requirements.md)
 - [Архитектурные решения](docs/adr/README.md)
 - [Изменения](CHANGELOG.md)
