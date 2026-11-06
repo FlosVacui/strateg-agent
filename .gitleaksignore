@@ -1,0 +1,6 @@
+# Отпечатки ложных находок в старом коммите ветки: поле "key" журнала было ключом идемпотентности (sha256), а не секретом.
+# Поле переименовано в idempotency_hash; ниже — ровно эти четыре находки, новые находки не скрываются.
+539a59d3d4d8317822cc7a0e329a7b4c2fe5028d:tests/fixtures/project_valid/journal.jsonl:generic-api-key:1
+539a59d3d4d8317822cc7a0e329a7b4c2fe5028d:tests/fixtures/project_valid/journal.jsonl:generic-api-key:6
+539a59d3d4d8317822cc7a0e329a7b4c2fe5028d:tests/fixtures/project_valid/journal.jsonl:generic-api-key:7
+539a59d3d4d8317822cc7a0e329a7b4c2fe5028d:tests/fixtures/project_valid/journal.jsonl:generic-api-key:9

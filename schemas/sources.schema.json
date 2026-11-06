@@ -1,0 +1,292 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "FetchInfo": {
+      "additionalProperties": false,
+      "description": "Метаданные снимка веб-страницы: что и когда скачано.",
+      "properties": {
+        "accessed_at": {
+          "description": "Дата и время обращения, ISO 8601 с поясом",
+          "format": "date-time",
+          "title": "Accessed At",
+          "type": "string"
+        },
+        "final_url": {
+          "anyOf": [
+            {
+              "pattern": "^https?://[^\\s]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Итоговый адрес после перенаправлений",
+          "title": "Final Url"
+        },
+        "region": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Код региона, например RU-MOW; пусто, если не зависит",
+          "title": "Region"
+        },
+        "encoding": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Кодировка ответа, например utf-8",
+          "title": "Encoding"
+        },
+        "extractor": {
+          "anyOf": [
+            {
+              "pattern": "^[^\\s]+ [0-9][^\\s]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Извлекатель текста с версией",
+          "title": "Extractor"
+        },
+        "raw_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "sha256 сырого ответа после снятия сжатия",
+          "title": "Raw Sha256"
+        }
+      },
+      "required": [
+        "accessed_at"
+      ],
+      "title": "FetchInfo",
+      "type": "object"
+    },
+    "Source": {
+      "additionalProperties": false,
+      "description": "Источник `И-n`: страница, материал человека или синтетика.",
+      "properties": {
+        "id": {
+          "pattern": "^И-[1-9][0-9]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "страница",
+            "PDF",
+            "документ",
+            "таблица",
+            "презентация",
+            "изображение",
+            "интервью",
+            "заметка пользователя",
+            "синтетика"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "pattern": "^https?://[^\\s]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Адрес веб-источника",
+          "title": "Url"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "pattern": "^(?![A-Za-z]:)(?:[^/\\\\\\s\\x00.]|[^/\\\\\\s\\x00][^/\\\\\\x00]*[^/\\\\\\s\\x00.])(?:/(?:[^/\\\\\\s\\x00.]|[^/\\\\\\s\\x00][^/\\\\\\x00]*[^/\\\\\\s\\x00.]))*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Файл материала в inputs/ (или снимок экрана)",
+          "title": "Path"
+        },
+        "access": {
+          "enum": [
+            "получен",
+            "источник недоступен: защита",
+            "источник недоступен: ошибка",
+            "запрещено robots.txt",
+            "нужен браузер"
+          ],
+          "title": "Access",
+          "type": "string"
+        },
+        "access_note": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Ошибка или причина недоступности",
+          "title": "Access Note"
+        },
+        "fetch": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FetchInfo"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "text_path": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "pattern": "^(?![A-Za-z]:)(?:[^/\\\\\\s\\x00.]|[^/\\\\\\s\\x00][^/\\\\\\x00]*[^/\\\\\\s\\x00.])(?:/(?:[^/\\\\\\s\\x00.]|[^/\\\\\\s\\x00][^/\\\\\\x00]*[^/\\\\\\s\\x00.]))*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Файл текста: sources/ для веба, inputs/ для материалов",
+          "title": "Text Path"
+        },
+        "text_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "sha256 файла text_path — это хеш снимка",
+          "title": "Text Sha256"
+        },
+        "suspicious": {
+          "default": false,
+          "title": "Suspicious",
+          "type": "boolean"
+        },
+        "untrusted": {
+          "default": false,
+          "title": "Untrusted",
+          "type": "boolean"
+        },
+        "anonymized": {
+          "description": "Что заменено при обезличивании",
+          "items": {
+            "enum": [
+              "телефоны",
+              "адреса почты",
+              "номера документов и карт",
+              "имена",
+              "ники"
+            ],
+            "type": "string"
+          },
+          "title": "Anonymized",
+          "type": "array"
+        },
+        "anonymization_confirmed": {
+          "default": false,
+          "description": "Человек подтвердил обезличенную копию",
+          "title": "Anonymization Confirmed",
+          "type": "boolean"
+        },
+        "closed_markers": {
+          "description": "Найденные признаки закрытых данных",
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Closed Markers",
+          "type": "array"
+        },
+        "closed_confirmed": {
+          "default": false,
+          "description": "Человек подтвердил, что материал общедоступный",
+          "title": "Closed Confirmed",
+          "type": "boolean"
+        },
+        "no_personal_data_confirmed": {
+          "default": false,
+          "description": "Для изображения: человек подтвердил, что ПДн нет",
+          "title": "No Personal Data Confirmed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "access"
+      ],
+      "title": "Source",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Файл `sources.yaml`: реестр источников. Пишет только CLI.",
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "sources": {
+      "items": {
+        "$ref": "#/$defs/Source"
+      },
+      "title": "Sources",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version"
+  ],
+  "title": "SourcesFile",
+  "type": "object"
+}
