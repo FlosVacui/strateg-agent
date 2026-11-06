@@ -62,7 +62,7 @@ uv run strateg doctor
 
 ## Требования
 - Python 3.12 через [uv](https://docs.astral.sh/uv/) (uv сам поставит нужный Python).
-- Одна из сред: Claude Code (основная), Cursor, OpenCode. Для Codex и GigaCode скрипт `scripts/sync_skills.py` делает копию скиллов, но в этих средах агент не проверялся.
+- Одна из сред: Claude Code (основная), Cursor, OpenCode. Для Codex скрипт `scripts/sync_skills.py` делает копию скиллов, но в Codex агент не проверялся. GigaCode не поддерживается.
 - Платных сервисов сверх подписки на модель в вашей среде не нужно.
 
 ## Документы
