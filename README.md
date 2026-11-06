@@ -98,3 +98,6 @@ uv run strateg doctor
 - [Матрица требований и доказательств](docs/requirements.md)
 - [Архитектурные решения](docs/adr/README.md)
 - [Изменения](CHANGELOG.md)
+
+## Лицензия
+[Apache License 2.0](LICENSE). Авторы и год — в [NOTICE](NOTICE).
