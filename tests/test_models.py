@@ -300,6 +300,24 @@ def test_quote_matching_follows_adr_normalization():
         quote_in_snapshot("нечёткое", "а", snapshot)
 
 
+@pytest.mark.parametrize("text", ["­", " ­ ", ".", "-", "«»"])
+def test_quote_without_letters_or_digits_is_rejected(text):
+    text_msgs = messages(ClaimsFile, {"schema_version": 1, "claims": [claim(quotes=[quote(text=text)])]})
+    assert "нет ни буквы, ни цифры" in text_msgs
+    for method in ("точное вхождение", "без пробелов и дефисов"):
+        assert not quote_in_snapshot(method, text, "любой текст снимка")
+
+
+def test_normalization_uses_nfkc():
+    snapshot = "Цена — １９９ рублей в месяц"  # полноширинные цифры
+    assert quote_in_snapshot("точное вхождение", "цена - 199 рублей", snapshot)
+
+
+def test_similarity_must_be_a_number():
+    check = quote()["check"] | {"similarity": "100"}
+    assert messages(ClaimsFile, {"schema_version": 1, "claims": [claim(quotes=[quote(check=check)])]})
+
+
 def test_interrupted_action_status():
     def event(**kw):
         return {"schema_version": 1, "time": T, "actor": "CLI", "kind": "действие", "step": "2б"} | kw

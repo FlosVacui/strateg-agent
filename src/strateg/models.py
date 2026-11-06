@@ -16,6 +16,7 @@ from __future__ import annotations
 import datetime as dt
 import re
 import unicodedata
+from functools import lru_cache
 from typing import Annotated, Any, Literal, Self
 
 from pydantic import (
@@ -252,18 +253,33 @@ def strip_spaces_and_hyphens(text: str) -> str:
     return "".join(ch for ch in text if not ch.isspace() and ch != "-")
 
 
+def has_meaning(text: str) -> bool:
+    """После нормализации в цитате есть хотя бы одна буква или цифра."""
+    return any(ch.isalnum() for ch in normalize_quote(text))
+
+
+@lru_cache(maxsize=32)
+def _normalized_snapshot(snapshot: str) -> tuple[str, str]:
+    """Снимок нормализуется один раз: обычный вид и вид без пробелов и дефисов."""
+    s = normalize_quote(snapshot)
+    return s, strip_spaces_and_hyphens(s)
+
+
 def quote_in_snapshot(method: str, quote: str, snapshot: str) -> bool:
     """Есть ли цитата в тексте снимка способом «точное вхождение» или «без пробелов и дефисов».
 
-    Нечёткое сходство здесь не считается: пересчёт идёт в `quote check` (пакет 3.2).
+    Цитата без букв и цифр не находится нигде. Нечёткое сходство здесь не считается:
+    пересчёт идёт в `quote check` (пакет 3.2).
     """
-    q, s = normalize_quote(quote), normalize_quote(snapshot)
+    if method not in ("точное вхождение", "без пробелов и дефисов"):
+        raise ValueError(f"способ «{method}» не проверяется по тексту снимка")
+    if not has_meaning(quote):
+        return False
+    q = normalize_quote(quote)
+    s, s_compact = _normalized_snapshot(snapshot)
     if method == "точное вхождение":
         return q in s
-    if method == "без пробелов и дефисов":
-        q2 = strip_spaces_and_hyphens(q)
-        return bool(q2) and q2 in strip_spaces_and_hyphens(s)
-    raise ValueError(f"способ «{method}» не проверяется по тексту снимка")
+    return strip_spaces_and_hyphens(q) in s_compact
 
 
 def _raise(problems: list[str]) -> None:
@@ -415,6 +431,10 @@ class Quote(_Model):
     @model_validator(mode="after")
     def _rules(self) -> Self:
         p: list[str] = []
+        if not has_meaning(self.text):
+            p.append(
+                "в цитате нет ни буквы, ни цифры после нормализации — так цитата нашлась бы в любом снимке"
+            )
         if self.check is not None and self.check.method != "точное вхождение":
             n = len(" ".join(self.text.split()))
             if n < MIN_FUZZY_QUOTE_LEN:
