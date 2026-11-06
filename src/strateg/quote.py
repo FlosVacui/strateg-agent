@@ -9,10 +9,12 @@
 - цитата начинается и кончается на границе слова: «платно» не находится в «бесплатно»;
 - число в цитате не может быть частью другого числа: «99» не находится в «199», в «−99», в «200-300»,
   в «x99» и в «1 990»; цифры не склеиваются через пробел и дефис («5-10» не «510»);
-- до цитаты, в пределах трёх слов в том же предложении, нет отрицания («не», «нет», «без» …);
+- до цитаты, в пределах трёх слов в том же предложении, нет отрицания («не», «нет», «без» …), а сразу
+  после неё, в пределах двух слов, нет «не», «нет», «кроме»;
 - знаки вроде «³» и «½» не превращаются в обычные цифры (сверка идёт до NFKC);
-для нечёткого совпадения дополнительно: в найденном окне те же числа и отрицания, а слова отличаются
-только опечатками внутри слова (не на краях), приставки «не», «бес», «без», «анти» — отказ.
+для нечёткого совпадения дополнительно: слова цитаты идут в тексте подряд, без вставок и пропусков, и
+отличаются только опечатками внутри слова (первый и последний знак те же); числа и отрицания те же.
+Лишний текст допустим только по краям найденного места.
 """
 
 from __future__ import annotations
@@ -20,7 +22,6 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
-from difflib import SequenceMatcher
 
 from rapidfuzz import fuzz
 from rapidfuzz.distance import Levenshtein
@@ -52,8 +53,8 @@ NEGATIONS = frozenset(
         "cannot",
     }
 )
-# Приставки, которые меняют смысл слова на обратный: «доступно» и «недоступно», «платно» и «бесплатно».
-NEGATIVE_PREFIXES = ("не", "бес", "без", "анти")
+# Слова справа от цитаты, которые меняют её смысл: «бесплатно, кроме корпоративных», «бесплатно не будет».
+_RIGHT_STOPS = frozenset({"не", "нет", "кроме"})
 _NUMBER = re.compile(r"(?:[^\W\d_]|№)*(?:(?<!\d)[-+])?\d+(?: \d{3}(?!\d))*(?:[.,]\d+)?")
 _WORD = re.compile(r"\w+")
 _BEFORE_SENTENCE_END = ".!?…;\n"
@@ -99,8 +100,9 @@ def negation_count(text: str) -> int:
 def extend_numbers(s: str, a: int, b: int) -> tuple[int, int]:
     """Расширяет окно [a, b) до границ режущих его чисел.
 
-    Режут число: цифра перед цифрой, «99» в «199», «5» в «0,5», «990» в «1 990», знак «-»/«+» или «№»
-    или буква вплотную перед числом, хвост диапазона «200-300», голова диапазона «200» в «200-300».
+    Режут число: цифра перед цифрой, «99» в «199», «5» в «0,5», «2026» в «2025/2026», «30» в «10:30»,
+    «990» в «1 990», знак «-»/«+» или «№» или буква вплотную перед числом, хвост диапазона «200-300»,
+    голова диапазона «200» в «200-300».
     """
     n = len(s)
     moved = True
@@ -111,7 +113,7 @@ def extend_numbers(s: str, a: int, b: int) -> tuple[int, int]:
             if p.isdigit():
                 a -= 1
                 moved = True
-            elif p in ",." and a > 1 and s[a - 2].isdigit():
+            elif p in ",./:" and a > 1 and s[a - 2].isdigit():
                 a -= 2
                 moved = True
             elif p in "-+" or p == "№" or p.isalpha():
@@ -130,7 +132,7 @@ def extend_numbers(s: str, a: int, b: int) -> tuple[int, int]:
             if s[b].isdigit():
                 b += 1
                 moved = True
-            elif s[b] in ",." and b + 1 < n and s[b + 1].isdigit():
+            elif s[b] in ",./:" and b + 1 < n and s[b + 1].isdigit():
                 b += 2
                 moved = True
             elif s[b] == "-" and b + 1 < n and s[b + 1].isdigit():
@@ -146,11 +148,17 @@ def extend_numbers(s: str, a: int, b: int) -> tuple[int, int]:
     return a, b
 
 
-def cuts_negation(s: str, a: int) -> bool:
-    """В пределах трёх слов слева от `a`, в том же предложении, есть отрицание."""
+def cuts_negation(s: str, a: int, b: int) -> bool:
+    """Отрицание рядом с окном [a, b): три слова слева или два слова справа, в том же предложении."""
     seg = s[:a]
     cut = max(seg.rfind(c) for c in _BEFORE_SENTENCE_END)
-    return any(w in NEGATIONS for w in _WORD.findall(seg[cut + 1 :])[-3:])
+    if any(w in NEGATIONS for w in _WORD.findall(seg[cut + 1 :])[-3:]):
+        return True
+    if b > 0 and s[b - 1] in _BEFORE_SENTENCE_END:  # цитата кончается знаком конца предложения
+        return False
+    tail = s[b : b + 200]
+    ends = [i for c in _BEFORE_SENTENCE_END if (i := tail.find(c)) >= 0]
+    return any(w in _RIGHT_STOPS for w in _WORD.findall(tail[: min(ends, default=len(tail))])[:2])
 
 
 def _mid_word(s: str, a: int, b: int, *, hyphen_joins: bool = False) -> bool:
@@ -173,7 +181,7 @@ def _problem(s: str, a: int, b: int, *, hyphen_joins: bool = False) -> str | Non
         return "слово"
     if extend_numbers(s, a, b) != (a, b):
         return "число"
-    if cuts_negation(s, a):
+    if cuts_negation(s, a, b):
         return "отрицание"
     return None
 
@@ -252,66 +260,31 @@ def _typo(a: str, b: str) -> bool:
     short = min(len(a), len(b))
     if short < 5 or a[0] != b[0] or a[-1] != b[-1]:
         return False
-    if any(a.startswith(p) != b.startswith(p) for p in NEGATIVE_PREFIXES):
-        return False
     return Levenshtein.distance(a, b) <= (2 if short >= 9 else 1)
 
 
-_SLACK = 100  # сколько знаков вокруг найденного окна смотреть при сверке слов
-_MIN_MATCHED_WORDS = 0.8  # доля слов цитаты, которые нашлись в тексте дословно или с опечаткой
+def _agrees(q: str, s: str) -> bool:
+    """В тексте есть место, где слова цитаты идут подряд и отличаются разве что опечатками в словах.
 
-
-def _window_agrees(q: str, s: str, a: int, b: int) -> bool:
-    """Слова цитаты и найденного места: числа и отрицания те же, замены слов — только опечатки.
-
-    Смотрим шире окна (на `_SLACK` знаков в обе стороны): вставленное в тексте слово сдвигает окно.
-    Слова цитаты и текста выстраиваются по порядку. Лишние слова текста по краям и целые лишние слова
-    внутри допустимы, если это не отрицания; замена слова допустима только как опечатка. Числа найденного
-    места (с учётом знака и разрядов) равны числам цитаты, а перед местом нет отрицания.
+    Вставок и пропусков слов внутри нет: «249 тыс. руб.» не равно «249 руб.», а «только» не появляется
+    из ничего. Лишний текст допустим только по краям места. Числа и отрицания места те же, что в цитате,
+    а границы места проходят проверку `_problem`.
     """
-    lo, hi = max(0, a - _SLACK), min(len(s), b + _SLACK)
-    while 0 < lo < len(s) and not s[lo - 1].isspace():
-        lo += 1
-    while 0 < hi < len(s) and not s[hi].isspace():
-        hi -= 1
-    spans = [(m.start() + lo, m.end() + lo, m.group()) for m in _WORD.finditer(s[lo:hi])]
     q_words = _WORD.findall(q)
-    w_words = [w for _, _, w in spans]
-    if not q_words or not w_words:
-        return False
-    matcher = SequenceMatcher(None, q_words, w_words, autojunk=False)
-    matched = 0
-    core: list[int] = []  # номера слов текста, которые сопоставлены словам цитаты
-    inserts: list[tuple[int, int]] = []
-    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-        if tag == "equal":
-            matched += i2 - i1
-            core += [j1, j2 - 1]
-        elif tag == "replace":
-            if i2 - i1 != j2 - j1:
-                return False
-            if not all(_typo(q_words[i1 + k], w_words[j1 + k]) for k in range(i2 - i1)):
-                return False
-            matched += i2 - i1
-            core += [j1, j2 - 1]
-        elif tag == "delete":
-            if any(w in NEGATIONS for w in q_words[i1:i2]):
-                return False
-        else:
-            inserts.append((j1, j2))
-    if not core or matched < _MIN_MATCHED_WORDS * len(q_words):
-        return False
-    first, last = min(core), max(core)
-    for j1, j2 in inserts:
-        if first < j1 and j2 <= last and any(w in NEGATIONS for w in w_words[j1:j2]):
-            return False
-    start, end = extend_numbers(s, spans[first][0], spans[last][1])
-    place = s[start:end]
-    return (
-        numbers(place) == numbers(q)
-        and negation_count(place) == negation_count(q)
-        and not cuts_negation(s, start)
-    )
+    spans = [(m.start(), m.end(), m.group()) for m in _WORD.finditer(s)]
+    words = [w for _, _, w in spans]
+    n = len(q_words)
+    for k in range(len(words) - n + 1):
+        if all(_typo(x, y) for x, y in zip(q_words, words[k : k + n], strict=True)):
+            start, end = spans[k][0], spans[k + n - 1][1]
+            place = s[start:end]
+            if (
+                _problem(s, start, end) is None
+                and numbers(place) == numbers(q)
+                and negation_count(place) == negation_count(q)
+            ):
+                return True
+    return False
 
 
 def fuzzy_allowed(quote: str) -> bool:
@@ -337,9 +310,7 @@ def check_quote(quote: str, snapshot: str) -> QuoteMatch | None:
     if _compact(q)[0] in _compact(s)[0]:
         return None
     al = fuzz.partial_ratio_alignment(q, s)
-    if al is None or al.score < FUZZY_THRESHOLD:
-        return None
-    if not _window_agrees(q, s, al.dest_start, al.dest_end):
+    if al is None or al.score < FUZZY_THRESHOLD or not _agrees(q, s):
         return None
     return QuoteMatch("нечёткое", round(al.score, 2))
 
@@ -349,8 +320,9 @@ _REASONS = {
     "берите слова целиком",
     "число": "число в цитате оказывается частью другого числа или записано со знаком, диапазоном "
     "(«99» внутри «199», «−99», «200-300»)",
-    "отрицание": "перед цитатой в снимке, в пределах трёх слов, стоит отрицание («не», «нет», «без»): "
-    "включите его в цитату",
+    "отрицание": "рядом с цитатой в снимке, в трёх словах слева или в двух справа, стоит отрицание "
+    "или оговорка "
+    "(«не», «нет», «без», «кроме»): включите её в цитату",
 }
 
 

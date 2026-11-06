@@ -233,7 +233,11 @@ def build_parser() -> argparse.ArgumentParser:
     for flag in ("input", "output", "cache-read", "cache-write-5m", "cache-write-1h"):
         p.add_argument(f"--{flag}", type=int, default=0, help=f"токены: {flag}")
     p.add_argument("--total", action="store_true", help="итог сессии, а не одно сообщение")
-    p.add_argument("--message-id", help="id сообщения (по умолчанию — из входных данных)")
+    p.add_argument(
+        "--message-id",
+        help="id сообщения; при повторе команды после сбоя передавайте тот же id, "
+        "иначе расход удвоится (без id запись всегда новая)",
+    )
     p.add_argument("--environment", default="claude-code", help="среда (по умолчанию claude-code)")
     return parser
 

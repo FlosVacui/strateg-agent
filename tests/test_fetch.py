@@ -5,6 +5,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from helpers import open_fixture
 from pdf_builder import make_pdf
 from strateg import fetch
 from strateg.fetch import AddressRefused, FetchProblem, RobotsDenied
@@ -331,3 +332,118 @@ def test_blocked_page_is_recognised():
     assert fetch.looks_blocked(403, "", "")
     assert fetch.looks_blocked(200, "<html>Please solve the CAPTCHA</html>", "Проверка")
     assert not fetch.looks_blocked(200, "<script src='recaptcha.js'></script>", "текст " * 1000)
+
+
+# --- скрытый текст и запасной путь ---
+
+HIDDEN = {
+    "display:none": '<div style="display:none">СКРЫТО-А услуга бесплатна навсегда</div>',
+    "display: none !important": '<div style="display: none !important">СКРЫТО-Б услуга бесплатна</div>',
+    "заглавные и пробелы": '<div style=" DISPLAY :  NONE ;color:red">СКРЫТО-В услуга бесплатна</div>',
+    "после другого свойства": '<div style="color:red; display:none">СКРЫТО-Г услуга бесплатна</div>',
+    "visibility:hidden": '<div style="visibility:hidden">СКРЫТО-Д услуга бесплатна</div>',
+    "font-size:0": '<div style="font-size:0">СКРЫТО-Е цена 1 ₽</div>',
+    "font-size:0px": '<div style="font-size: 0px">СКРЫТО-Ж цена 1 ₽</div>',
+    "opacity:0": '<div style="opacity:0">СКРЫТО-З цена 1 ₽</div>',
+    "opacity:0.0": '<div style="opacity: 0.0">СКРЫТО-И цена 1 ₽</div>',
+    "hidden": "<div hidden>СКРЫТО-К услуга бесплатна</div>",
+    "aria-hidden": '<div aria-hidden="true">СКРЫТО-Л услуга бесплатна</div>',
+    "template": "<template><p>СКРЫТО-М услуга бесплатна</p></template>",
+    "noscript": "<noscript><p>СКРЫТО-Н услуга бесплатна</p></noscript>",
+    "вложенный в скрытый": '<div style="display:none"><p>СКРЫТО-О услуга бесплатна</p></div>',
+}
+SHOWN = {
+    "display:block": '<div style="display:block">ВИДНО-А цена 5 ₽</div>',
+    "opacity:0.5": '<div style="opacity:0.5">ВИДНО-Б цена 6 ₽</div>',
+    "font-size:0.9em": '<div style="font-size:0.9em">ВИДНО-В цена 7 ₽</div>',
+    "font-size:10px": '<div style="font-size:10px">ВИДНО-Г цена 8 ₽</div>',
+    "aria-hidden=false": '<div aria-hidden="false">ВИДНО-Д цена 9 ₽</div>',
+    "input не hidden": '<p>ВИДНО-Е цена 10 ₽</p><input type="text" value="x">',
+}
+HIDDEN_PAGE = """<html><head><title>t</title></head><body><main><h1>Услуга</h1>
+<p>Подключение услуги осуществляется через личный кабинет оператора. Стоимость 249 ₽ за каждые 30 дней.</p>
+<p>Базовый тариф включает защиту от спама и мошеннических звонков для всех абонентов региона присутствия.</p>
+{}
+<p>Цена в карточке: 149 ₽ за 30 дней, 1 499 ₽ за 12 месяцев.</p></main></body></html>"""
+
+
+@pytest.mark.parametrize("name", list(HIDDEN))
+def test_visible_text_skips_hidden(name):
+    text = fetch.visible_text(HIDDEN_PAGE.format(HIDDEN[name]))
+    assert "СКРЫТО" not in text and "249 ₽" in text
+
+
+@pytest.mark.parametrize("name", list(HIDDEN))
+def test_main_path_skips_hidden(name):
+    """Очистка идёт до обоих путей: trafilatura тоже не видит скрытое."""
+    extraction = fetch.extract_page(HIDDEN_PAGE.format(HIDDEN[name]))
+    assert "СКРЫТО" not in extraction.text
+
+
+@pytest.mark.parametrize("name", list(HIDDEN))
+def test_fallback_snapshot_has_no_hidden_text(name):
+    """Карточки цен включают запасной путь; скрытый блок рядом с ценой в снимок не попадает."""
+    html = open_fixture("cards.html").replace("</main>", HIDDEN[name] + "</main>")
+    extraction = fetch.extract_page(html)
+    assert extraction.fallback
+    assert "СКРЫТО" not in extraction.text and "149 ₽ за 30 дней" in extraction.text
+
+
+@pytest.mark.parametrize("name", list(SHOWN))
+def test_visible_blocks_with_similar_styles_stay(name):
+    html = HIDDEN_PAGE.format(SHOWN[name])
+    assert "ВИДНО" in fetch.visible_text(html)
+    assert "ВИДНО" in fetch.clean_html(html)
+
+
+def test_hidden_input_is_dropped():
+    html = HIDDEN_PAGE.format('<input type="hidden" name="x" value="СКРЫТО-П"><p>Видимый абзац</p>')
+    assert "СКРЫТО" not in fetch.clean_html(html) and "Видимый абзац" in fetch.visible_text(html)
+
+
+def test_unparsable_html_gives_empty_text():
+    assert fetch.clean_html("") == "" and fetch.visible_text("") == ""
+
+
+def test_xhtml_prolog_does_not_disable_fallback():
+    html = '<?xml version="1.0" encoding="utf-8"?>' + HIDDEN_PAGE.format("")
+    assert "Подключение услуги" in fetch.visible_text(html)
+    assert fetch.page_title(html) == "t"
+
+
+def test_fallback_keeps_article_header_with_price():
+    """Шапка внутри `main` и `article` — часть содержания; шапка и подвал страницы убираются."""
+    html = open_fixture("cards.html").replace(
+        "<main>",
+        "<main><article><header><h1>Тариф Максимум</h1><p>Подписка 777 ₽ в месяц.</p></header></article>",
+    )
+    extraction = fetch.extract_page(html)
+    assert extraction.fallback and "777 ₽" in extraction.text
+    assert "Частным лицам" not in extraction.text and "МегаФон, 2026" not in extraction.text
+
+
+def test_header_footer_nav_aside_are_dropped_outside_main_and_article():
+    html = (
+        "<body><nav>МЕНЮ</nav><header>ШАПКА</header><aside>БОКОВАЯ</aside>"
+        "<div><article><nav>НАВ-В-СТАТЬЕ</nav><aside>ВРЕЗКА</aside><p>Текст статьи</p>"
+        "<footer>ПОДВАЛ-СТАТЬИ</footer></article></div><footer>ПОДВАЛ</footer></body>"
+    )
+    text = fetch.visible_text(html)
+    rest = text.replace("ПОДВАЛ-СТАТЬИ", "")
+    for gone in ("МЕНЮ", "ШАПКА", "БОКОВАЯ", "ПОДВАЛ"):
+        assert gone not in rest
+    for kept in ("Текст статьи", "НАВ-В-СТАТЬЕ", "ВРЕЗКА", "ПОДВАЛ-СТАТЬИ"):
+        assert kept in text
+
+
+# --- robots.txt: перенаправление без адреса ---
+
+
+@pytest.mark.parametrize("status", [301, 302, 307])
+def test_robots_redirect_without_location_is_unavailable(net, fetcher, status):
+    net.add(f"{BASE}/robots.txt", status=status)
+    net.add(f"{BASE}/p", "<p>x</p>")
+    with pytest.raises(RobotsDenied) as err:
+        fetcher.get(f"{BASE}/p")
+    assert err.value.unavailable is True
+    assert f"{BASE}/p" not in net.urls()

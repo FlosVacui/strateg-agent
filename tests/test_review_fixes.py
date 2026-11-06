@@ -8,7 +8,7 @@ import httpx
 import pytest
 import yaml
 
-from helpers import PUBLISHER, URL, claims_of, fact, write_claims
+from helpers import PUBLISHER, URL, claims_of, fact, open_fixture, write_claims
 from pdf_builder import make_pdf
 from strateg import fetch, safety
 from strateg import project as proj
@@ -45,12 +45,13 @@ def test_unavailable_robots_is_remembered_for_ten_minutes_only(net, fetcher):
     assert err.value.unavailable is True
     net.add(f"{BASE}/robots.txt", b"User-agent: *\nAllow: /\n", content_type="text/plain")
     asked = net.urls().count(f"{BASE}/robots.txt")
-    net.t += 60
+    net.t += 9 * 60
     with pytest.raises(RobotsDenied):  # ещё помним: не долбим сервер
         fetcher.get(f"{BASE}/page")
     assert net.urls().count(f"{BASE}/robots.txt") == asked
-    net.t += fetch.ROBOTS_UNAVAILABLE_TTL_S
+    net.t += 61  # прошло 10 минут и секунда
     assert fetcher.get(f"{BASE}/page").status == 200
+    assert net.urls().count(f"{BASE}/robots.txt") == asked + 1
 
 
 def test_robots_unavailable_message_in_registry(cli, net, home):
@@ -127,12 +128,6 @@ def test_price_cards_dropped_by_trafilatura_come_from_visible_text():
     assert "МегаФон, 2026" not in result.text
 
 
-def open_fixture(name):
-    from pathlib import Path
-
-    return (Path(__file__).parent / "fixtures" / "pages" / name).read_text(encoding="utf-8")
-
-
 def test_normal_page_keeps_main_extractor(page_html):
     result = fetch.extract_page(page_html)
     assert result.fallback is False and result.extractor.startswith("trafilatura ")
@@ -176,6 +171,8 @@ def test_no_false_closed_markers(text):
         "Гриф «Для служебного пользования» стоит в углу.",
         "Информация составляет коммерческую тайну.",
         "Гриф ограниченного доступа.",
+        "Гриф: секретно.",
+        "ГРИФ:   ДСП",
     ],
 )
 def test_closed_markers_found(text):
@@ -299,6 +296,74 @@ def test_claim_key_includes_subject_period_region_and_basis(started, cli, tmp_pa
     assert len(ids) == 2
 
 
+def _retry(cli, tmp_path, first, again):
+    assert cli("claim", "add", "--file", write_claims(tmp_path, first))[0] == 0
+    return cli("claim", "add", "--file", write_claims(tmp_path, again, "again.yaml"))
+
+
+def test_retry_with_same_input_is_a_duplicate(started, cli, tmp_path):
+    claim = fact(dispute=None)
+    code, out, _ = _retry(cli, tmp_path, claim, claim)
+    assert code == 0 and "уже записано" in out
+    assert len(claims_of(started)) == 1
+
+
+@pytest.mark.parametrize(
+    ("extra", "field"),
+    [
+        ({"dispute": {"claim": "У-1", "reason": "другая цена"}}, "dispute"),
+        ({"check_method": "замер"}, "check_method"),
+        ({"taken_from": "из опроса"}, "taken_from"),
+        ({"plan_question": "сколько стоит?"}, "plan_question"),
+    ],
+)
+def test_retry_with_other_claim_field_is_refused_not_dropped(started, cli, tmp_path, extra, field):
+    code, out, err = _retry(cli, tmp_path, fact(), fact(**extra))
+    assert code == 1 and "уже записано как У-1" in err and field in err
+    assert "не исправляется" in err and "запишите новое" in err
+    assert len(claims_of(started)) == 1 and "уже записано" not in out
+
+
+@pytest.mark.parametrize(
+    ("quote_change", "field"),
+    [
+        ({"publisher_kind": "СМИ"}, "publisher_kind"),
+        ({"self_reported": False}, "self_reported"),
+        ({"publisher": "другая компания"}, "publisher"),
+        ({"locator": "раздел 2"}, "locator"),
+    ],
+)
+def test_retry_with_other_quote_field_is_refused(started, cli, tmp_path, quote_change, field):
+    again = fact()
+    again["quotes"][0].update(quote_change)
+    code, _, err = _retry(cli, tmp_path, fact(), again)
+    assert code == 1 and "У-1" in err and field in err
+    assert len(claims_of(started)) == 1
+
+
+def test_retry_with_other_forecast_range_is_refused(started, cli, tmp_path):
+    forecast = {
+        "text": "Конверсия вырастет",
+        "type": "прогноз",
+        "subject": "конверсия",
+        "basis": ["У-1"],
+        "forecast_range": {"low": 1, "high": 2, "unit": "%"},
+    }
+    assert cli("claim", "add", "--file", write_claims(tmp_path, fact()))[0] == 0
+    assert cli("claim", "add", "--file", write_claims(tmp_path, forecast, "f1.yaml"))[0] == 0
+    other = dict(forecast, forecast_range={"low": 10, "high": 20, "unit": "%"})
+    code, _, err = cli("claim", "add", "--file", write_claims(tmp_path, other, "f2.yaml"))
+    assert code == 1 and "У-2" in err and "forecast_range" in err
+    assert len(claims_of(started)) == 2
+
+
+def test_retry_inside_one_file_with_other_field_is_refused(started, cli, tmp_path):
+    other = fact(check_method="замер")
+    code, _, err = cli("claim", "add", "--file", write_claims(tmp_path, [fact(), other]))
+    assert code == 1 and "check_method" in err
+    assert claims_of(started) == []
+
+
 # --- спор ---
 
 
@@ -354,6 +419,22 @@ def test_status_line_counts_the_running_step(cli, clock):
     assert cli("status", "--line")[1].strip().endswith("6 из 60 мин")
     cli("step", "done", "1")
     assert cli("status", "--line")[1].strip().endswith("6 из 60 мин")
+
+
+def test_status_shows_running_step_apart_and_marks_long_one(cli, clock):
+    cli("new", "demo")
+    assert "шаг идёт" not in cli("status")[1]
+    cli("step", "start", "1")
+    clock.advance(3 * 60)
+    out = cli("status")[1]
+    assert "Время работы: 3,0 из 60 мин · шаг идёт 3 мин" in out and "перерыв" not in out
+    assert json.loads(cli("status", "--json")[1])["running_minutes"] == pytest.approx(3.0)
+    clock.advance(24 * 3600)
+    out = cli("status")[1]
+    assert "шаг идёт 1443 мин (больше часа: возможно, был перерыв" in out
+    cli("step", "done", "1")
+    assert "шаг идёт" not in cli("status")[1]
+    assert json.loads(cli("status", "--json")[1])["running_minutes"] is None
 
 
 # --- прочее ---
