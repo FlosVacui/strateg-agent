@@ -1,6 +1,7 @@
-"""Точка входа CLI `strateg`.
+"""Точка входа CLI `strateg`: `doctor` и команды проекта (`new`, `use`, `status`, `step`, `gate`, `fetch`,
+`claim`, `check`, `cost`). Сами команды проекта — в `strateg.commands`.
 
-Каркас этапа 0: команды `--version` и `doctor`. Остальные команды появятся в пакете 3.2.
+Коды возврата: 0 — успех, 1 — ошибка данных или правил, 2 — ошибка использования.
 """
 
 from __future__ import annotations
@@ -8,12 +9,14 @@ from __future__ import annotations
 import argparse
 import locale
 import platform
+import re
 import shutil
 import sys
 import tempfile
 from pathlib import Path
+from typing import NoReturn
 
-from strateg import __version__
+from strateg import __version__, commands
 
 OK, WARN, ERR = "OK", "WARN", "ERR"
 _MARKS = {OK: "OK  ", WARN: "ПРЕД", ERR: "НЕТ "}
@@ -115,20 +118,140 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     return 1 if ERR in levels else 0
 
 
+class _Parser(argparse.ArgumentParser):
+    """Ошибки использования — по-русски, код возврата 2."""
+
+    def error(self, message: str) -> NoReturn:
+        message = re.sub(
+            r"the following arguments are required: (.*)", r"не указаны обязательные аргументы: \1", message
+        )
+        message = re.sub(r"invalid choice: (.*)", r"недопустимое значение: \1", message)
+        message = re.sub(r"\(choose from (.*)\)", r"(допустимо: \1)", message)
+        message = re.sub(r"unrecognized arguments: (.*)", r"неизвестные аргументы: \1", message)
+        message = re.sub(r"expected one argument", "у флага нет значения", message)
+        message = re.sub(r"invalid int value: (.*)", r"нужно целое число, а получено: \1", message)
+        message = re.sub(r"invalid float value: (.*)", r"нужно число, а получено: \1", message)
+        self.print_usage(sys.stderr)
+        print(f"{self.prog}: ошибка использования: {message}", file=sys.stderr)
+        raise SystemExit(2)
+
+
+def _common(*, json_out: bool = True) -> argparse.ArgumentParser:
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument(
+        "--project", default=argparse.SUPPRESS, help="проект: номер или папка (главнее активного)"
+    )
+    if json_out:
+        common.add_argument("--json", action="store_true", help="машинный вывод")
+    return common
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="strateg", description="CLI агента «Стратег»")
+    parser = _Parser(prog="strateg", description="CLI агента «Стратег»")
     parser.add_argument("--version", action="version", version=f"strateg {__version__}")
-    sub = parser.add_subparsers(dest="command")
+    sub = parser.add_subparsers(dest="command", parser_class=_Parser)
     sub.add_parser("doctor", help="проверить среду").set_defaults(func=cmd_doctor)
+    common = _common()
+
+    def add(name: str, handler, help_: str, parent: argparse.ArgumentParser | None = None):
+        p = (parent or sub).add_parser(name, parents=[common], help=help_)
+        p.set_defaults(func=commands.run, handler=handler)
+        return p
+
+    p = add("new", commands.cmd_new, "создать проект и сделать его активным")
+    p.add_argument("id", help="номер проекта: латинские строчные буквы, цифры, «-» и «_»")
+    p.add_argument(
+        "--mode", choices=["автопилот", "пилот"], default="автопилот", help="режим (по умолчанию автопилот)"
+    )
+    p.add_argument("--region", help="регион по умолчанию для fetch, например RU-MOW")
+
+    p = add("use", commands.cmd_use, "выбрать активный проект")
+    p.add_argument("id")
+
+    p = add("status", commands.cmd_status, "статус проекта")
+    p.add_argument("--line", action="store_true", help="одна строка статуса для вставки в ответ")
+
+    step = add("step", commands.cmd_step_start, "начало и конец шага")
+    step_sub = step.add_subparsers(dest="step_command", required=True, parser_class=_Parser)
+    p = step_sub.add_parser("start", parents=[common], help="начать шаг")
+    p.set_defaults(func=commands.run, handler=commands.cmd_step_start)
+    p.add_argument("step", help="шаг: 1, 2а, 2б, 3 … 8")
+    p = step_sub.add_parser("done", parents=[common], help="отметить шаг выполненным")
+    p.set_defaults(func=commands.run, handler=commands.cmd_step_done)
+    p.add_argument("step")
+    p.add_argument("--next", help="что делать дальше (одна фраза)")
+
+    gate = add("gate", commands.cmd_gate_open, "ворота: открыть и ответить")
+    gate_sub = gate.add_subparsers(dest="gate_command", required=True, parser_class=_Parser)
+    p = gate_sub.add_parser("open", parents=[common], help="открыть ворота")
+    p.set_defaults(func=commands.run, handler=commands.cmd_gate_open)
+    p.add_argument("gate", help="В1…В5")
+    p.add_argument("--questions", type=int, required=True, help="сколько вопросов задано человеку")
+    p = gate_sub.add_parser("answer", parents=[common], help="записать ответ человека")
+    p.set_defaults(func=commands.run, handler=commands.cmd_gate_answer)
+    p.add_argument("gate")
+    p.add_argument("--answer", required=True, help="ответ человека")
+
+    p = add("mode", commands.cmd_mode, "сменить режим работы")
+    p.add_argument("mode", choices=["автопилот", "пилот"])
+
+    p = add("stop", commands.cmd_stop, "записать внеплановую остановку")
+    p.add_argument("--reason", required=True, help="причина остановки")
+
+    source = add("source", commands.cmd_source_confirm, "источники")
+    source_sub = source.add_subparsers(dest="source_command", required=True, parser_class=_Parser)
+    p = source_sub.add_parser(
+        "confirm", parents=[common], help="человек подтвердил, что материал общедоступный"
+    )
+    p.set_defaults(func=commands.run, handler=commands.cmd_source_confirm)
+    p.add_argument("id", help="номер источника, например И-1")
+
+    p = add("fetch", commands.cmd_fetch, "скачать страницу или PDF и сохранить снимок")
+    p.add_argument("url", help="адрес http или https")
+    p.add_argument("--region", help="код региона, если содержание зависит от региона")
+
+    claim = add("claim", commands.cmd_claim_list, "утверждения")
+    claim_sub = claim.add_subparsers(dest="claim_command", required=True, parser_class=_Parser)
+    p = claim_sub.add_parser("add", parents=[common], help="записать утверждение или список из YAML или JSON")
+    p.set_defaults(func=commands.run, handler=commands.cmd_claim_add)
+    p.add_argument("--file", required=True, help="файл YAML или JSON; «-» — читать со стандартного ввода")
+    p = claim_sub.add_parser("list", parents=[common], help="список утверждений")
+    p.set_defaults(func=commands.run, handler=commands.cmd_claim_list)
+    p.add_argument("--type", choices=["факт", "гипотеза", "прогноз", "допущение", "синтетика"])
+
+    add("check", commands.cmd_check, "проверить активный проект")
+
+    cost = add("cost", commands.cmd_cost_add, "учёт стоимости")
+    cost_sub = cost.add_subparsers(dest="cost_command", required=True, parser_class=_Parser)
+    p = cost_sub.add_parser("add", parents=[common], help="записать стоимость")
+    p.set_defaults(func=commands.run, handler=commands.cmd_cost_add)
+    p.add_argument("--session", required=True)
+    p.add_argument("--role", required=True)
+    p.add_argument("--model", required=True)
+    p.add_argument("--usd", type=float)
+    p.add_argument("--source", choices=["оценка", "измерено"], help="точность --usd (по умолчанию оценка)")
+    for flag in ("input", "output", "cache-read", "cache-write-5m", "cache-write-1h"):
+        p.add_argument(f"--{flag}", type=int, default=0, help=f"токены: {flag}")
+    p.add_argument("--total", action="store_true", help="итог сессии, а не одно сообщение")
+    p.add_argument(
+        "--message-id",
+        help="id сообщения; при повторе команды после сбоя передавайте тот же id, "
+        "иначе расход удвоится (без id запись всегда новая)",
+    )
+    p.add_argument("--environment", default="claude-code", help="среда (по умолчанию claude-code)")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     console = detect_console_encoding()  # до reconfigure, иначе проверка всегда «OK»
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8")
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
     parser = build_parser()
-    args = parser.parse_args(argv)
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exc:  # ошибка использования (2) или --help и --version (0)
+        return int(exc.code or 0)
     args.console = console
     if not getattr(args, "func", None):
         parser.print_help()

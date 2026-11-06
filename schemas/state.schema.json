@@ -112,6 +112,20 @@
     "budget": {
       "$ref": "#/$defs/Budget"
     },
+    "region": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Регион по умолчанию для fetch, например RU-MOW",
+      "title": "Region"
+    },
     "next_action": {
       "anyOf": [
         {

@@ -269,7 +269,7 @@ def quote_in_snapshot(method: str, quote: str, snapshot: str) -> bool:
     """Есть ли цитата в тексте снимка способом «точное вхождение» или «без пробелов и дефисов».
 
     Цитата без букв и цифр не находится нигде. Нечёткое сходство здесь не считается:
-    пересчёт идёт в `quote check` (пакет 3.2).
+    пересчёт идёт при записи утверждения командой `claim add`.
     """
     if method not in ("точное вхождение", "без пробелов и дефисов"):
         raise ValueError(f"способ «{method}» не проверяется по тексту снимка")
@@ -375,8 +375,6 @@ class Source(_Model):
                 p.append("материал обезличен, но человек не подтвердил обезличенную копию")
             if self.kind == "изображение" and not self.no_personal_data_confirmed:
                 p.append("изображение: человек не подтвердил, что персональных данных на нём нет")
-        if self.closed_markers and not self.closed_confirmed:
-            p.append("найдены признаки закрытых данных, но человек не подтвердил, что материал общедоступный")
         _raise(p)
         return self
 
@@ -731,6 +729,7 @@ class ProjectState(_Model):
     step: Step
     gates: dict[Gate, GateStatus]
     budget: Budget
+    region: Text | None = Field(None, description="Регион по умолчанию для fetch, например RU-MOW")
     next_action: Text | None = Field(None, description="Что делать дальше")
     files: dict[RelPath, Sha256] = Field(
         default_factory=dict,

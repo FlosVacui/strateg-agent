@@ -29,7 +29,11 @@ PATTERNS = {
 }
 # Исключения: путь файла от корня -> какие ключи FORBIDDEN в нём допустимы.
 # В LICENSE и NOTICE имя автора уместно (развилка Р-1).
-EXCEPTIONS: dict[str, set[str]] = {"LICENSE": {"имя автора"}, "NOTICE": {"имя автора"}}
+EXCEPTIONS: dict[str, set[str]] = {
+    "LICENSE": {"имя автора"},
+    "NOTICE": {"имя автора"},
+    "pyproject.toml": {"имя автора"},  # адрес репозитория в [project.urls] и в User-Agent
+}
 
 SKIP_DIRS = {".venv", ".git", "__pycache__", ".pytest_cache", ".ruff_cache", "node_modules"}
 

@@ -18,7 +18,7 @@ def test_doc_fits_two_screens():
 def test_doc_says_what_is_left_for_the_next_package():
     assert "сверка чисел и отрицаний" in DOC
     assert "пересчёт нечёткого сходства" in DOC
-    assert "пакет 3.2" in DOC
+    assert "команды CLI" in DOC
     assert "будет 09.11" in DOC
 
 
