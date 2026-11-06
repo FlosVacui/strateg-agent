@@ -4,6 +4,7 @@
 
 ## [Не выпущено]
 ### Добавлено
+- Лицензия Apache-2.0: `LICENSE`, `NOTICE`, раздел README и поле `license` в `pyproject.toml`.
 - Каркас репозитория: README, инструкции агента (черновик), CLI `strateg` с командой `doctor`, тесты, CI на Windows, macOS и Linux, проверка секретов, матрица требований.
 - README: раздел «Быстрый старт» для Windows и macOS.
 - Тест-страж `tests/test_no_internal.py`: в файлах репозитория нет служебного, личных путей и имени автора.
