@@ -373,6 +373,8 @@ def cmd_stop(args: argparse.Namespace) -> int:
                 message=reason,
             )
         )
+        # Вопрос человеку не теряется и в новом чате: его показывает `status`.
+        p.state.next_action = f"Внеплановая остановка: {reason}. Нужен ответ человека"
         p.save_state()
     return emit(args, {"stops": stops + 1, "reason": reason}, [f"Внеплановая остановка записана: {reason}"])
 
@@ -589,7 +591,7 @@ def _analyse(
         return "источник недоступен: ошибка", f"ответ {page.status}", kind, None
     if page.status >= 300 and page.status not in (401, 403, 429):
         return "источник недоступен: ошибка", f"ответ {page.status} без адреса перенаправления", kind, None
-    visible = ""
+    visible = hidden = ""
     if kind == "PDF":
         try:
             raw_text = fetchlib.extract_pdf(page.body)
@@ -612,6 +614,7 @@ def _analyse(
                     "взят весь видимый текст страницы"
                 )
             visible = fetchlib.page_title(html) + "\n" + fetchlib.visible_text(html)
+            hidden = fetchlib.hidden_text(html)
         else:
             raw_text = ""
     if fetchlib.looks_blocked(page.status, visible, raw_text):
@@ -630,6 +633,10 @@ def _analyse(
             None,
         )
     rep = safety.inspect_text(raw_text)
+    # Скрытый текст в снимок не идёт, но обращение к ИИ в нём — повод пометить источник.
+    for sign in safety.inspect_text(hidden).instruction_signs:
+        if sign not in rep.instruction_signs:
+            rep.instruction_signs.append(sign)
     return "получен", None, kind, (rep, rep.text, encoding)
 
 
@@ -842,14 +849,15 @@ def _key_of_claim(c: Claim) -> str:
 
 
 def _locator_key(locator: str) -> str:
-    """Место цитаты для сравнения: «стр. 3», «стр 3» и «3» — одна страница."""
-    m = re.fullmatch(r"(?:стр\.?\s*)?(\d+)", locator.strip().lower())
-    return m.group(1) if m else norm(locator)
+    """Место цитаты для сравнения: «стр. 3», «с. 3, абзац 2» и «3» — одна страница."""
+    page = _locator_page(locator)
+    return str(page) if page is not None else norm(locator)
 
 
 def _extras(c: ClaimIn | Claim) -> dict[str, Any]:
     """Входные поля, которые не входят в ключ `claim add`: по ним повтор отличают от дубля."""
     out: dict[str, Any] = {
+        "origin": _default_origin(c),
         "forecast_range": c.forecast_range.model_dump() if c.forecast_range else None,
         "dispute": (c.dispute.claim, norm(c.dispute.reason)) if c.dispute else None,
         "check_method": norm(c.check_method or ""),

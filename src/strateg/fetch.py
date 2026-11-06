@@ -495,6 +495,14 @@ def clean_html(html: str) -> str:
     return lxml_html.tostring(doc, encoding="unicode")
 
 
+def hidden_text(html: str) -> str:
+    """Текст скрытых элементов. В снимок он не идёт, по нему только ищут обращения к ИИ."""
+    doc = _parse(html)
+    if doc is None:
+        return ""
+    return "\n".join(n.text_content() for n in doc.xpath(_HIDDEN_XPATH) if _is_hidden(n))
+
+
 def page_title(html: str) -> str:
     doc = _parse(html)
     if doc is None:
