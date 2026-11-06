@@ -198,6 +198,14 @@ def build_parser() -> argparse.ArgumentParser:
     p = add("stop", commands.cmd_stop, "записать внеплановую остановку")
     p.add_argument("--reason", required=True, help="причина остановки")
 
+    source = add("source", commands.cmd_source_confirm, "источники")
+    source_sub = source.add_subparsers(dest="source_command", required=True, parser_class=_Parser)
+    p = source_sub.add_parser(
+        "confirm", parents=[common], help="человек подтвердил, что материал общедоступный"
+    )
+    p.set_defaults(func=commands.run, handler=commands.cmd_source_confirm)
+    p.add_argument("id", help="номер источника, например И-1")
+
     p = add("fetch", commands.cmd_fetch, "скачать страницу или PDF и сохранить снимок")
     p.add_argument("url", help="адрес http или https")
     p.add_argument("--region", help="код региона, если содержание зависит от региона")

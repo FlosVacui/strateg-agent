@@ -297,15 +297,38 @@ def test_cost_add_and_status(cli, home):
     assert state["budget"]["spent_usd"] == pytest.approx(3.0)
 
 
-def test_cost_repeat_is_not_counted_twice(cli):
+def test_cost_same_command_twice_is_two_messages_but_explicit_id_is_idempotent(cli):
     cli("new", "demo")
     args = ("cost", "add", "--session", "s1", "--role", "r", "--model", "m", "--usd", "0.5")
     cli(*args)
-    assert json.loads(cli(*args, "--json")[1])["duplicate"] is True
-    assert json.loads(cli("status", "--json")[1])["cost_usd"] == pytest.approx(0.5)
-    assert cli(*args, "--message-id", "msg_2")[0] == 0
+    cli(*args)  # два разных сообщения с одинаковой ценой
     assert json.loads(cli("status", "--json")[1])["cost_usd"] == pytest.approx(1.0)
+    assert cli(*args, "--message-id", "msg_2")[0] == 0
+    assert json.loads(cli(*args, "--message-id", "msg_2", "--json")[1])["duplicate"] is True
+    assert json.loads(cli("status", "--json")[1])["cost_usd"] == pytest.approx(1.5)
     assert cli("check")[0] == 0
+
+
+def test_cost_total_without_price_does_not_displace_known_prices(cli):
+    cli("new", "demo")
+    base = ("cost", "add", "--session", "s1", "--role", "r", "--model", "m")
+    cli(*base, "--usd", "1.0", "--input", "10")
+    cli(*base, "--usd", "1.5", "--input", "20")
+    cli(*base, "--usd", "2.5", "--total")
+    cli(*base, "--usd", "0.7", "--input", "30")  # после итога
+    assert json.loads(cli("status", "--json")[1])["cost_usd"] == pytest.approx(3.2)
+    cli(*base, "--total", "--input", "100", "--output", "50")  # итог без цены
+    data = json.loads(cli("status", "--json")[1])
+    assert data["cost_usd"] == pytest.approx(3.2)
+    assert cli("check")[0] == 0
+
+
+def test_cost_messages_without_totals_are_summed_and_sessions_added(cli):
+    cli("new", "demo")
+    cli("cost", "add", "--session", "a", "--role", "r", "--model", "m", "--usd", "1")
+    cli("cost", "add", "--session", "a", "--role", "r", "--model", "m", "--usd", "2")
+    cli("cost", "add", "--session", "b", "--role", "r", "--model", "m", "--usd", "4", "--total")
+    assert json.loads(cli("status", "--json")[1])["cost_usd"] == pytest.approx(7.0)
 
 
 def test_cost_without_price_is_no_data(cli):

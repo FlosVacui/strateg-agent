@@ -323,7 +323,9 @@ def transaction(root: Path, *, rollback: bool = True) -> Iterator[None]:
             if data is None:
                 p.unlink(missing_ok=True)
             else:
-                p.write_bytes(data)
+                tmp = p.with_name(p.name + ".tmp")
+                tmp.write_bytes(data)
+                os.replace(tmp, p)
 
     try:
         yield
@@ -367,13 +369,29 @@ def overlap_seconds(a0: dt.datetime, a1: dt.datetime, b0: dt.datetime, b1: dt.da
     return max((hi - lo).total_seconds(), 0.0)
 
 
-def work_seconds(events: list[JournalEvent]) -> float:
-    """Время работы: сумма длительностей шагов, записанных при `step done`."""
-    return sum(
+def work_seconds(events: list[JournalEvent], at: dt.datetime | None = None) -> float:
+    """Время работы: сумма длительностей шагов, записанных при `step done`.
+
+    С `at` к сумме добавляется идущий шаг (начат, не завершён) без ожидания на воротах.
+    """
+    total = sum(
         e.duration_s or 0.0
         for e in events
         if e.kind == "действие" and e.status == "выполнено" and (e.name or "").startswith("шаг ")
     )
+    if at is not None:
+        last: dict[str, JournalEvent] = {}
+        for e in events:
+            if e.kind == "действие" and (e.name or "").startswith("шаг ") and e.idempotency_hash:
+                last[e.idempotency_hash] = e
+        waits = gate_waits(events)
+        for e in last.values():
+            if e.status == "начато":
+                waited = sum(
+                    overlap_seconds(e.time, at, opened, answered or at) for opened, answered in waits
+                )
+                total += max((at - e.time).total_seconds() - waited, 0.0)
+    return total
 
 
 def cost_total(records: list[CostRecord]) -> tuple[float | None, str, bool]:
@@ -390,9 +408,16 @@ def cost_total(records: list[CostRecord]) -> tuple[float | None, str, bool]:
     complete = True
     sources: set[str] = set()
     for recs in by_session.values():
-        totals = [r for r in recs if r.entry == "итог сессии"]
-        chosen = [totals[-1]] if totals else recs
-        for r in chosen:
+        priced_totals = [i for i, r in enumerate(recs) if r.entry == "итог сессии" and r.cost_usd is not None]
+        messages = [r for r in recs if r.entry == "по сообщению"]
+        if priced_totals:
+            k = priced_totals[-1]
+            counted = [recs[k]] + [r for r in recs[k + 1 :] if r.entry == "по сообщению"]
+        else:
+            counted = messages
+        if not counted:
+            complete = False  # у сессии только итог без цены
+        for r in counted:
             if r.cost_usd is None:
                 complete = False
             else:

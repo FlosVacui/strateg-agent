@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -17,10 +18,10 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from strateg import __version__, safety
 from strateg import fetch as fetchlib
 from strateg import project as proj
 from strateg import quote as quotelib
-from strateg import safety
 from strateg.models import (
     LOCATOR_KINDS,
     SCHEMA_VERSION,
@@ -28,6 +29,7 @@ from strateg.models import (
     ClaimId,
     ClaimType,
     CostRecord,
+    Dispute,
     FetchInfo,
     ForecastRange,
     GateEvent,
@@ -41,7 +43,6 @@ from strateg.models import (
     Step,
     Text,
     norm,
-    normalize_quote,
 )
 from strateg.models import Source as SourceModel
 from strateg.project import CliError, Project, UsageError
@@ -437,10 +438,16 @@ def cmd_fetch(args: argparse.Namespace) -> int:
             refused = str(exc)
         except fetchlib.RobotsDenied as exc:
             access = "запрещено robots.txt"
-            note = (
-                f"robots.txt сайта запрещает загрузку {exc.url} для strateg; сохраните страницу вручную "
-                "в папку inputs/ проекта и добавьте её как материал"
-            )
+            if exc.unavailable:
+                note = (
+                    "robots.txt недоступен (ошибка сервера или нет связи): по RFC 9309 загрузка запрещена; "
+                    "повторите позже или сохраните страницу вручную в папку inputs/ проекта"
+                )
+            else:
+                note = (
+                    f"robots.txt сайта запрещает загрузку {exc.url} для strateg; сохраните страницу вручную "
+                    "в папку inputs/ проекта и добавьте её как материал"
+                )
         except fetchlib.FetchProblem as exc:
             access, note = exc.access, exc.note
 
@@ -514,7 +521,7 @@ def _store_result(
             final_url=page.url,
             region=region,
             encoding=encoding,
-            extractor=fetchlib.extractor_name(kind),
+            extractor=extra.get("extractor") or fetchlib.extractor_name(kind),
             raw_sha256=proj.sha256_bytes(page.body),
         )
         data.update(
@@ -523,7 +530,17 @@ def _store_result(
             text_sha256=proj.sha256_bytes(data_bytes),
             suspicious=bool(rep.instruction_signs),
             anonymized=rep.anonymized,
+            closed_markers=rep.closed_markers,
         )
+        if extra.get("warning"):
+            warnings.append(extra["warning"])
+        if rep.closed_markers:
+            warnings.append(
+                "найдены признаки закрытых данных ("
+                + ", ".join(rep.closed_markers)
+                + f"): снимок сохранён, но цитировать его нельзя, пока человек не подтвердит, что материал "
+                f"общедоступный (`strateg source confirm {sid}`)"
+            )
         if rep.anonymized:
             warnings.append("в тексте заменены на метки: " + ", ".join(rep.anonymized))
     else:
@@ -571,16 +588,32 @@ def _analyse(
         return "источник недоступен: ошибка", f"ответ {page.status}", kind, None
     if page.status >= 300 and page.status not in (401, 403, 429):
         return "источник недоступен: ошибка", f"ответ {page.status} без адреса перенаправления", kind, None
+    visible = ""
     if kind == "PDF":
         try:
             raw_text = fetchlib.extract_pdf(page.body)
         except fetchlib.FetchProblem as exc:
             return exc.access, exc.note, kind, None
-        encoding, html = "utf-8", ""
+        encoding = "utf-8"
+        extra["extractor"] = fetchlib.extractor_name(kind)
     else:
         html, encoding = fetchlib.decode_body(page.body, page.content_type)
-        raw_text = fetchlib.extract_html(html) if page.status < 400 else ""
-    if fetchlib.looks_blocked(page.status, html, raw_text):
+        if page.content_type.lower().startswith("text/plain"):
+            raw_text = html  # простой текст берётся как есть
+            extra["extractor"] = f"plain-text {__version__}"
+        elif page.status < 400:
+            extraction = fetchlib.extract_page(html)
+            raw_text = extraction.text
+            extra["extractor"] = extraction.extractor
+            if extraction.fallback:
+                extra["warning"] = (
+                    f"основной извлекатель потерял числа ({extraction.note}): "
+                    "взят весь видимый текст страницы"
+                )
+            visible = fetchlib.page_title(html) + "\n" + fetchlib.visible_text(html)
+        else:
+            raw_text = ""
+    if fetchlib.looks_blocked(page.status, visible, raw_text):
         return (
             "источник недоступен: защита",
             "сайт отвечает проверкой или запретом для программ; обход не выполняется",
@@ -596,17 +629,6 @@ def _analyse(
             None,
         )
     rep = safety.inspect_text(raw_text)
-    if rep.closed_markers:
-        extra["closed_markers"] = rep.closed_markers
-        return (
-            "источник недоступен: ошибка",
-            "найдены признаки закрытых данных ("
-            + ", ".join(rep.closed_markers)
-            + "): страница не сохранена. "
-            "Если материал общедоступен, сохраните его вручную в папку inputs/ и подтвердите это",
-            kind,
-            None,
-        )
     return "получен", None, kind, (rep, rep.text, encoding)
 
 
@@ -647,6 +669,10 @@ def _fetch_report(
         "snapshot": s.text_path,
         "snapshot_path": _snapshot_path(p, s),
         "sha256": s.text_sha256,
+        "extractor": s.fetch.extractor if s.fetch else None,
+        "extraction_fallback": bool(
+            s.fetch and s.fetch.extractor and s.fetch.extractor.startswith("lxml-visible-text")
+        ),
         "suspicious": s.suspicious,
         "closed_markers": closed,
         "warnings": warnings,
@@ -663,6 +689,9 @@ def _fetch_report(
             f"Адрес: {data['final_url'] or s.url}",
             f"Регион: {data['region'] or 'не указан'}",
             f"Доступ: {s.access}",
+            "Извлечение: "
+            + str(data["extractor"])
+            + (" (запасной путь: весь видимый текст)" if data["extraction_fallback"] else ""),
             "Пометки: " + ("; ".join(marks) if marks else "нет"),
         ]
         lines += [f"Внимание: {w}" for w in warnings]
@@ -673,6 +702,41 @@ def _fetch_report(
         print(json.dumps({"ok": False, **data, "error": err.message}, ensure_ascii=False))
         return 1
     return fail(args, err)
+
+
+def cmd_source_confirm(args: argparse.Namespace) -> int:
+    """Человек подтвердил, что материал с признаками закрытых данных общедоступный."""
+    p = _open(args)
+    sid = args.id.strip()
+    source = next((s for s in p.sources.sources if s.id == sid), None)
+    if source is None:
+        raise CliError(f"источника {sid} нет в реестре")
+    if not source.closed_markers:
+        return emit(
+            args, {"source": sid, "changed": False}, [f"У источника {sid} нет признаков закрытых данных."]
+        )
+    if source.closed_confirmed:
+        return emit(args, {"source": sid, "changed": False}, [f"Источник {sid} уже подтверждён."])
+    with proj.transaction(p.root):
+        source.closed_confirmed = True
+        p.save_sources()
+        p.add_event(
+            p.event(
+                kind="действие",
+                name="strateg source confirm",
+                idempotency_hash=proj.key_hash("source confirm", sid),
+                status="выполнено",
+                duration_s=0,
+                message=f"{sid}: человек подтвердил, что материал общедоступный "
+                f"(признаки: {', '.join(source.closed_markers)})",
+            )
+        )
+        p.save_state()
+    return emit(
+        args,
+        {"source": sid, "changed": True},
+        [f"Источник {sid} подтверждён как общедоступный, из него можно цитировать."],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -693,6 +757,11 @@ class QuoteIn(_In):
     self_reported: bool | None = None
 
 
+class DisputeIn(_In):
+    claim: ClaimId
+    reason: Text
+
+
 class ClaimIn(_In):
     text: Text
     type: ClaimType
@@ -707,6 +776,7 @@ class ClaimIn(_In):
     quotes: list[QuoteIn] = Field(default_factory=list)
     plan_question: Text | None = None
     step: Step | None = None
+    dispute: DisputeIn | None = None
 
 
 def _format(prefix: str, exc: ValidationError) -> list[str]:
@@ -736,9 +806,38 @@ def _read_input(path: str) -> Any:
         raise CliError(f"файл с утверждениями не читается как YAML или JSON{where}") from exc
 
 
-def claim_key(text: str, kind: str, quotes: list[tuple[str, str]]) -> str:
-    """Ключ идемпотентности `claim add`: хеш текста, источника и цитаты (и типа)."""
-    return proj.key_hash("claim", norm(text), kind, sorted((s, normalize_quote(q)) for s, q in quotes))
+def claim_key(
+    c_text: str,
+    kind: str,
+    quotes: list[tuple[str, str]],
+    subject: str,
+    period: str | None,
+    region: str | None,
+    basis: list[str],
+) -> str:
+    """Ключ идемпотентности `claim add`: хеш текста, типа, предмета, периода, региона, оснований и цитат."""
+    return proj.key_hash(
+        "claim",
+        norm(c_text),
+        kind,
+        sorted((s, quotelib.norm_text(q)) for s, q in quotes),
+        norm(subject),
+        norm(period or ""),
+        norm(region or ""),
+        sorted(basis),
+    )
+
+
+def _key_of_input(c: ClaimIn) -> str:
+    return claim_key(
+        c.text, c.type, [(q.source, q.text) for q in c.quotes], c.subject, c.period, c.region, c.basis
+    )
+
+
+def _key_of_claim(c: Claim) -> str:
+    return claim_key(
+        c.text, c.type, [(q.source, q.text) for q in c.quotes], c.subject, c.period, c.region, c.basis
+    )
 
 
 def _default_origin(c: ClaimIn) -> str:
@@ -747,6 +846,48 @@ def _default_origin(c: ClaimIn) -> str:
     if c.type == "синтетика":
         return "синтетика"
     return "источник" if c.type == "факт" or c.quotes else "агент"
+
+
+MIN_FACT_QUOTE_WORDS = 3
+MIN_FACT_QUOTE_CHARS = 20
+
+
+def _locator_page(locator: str) -> int | None:
+    m = re.search(r"\d+", locator)
+    return int(m.group()) if m else None
+
+
+def _pdf_quote(
+    text: str, q: QuoteIn, where: str, errors: list[str]
+) -> tuple[quotelib.QuoteMatch, str] | None:
+    """Цитата PDF: страница всегда определяется по снимку; указанное место должно с ней совпасть."""
+    hits = quotelib.pages_with_quote(q.text, text)
+    if not hits:
+        spans = quotelib.check_quote(q.text, text)
+        reason = (
+            "цитата идёт через границу страниц: цитируйте текст одной страницы"
+            if spans
+            else quotelib.explain_miss(q.text, text)
+        )
+        errors.append(f"{where}: цитата не найдена целиком ни на одной странице PDF: {reason}")
+        return None
+    if q.locator is None:
+        number, found = max(hits, key=lambda h: h[1].similarity)
+    else:
+        wanted = _locator_page(q.locator)
+        if wanted is None:
+            errors.append(f"{where}: место «{q.locator}» не разобрать, пишите «стр. N»")
+            return None
+        chosen = [h for h in hits if h[0] == wanted]
+        if not chosen:
+            pages = ", ".join(str(n) for n, _ in hits)
+            errors.append(
+                f"{where}: в locator указана «{q.locator}», а цитата найдена на странице: {pages}; "
+                "место определяется по снимку"
+            )
+            return None
+        number, found = chosen[0]
+    return found, f"стр. {number}"
 
 
 def _build_quotes(p: Project, c: ClaimIn, label: str, errors: list[str]) -> list[Quote]:
@@ -760,8 +901,8 @@ def _build_quotes(p: Project, c: ClaimIn, label: str, errors: list[str]) -> list
             continue
         if src.closed_markers and not src.closed_confirmed:
             errors.append(
-                f"{where}: в источнике {src.id} найдены признаки закрытых данных, "
-                "человек не подтвердил, что он общедоступный"
+                f"{where}: в источнике {src.id} найдены признаки закрытых данных, человек не подтвердил, "
+                f"что материал общедоступный (`strateg source confirm {src.id}`)"
             )
             continue
         if src.text_path is None or src.text_sha256 is None:
@@ -770,24 +911,39 @@ def _build_quotes(p: Project, c: ClaimIn, label: str, errors: list[str]) -> list
         if c.type == "факт" and src.kind == "синтетика":
             errors.append(f"{where}: источник {src.id} — синтетика, фактом она не становится")
             continue
+        if quotelib.PAGE_MARK_INLINE.search(q.text):
+            errors.append(f"{where}: в цитате метка страницы «[стр. N]»: цитируйте текст без меток")
+            continue
+        if c.type == "факт" and (
+            quotelib.word_count(q.text) < MIN_FACT_QUOTE_WORDS
+            or len(" ".join(q.text.split())) < MIN_FACT_QUOTE_CHARS
+        ):
+            errors.append(
+                f"{where}: цитата слишком короткая: у факта она не короче {MIN_FACT_QUOTE_WORDS} слов "
+                f"и {MIN_FACT_QUOTE_CHARS} знаков, иначе одно слово «подтвердит» любое утверждение"
+            )
+            continue
         path = p.root / src.text_path
         if not path.is_file() or proj.sha256_bytes(path.read_bytes()) != src.text_sha256:
             errors.append(f"{where}: снимок {src.text_path} изменён или не найден; загрузите источник заново")
             continue
         text = path.read_bytes().decode("utf-8")
-        found = quotelib.check_quote(q.text, text)
-        if found is None:
-            errors.append(
-                f"{where}: цитата не найдена в снимке {src.id}: {quotelib.explain_miss(q.text, text)}"
-            )
-            continue
         locator = q.locator
-        if src.kind in LOCATOR_KINDS and locator is None:
-            page = quotelib.find_page(q.text, text) if src.kind == "PDF" else None
-            if page is None:
+        if src.kind == "PDF" and quotelib.split_pages(text):
+            checked = _pdf_quote(text, q, where, errors)
+            if checked is None:
+                continue
+            found, locator = checked
+        else:
+            found = quotelib.check_quote(q.text, text)
+            if found is None:
+                errors.append(
+                    f"{where}: цитата не найдена в снимке {src.id}: {quotelib.explain_miss(q.text, text)}"
+                )
+                continue
+            if src.kind in LOCATOR_KINDS and locator is None:
                 errors.append(f"{where}: для источника вида «{src.kind}» нужно место цитаты (locator)")
                 continue
-            locator = f"стр. {page}"
         if (
             c.type == "факт"
             and src.fetch
@@ -816,6 +972,18 @@ def _build_quotes(p: Project, c: ClaimIn, label: str, errors: list[str]) -> list
                 ),
             )
         )
+    if c.type == "факт" and len(out) == len(c.quotes):
+        in_claim = set(quotelib.numbers(quotelib.norm_text(c.text)))
+        in_quotes: set[str] = set()
+        for q in c.quotes:
+            in_quotes |= set(quotelib.numbers(quotelib.norm_text(q.text)))
+        missing = sorted(in_claim - in_quotes)
+        if missing:
+            errors.append(
+                f"{label}: числа из текста утверждения нет ни в одной цитате: {', '.join(missing)}; "
+                "приведите цитату с этими числами или уберите их из утверждения"
+            )
+            return []
     return out
 
 
@@ -840,7 +1008,7 @@ def cmd_claim_add(args: argparse.Namespace) -> int:
         raise CliError("утверждения не записаны: файл не по схеме", errors)
 
     started = time.monotonic()
-    known = {claim_key(c.text, c.type, [(q.source, q.text) for q in c.quotes]): c.id for c in p.claims.claims}
+    known = {_key_of_claim(c): c.id for c in p.claims.claims}
     results: list[dict[str, Any]] = []
     new_claims: list[tuple[Claim, str]] = []
     batch_keys: dict[str, str] = {}
@@ -848,7 +1016,7 @@ def cmd_claim_add(args: argparse.Namespace) -> int:
     suspicious_sources = {s.id for s in p.sources.sources if s.suspicious}
     attempt = max(_attempts(p, p.state.step), 1)
     for c, label in prepared:
-        key = claim_key(c.text, c.type, [(q.source, q.text) for q in c.quotes])
+        key = _key_of_input(c)
         if key in known:
             results.append({"id": known[key], "duplicate": True, "type": c.type})
             continue
@@ -860,6 +1028,8 @@ def cmd_claim_add(args: argparse.Namespace) -> int:
         for ref in c.basis:
             if ref not in known_ids:
                 errors.append(f"{label}, поле basis: утверждения {ref} нет в реестре")
+        if c.dispute is not None and c.dispute.claim not in known_ids:
+            errors.append(f"{label}, поле dispute: утверждения {c.dispute.claim} нет в реестре")
         quotes = _build_quotes(p, c, label, errors)
         if len(errors) > before:
             continue
@@ -882,6 +1052,7 @@ def cmd_claim_add(args: argparse.Namespace) -> int:
                 status="действует",
                 status_history=[StatusChange(status="действует", at=proj.now(), by="агент")],
                 plan_question=c.plan_question,
+                dispute=Dispute(claim=c.dispute.claim, reason=c.dispute.reason) if c.dispute else None,
                 step=c.step or p.state.step,
                 attempt=attempt,
             )
@@ -940,6 +1111,7 @@ def cmd_claim_list(args: argparse.Namespace) -> int:
             "sources": sorted({q.source for q in c.quotes}),
             "suspicious": c.suspicious,
             "step": c.step,
+            "dispute": c.dispute.model_dump() if c.dispute else None,
         }
         for c in claims
     ]
@@ -982,10 +1154,16 @@ def cmd_cost_add(args: argparse.Namespace) -> int:
     entry = "итог сессии" if args.total else "по сообщению"
     message_id = None
     if not args.total:
-        message_id = (
-            args.message_id
-            or "авто-" + proj.key_hash("cost", args.session, args.role, args.model, args.usd, tokens)[:16]
-        )
+        if args.message_id:
+            message_id = args.message_id
+        else:
+            prefix = (
+                "авто-" + proj.key_hash("cost", args.session, args.role, args.model, args.usd, tokens)[:12]
+            )
+            same = sum(
+                1 for r in p.costs if r.session_id == args.session and (r.message_id or "").startswith(prefix)
+            )
+            message_id = f"{prefix}-{same + 1}"  # одинаковые записи подряд — разные сообщения
         if any(r.session_id == args.session and r.message_id == message_id for r in p.costs):
             return emit(
                 args,
@@ -1047,7 +1225,7 @@ def _status_data(p: Project) -> dict[str, Any]:
     if waiting:
         nxt = (
             f"ждём ответа на {waiting[0]}: следующее сообщение человека и есть ответ; "
-            f'запишите его командой `strateg gate answer {waiting[0]} --answer "<ответ>"`'
+            f"запишите его командой `strateg gate answer {waiting[0]} --answer '<ответ>'`"
         )
     else:
         nxt = p.state.next_action
@@ -1075,7 +1253,7 @@ def _status_data(p: Project) -> dict[str, Any]:
             "without_quote": without_quote,
         },
         "failures": sum(1 for e in p.journal if e.kind == "действие" and e.status == "ошибка"),
-        "work_minutes": round(proj.work_seconds(p.journal) / 60, 2),
+        "work_minutes": round(proj.work_seconds(p.journal, at=proj.now()) / 60, 2),
         "limit_minutes": p.state.budget.limit_minutes,
         "cost_usd": total_usd,
         "cost_precision": precision,

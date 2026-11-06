@@ -276,6 +276,11 @@ def _duplicates(ids: list[str]) -> set[str]:
 def _check_sources_files(root: Path, sources: SourcesFile, errors: list[str]) -> None:
     for n, s in enumerate(sources.sources, start=1):
         label = f"{SOURCES_FILE}, запись {s.id} (№{n})"
+        if s.closed_markers and not s.closed_confirmed:
+            errors.append(
+                f"{label}: найдены признаки закрытых данных, но человек не подтвердил, "
+                "что материал общедоступный"
+            )
         if s.path is not None and not (root / s.path).is_file():
             errors.append(f"{label}, поле path: файл {s.path} не найден")
         if s.text_path is None:

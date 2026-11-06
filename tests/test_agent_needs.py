@@ -200,11 +200,9 @@ def test_fetch_output_shows_marks(cli, net, home):
     net.add("https://example.com/closed", closed)
     code, out, err = cli("fetch", "https://example.com/closed", "--json")
     data = json.loads(out)
-    assert (
-        code == 1
-        and data["closed_markers"] == ["коммерческая тайна"]
-        and data["access"].startswith("источник")
-    )
+    assert code == 0 and data["closed_markers"] == ["коммерческая тайна"] and data["access"] == "получен"
+    text = cli("fetch", "https://example.com/closed")[1]
+    assert "Пометки: признаки закрытых данных: коммерческая тайна" in text
 
 
 # --- mode, stop ---

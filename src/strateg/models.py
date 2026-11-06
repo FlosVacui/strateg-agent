@@ -375,8 +375,6 @@ class Source(_Model):
                 p.append("материал обезличен, но человек не подтвердил обезличенную копию")
             if self.kind == "изображение" and not self.no_personal_data_confirmed:
                 p.append("изображение: человек не подтвердил, что персональных данных на нём нет")
-        if self.closed_markers and not self.closed_confirmed:
-            p.append("найдены признаки закрытых данных, но человек не подтвердил, что материал общедоступный")
         _raise(p)
         return self
 

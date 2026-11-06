@@ -38,6 +38,7 @@ PRODUCT_TOKEN = "strateg"
 MAX_BYTES = 5 * 1024 * 1024
 ROBOTS_MAX_BYTES = 500 * 1024
 ROBOTS_TTL_S = 24 * 3600
+ROBOTS_UNAVAILABLE_TTL_S = 10 * 60  # недоступность robots.txt помним недолго: сайт мог поправиться
 TIMEOUT_S = 20.0
 MAX_REDIRECTS = 5
 MIN_INTERVAL_S = 1.0
@@ -74,9 +75,12 @@ class AddressRefused(Exception):
 
 
 class RobotsDenied(Exception):
-    def __init__(self, url: str) -> None:
+    """Загрузка запрещена: `Disallow` в robots.txt или (`unavailable`) сам robots.txt недоступен."""
+
+    def __init__(self, url: str, unavailable: bool = False) -> None:
         super().__init__(url)
         self.url = url
+        self.unavailable = unavailable
 
 
 def user_agent() -> str:
@@ -201,7 +205,9 @@ class Fetcher:
         clock: Callable[[], float] = time.time,
     ) -> None:
         self.cache_file = cache_file
-        self.client = client or httpx.Client(timeout=httpx.Timeout(TIMEOUT_S), follow_redirects=False)
+        self.client = client or httpx.Client(
+            timeout=httpx.Timeout(TIMEOUT_S), follow_redirects=False, trust_env=False
+        )
         self.sleep = sleep
         self.clock = clock
         self.ua = user_agent()
@@ -276,7 +282,7 @@ class Fetcher:
         origin = f"{parts.scheme}://{parts.netloc.decode('ascii')}"
         data = self._load()
         entry = data.get("robots", {}).get(origin)
-        if not entry or self.clock() - entry["at"] > ROBOTS_TTL_S:
+        if not entry or self.clock() - entry["at"] > entry.get("ttl", ROBOTS_TTL_S):
             entry = self._download_robots(origin)
             data = self._load()
             data.setdefault("robots", {})[origin] = entry
@@ -289,7 +295,7 @@ class Fetcher:
 
     def _download_robots(self, origin: str) -> dict:
         url = origin + "/robots.txt"
-        entry = {"at": self.clock(), "mode": "deny", "text": ""}
+        entry = {"at": self.clock(), "mode": "deny", "text": "", "ttl": ROBOTS_UNAVAILABLE_TTL_S}
         try:
             for _hop in range(MAX_REDIRECTS + 1):
                 check_address(url)
@@ -298,18 +304,24 @@ class Fetcher:
                     url = normalize_url(urljoin(url, resp.headers["location"]))
                     continue
                 if resp.status_code < 300:
-                    entry["mode"] = "rules"
-                    entry["text"] = resp.content.decode("utf-8", errors="replace")
+                    entry.update(mode="rules", ttl=ROBOTS_TTL_S)
+                    entry["text"] = resp.content.decode("utf-8-sig", errors="replace")
                 elif resp.status_code < 500:
-                    entry["mode"] = "allow"
+                    entry.update(mode="allow", ttl=ROBOTS_TTL_S)
                 break
         except (FetchProblem, AddressRefused):
             entry["mode"] = "deny"
         return entry
 
-    def robots_allowed(self, url: str) -> bool:
+    def robots_state(self, url: str) -> str:
+        """«разрешено», «запрещено» (Disallow) или «недоступен» (robots.txt не получен: 5xx, нет связи)."""
         rules = self._robots(url)
-        return rules is not None and rules.can_fetch(url, PRODUCT_TOKEN)
+        if rules is None:
+            return "недоступен"
+        return "разрешено" if rules.can_fetch(url, PRODUCT_TOKEN) else "запрещено"
+
+    def robots_allowed(self, url: str) -> bool:
+        return self.robots_state(url) == "разрешено"
 
     # --- страница ---
     def get(self, raw_url: str) -> Page:
@@ -317,12 +329,18 @@ class Fetcher:
         url = normalize_url(raw_url)
         for _hop in range(MAX_REDIRECTS + 1):
             check_address(url)
-            if not self.robots_allowed(url):
-                raise RobotsDenied(url)
+            state = self.robots_state(url)
+            if state != "разрешено":
+                raise RobotsDenied(url, unavailable=state == "недоступен")
             resp = self._request(url, MAX_BYTES)
             location = resp.headers.get("location")
             if resp.status_code in _REDIRECTS and location:
-                url = normalize_url(urljoin(url, location))
+                target = normalize_url(urljoin(url, location))
+                if url.startswith("https:") and target.startswith("http:"):
+                    raise FetchProblem(
+                        "источник недоступен: ошибка", "перенаправление с https на http запрещено"
+                    )
+                url = target
                 continue
             return Page(url, resp.status_code, resp.headers.get("content-type", ""), resp.content)
         raise FetchProblem("источник недоступен: ошибка", f"больше {MAX_REDIRECTS} перенаправлений")
@@ -387,15 +405,103 @@ def decode_body(body: bytes, content_type: str = "") -> tuple[str, str]:
     return body.decode("utf-8", errors="replace"), "utf-8"
 
 
-def looks_blocked(status: int, html: str, extracted: str) -> bool:
-    """Ответ-вызов: капча или защита от ботов. Обход не предусмотрен, ответ становится пробелом."""
+def looks_blocked(status: int, visible: str, extracted: str) -> bool:
+    """Ответ-вызов: капча или защита от ботов. Обход не предусмотрен, ответ становится пробелом.
+
+    Признаки ищутся только в видимом тексте и заголовке страницы, а не в скриптах и разметке.
+    """
     if status in (401, 403, 429):
         return True
-    low = html[:50000].lower()
+    low = visible[:50000].lower()
     return len(extracted) < 3000 and any(marker in low for marker in _BLOCK_MARKERS)
 
 
+_BLOCK_TAGS = {
+    "p", "div", "li", "ul", "ol", "h1", "h2", "h3", "h4", "h5", "h6", "tr", "table", "section", "article",
+    "br", "dt", "dd", "blockquote", "pre", "main", "form", "fieldset", "label", "button",
+    "details", "summary",
+}  # fmt: skip
+_INLINE_BREAK_TAGS = {"a", "span", "td", "th", "option", "b", "strong", "em", "i", "small", "sup", "sub"}
+_DROP_XPATH = (
+    "//script|//style|//noscript|//template|//svg|//iframe|//head|//nav|//header|//footer|//aside"
+    "|//*[@hidden]|//*[@aria-hidden='true']"
+)
+
+
+def _parse(html: str):
+    from lxml import html as lxml_html
+
+    try:
+        return lxml_html.fromstring(html)
+    except (ValueError, lxml_html.etree.ParserError):
+        return None
+
+
+def page_title(html: str) -> str:
+    doc = _parse(html)
+    if doc is None:
+        return ""
+    return " ".join(" ".join(doc.xpath("//title//text()")).split())
+
+
+def visible_text(html: str) -> str:
+    """Весь видимый текст страницы: без скриптов, стилей, навигации, шапки и подвала; строки по блокам."""
+    doc = _parse(html)
+    if doc is None:
+        return ""
+    for node in doc.xpath(_DROP_XPATH):
+        if node.getparent() is not None:
+            node.drop_tree()
+    for el in doc.iter():
+        if not isinstance(el.tag, str):
+            continue
+        if el.tag in _BLOCK_TAGS:
+            el.text = "\n" + (el.text or "")
+            el.tail = "\n" + (el.tail or "")
+        elif el.tag in _INLINE_BREAK_TAGS:
+            el.tail = " " + (el.tail or "")  # соседние элементы не склеиваются в одно слово
+    lines: list[str] = []
+    for raw in doc.text_content().split("\n"):
+        line = " ".join(raw.split())
+        if line and (not lines or lines[-1] != line):
+            lines.append(line)
+    return "\n".join(lines)
+
+
+_COUNTED_NUMBER = re.compile(r"\d+(?: \d{3}(?!\d))*(?:[.,]\d+)?")
+
+
+def _significant_numbers(text: str) -> set[str]:
+    out = set()
+    for m in _COUNTED_NUMBER.finditer(text.replace("\u00a0", " ")):
+        value = m.group().replace(" ", "")
+        if len(value) >= 2:
+            out.add(value)
+    return out
+
+
+_PRICE = re.compile(r"(\d+(?: \d{3}(?!\d))*(?:[.,]\d+)?)\s*(?:₽|руб|р\.|\$|€|usd|eur)", re.IGNORECASE)
+
+
+def _prices(text: str) -> set[str]:
+    """Цены видимого текста: число перед знаком валюты или словом «руб»."""
+    return {m.group(1).replace(" ", "") for m in _PRICE.finditer(text.replace(" ", " "))}
+
+
+@dataclass
+class Extraction:
+    text: str
+    extractor: str  # «название версия», в метаданных снимка
+    fallback: bool  # основной извлекатель потерял числа, взят видимый текст
+    note: str = ""
+
+
+def _lib_version(lib: str) -> str:
+    return f"{lib} {metadata.version(lib)}"
+
+
 def extract_html(html: str) -> str:
+    """Основной путь: trafilatura с полнотой (`favor_recall`, таблицы)."""
     import trafilatura
 
     text = trafilatura.extract(
@@ -410,9 +516,33 @@ def extract_html(html: str) -> str:
     return text or ""
 
 
+def extract_page(html: str) -> Extraction:
+    """Текст страницы: trafilatura, а если в нём заметно меньше чисел, чем в видимом тексте, то видимый текст.
+
+    Карточки цен, опции и ответы раскрывающихся блоков trafilatura принимает за шаблон страницы и
+    выбрасывает; цены при этом теряются. Запасной путь берёт весь видимый текст без скриптов, стилей и
+    навигации. Способ пишется в метаданные снимка (`extractor`).
+    """
+    main = extract_html(html)
+    visible = visible_text(html)
+    in_main, in_visible = _significant_numbers(main), _significant_numbers(visible)
+    missing = in_visible - in_main
+    lost_prices = bool(_prices(visible) - in_main)
+    lost_numbers = lost_prices or (len(missing) >= 2 and len(in_main) < 0.7 * len(in_visible))
+    empty_main = len(main.strip()) < MIN_TEXT_CHARS and len(visible) >= 200
+    if lost_numbers or empty_main:
+        why = (
+            f"в основном тексте нет {len(missing)} из {len(in_visible)} чисел видимого текста, "
+            f"в том числе цен: {len(_prices(visible) - in_main)}"
+            if lost_numbers
+            else "основной текст пуст"
+        )
+        return Extraction(visible, f"lxml-visible-text {metadata.version('lxml')}", True, why)
+    return Extraction(main, _lib_version("trafilatura"), False)
+
+
 def extractor_name(kind: str) -> str:
-    lib = "pypdfium2" if kind == "PDF" else "trafilatura"
-    return f"{lib} {metadata.version(lib)}"
+    return _lib_version("pypdfium2" if kind == "PDF" else "trafilatura")
 
 
 def extract_pdf(body: bytes) -> str:

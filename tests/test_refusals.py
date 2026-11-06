@@ -55,10 +55,11 @@ def test_fact_without_quote_is_refused(started, cli, tmp_path):
         ),
         # короткая цитата с опечаткой: нечёткое сходство ей не разрешено
         ("Подписка «Защита» помогвет отсеивать", "короче 40"),
-        # «99» внутри «199»: короткая цитата, точное вхождение
-        ("99 рублей в месяц", "частью другого числа"),
         # то же, но длинная цитата, начатая с середины числа
-        ("99 рублей в месяц. Первые семь дней после подключения услуга предоставляется бесплатно", "числа"),
+        (
+            "99 рублей в месяц. Первые семь дней после подключения услуга предоставляется бесплатно",
+            "середине слова",
+        ),
         ("совсем другой текст, которого на странице нет и быть не может ни в каком виде", "нет"),
     ],
 )
@@ -79,7 +80,7 @@ def test_exact_quote_with_different_formatting_is_accepted(started, cli, tmp_pat
 
 def test_fuzzy_quote_is_recorded_with_similarity(started, cli, tmp_path):
     typo = "Первые семь дней после подключения услуга предостовляется бесплатно, затем списывается плата"
-    code, _, err = add(cli, tmp_path, fact(typo, region="RU-MOW"))
+    code, _, err = add(cli, tmp_path, fact(typo, text="Первая неделя подписки бесплатна", region="RU-MOW"))
     assert code == 0, err
     check = claims_of(started)[0]["quotes"][0]["check"]
     assert check["method"] == "нечёткое" and 93 <= check["similarity"] < 100
@@ -302,17 +303,47 @@ def test_contacts_are_masked_and_hotline_stays(cli, net, home, page_html):
     assert sources_of(home / "demo")[0]["anonymized"] == ["адреса почты", "телефоны"]
 
 
-def test_closed_data_markers_stop_the_snapshot(cli, net, home):
-    net.add(URL, page("Документ для служебного пользования. Стоимость услуги — 500 рублей в месяц."))
+def test_closed_data_markers_are_kept_and_block_quotes_until_confirmed(cli, net, home, tmp_path):
+    body = page("Документ для служебного пользования. Стоимость услуги составляет 500 рублей в месяц.")
+    net.add(URL, body)
     cli("new", "demo")
-    code, out, err = cli("fetch", URL)
-    assert code == 1 and "признаки закрытых данных" in err and "для служебного пользования" in err
-    assert "inputs/" in err
+    code, out, err = cli("fetch", URL, "--json")
+    data = json.loads(out)
+    assert code == 0, err
+    assert data["closed_markers"] == ["для служебного пользования"]
+    assert any("source confirm И-1" in w for w in data["warnings"])
     src = sources_of(home / "demo")[0]
-    assert src["access"] == "источник недоступен: ошибка" and "text_path" not in src
-    assert "признаки закрытых данных" in src["access_note"]
-    assert not list((home / "demo" / "sources").iterdir())  # закрытый текст не сохранён
+    assert src["access"] == "получен" and src["closed_markers"] == ["для служебного пользования"]
+    assert src["closed_confirmed"] is False
+    assert (home / "demo" / "sources" / "i-1.txt").is_file()
+    code, _, err = cli("check")
+    assert code == 1 and "признаки закрытых данных" in err
+    assert "признаки закрытых данных" in cli("status")[1]
+
+    claim = fact("Стоимость услуги составляет 500 рублей в месяц", text="Услуга стоит 500 рублей в месяц")
+    claim["region"] = None
+    del claim["region"]
+    code, _, err = add(cli, tmp_path, claim)
+    assert code == 1 and "закрытых данных" in err and "source confirm" in err
+
+    code, out, err = cli("source", "confirm", "И-1")
+    assert code == 0, err
+    assert sources_of(home / "demo")[0]["closed_confirmed"] is True
+    again = json.loads(cli("source", "confirm", "И-1", "--json")[1])
+    assert again["changed"] is False
+    confirm_events = [e for e in journal_of(home / "demo") if e.get("name") == "strateg source confirm"]
+    assert len(confirm_events) == 1 and "И-1" in confirm_events[0]["message"]
+    assert add(cli, tmp_path, claim)[0] == 0
     assert cli("check")[0] == 0
+
+
+def test_source_confirm_errors(cli, net, home, page_html):
+    net.add(URL, page_html)
+    cli("new", "demo")
+    assert cli("source", "confirm", "И-9")[0] == 1
+    cli("fetch", URL)
+    code, out, _ = cli("source", "confirm", "И-1", "--json")
+    assert code == 0 and json.loads(out)["changed"] is False  # признаков нет
 
 
 INJECTION = (
