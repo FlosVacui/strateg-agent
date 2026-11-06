@@ -44,7 +44,7 @@
 | С-1: издатель, вид, «о себе», «подозрительный», число первоисточников; у прогноза диапазон, у гипотезы способ проверки | `quotes[].publisher`, `publisher_kind`, `self_reported`, `claims[].suspicious`, `forecast_range`, `check_method`; число считается |
 | С-1, С-13: ворота, режим, число вопросов, время; стоимость | `journal`: `kind: ворота`, `gate`; `duration_s`, `cost.jsonl`, `state.yaml: budget` |
 | С-1: нет событий «изменено вне агента» | `journal`: `kind`; хеши — `state.yaml: files` |
-| С-2: действие не повторено; после продолжения типы и статусы те же | `journal`: `key`, `status`; `claims[].step`, `attempt`; `state.yaml`: `step`, `next_action`; `sources.yaml`: `fetch`, `text_sha256` |
+| С-2: действие не повторено; после продолжения типы и статусы те же | `journal`: `idempotency_hash`, `status`; `claims[].step`, `attempt`; `state.yaml`: `step`, `next_action`; `sources.yaml`: `fetch`, `text_sha256` |
 | С-4, С-5: замена, отзыв, правка человека | `status`, `status_history`, `replaces`, `replaced_by`, `origin: пользователь`, `kind: исправление` |
 | С-7: синтетика не факт; место в расшифровке | `type`/`origin: синтетика`, `quotes[].locator` |
 | С-8: место цитаты, обезличивание, закрытые данные, ПДн на изображении | `locator`, `anonymized`, `anonymization_confirmed`, `closed_markers`, `closed_confirmed`, `no_personal_data_confirmed` |

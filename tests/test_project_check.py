@@ -485,7 +485,7 @@ def test_interrupted_action_then_repeat_with_same_key(project):
             "kind": "действие",
             "step": "2б",
             "name": "strateg fetch",
-            "key": key,
+            "idempotency_hash": key,
             "status": status,
         } | extra
 

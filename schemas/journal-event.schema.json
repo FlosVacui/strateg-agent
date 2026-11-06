@@ -155,7 +155,7 @@
       "description": "Пояснение или причина",
       "title": "Message"
     },
-    "key": {
+    "idempotency_hash": {
       "anyOf": [
         {
           "pattern": "^[0-9a-f]{64}$",
@@ -167,7 +167,7 @@
       ],
       "default": null,
       "description": "Ключ идемпотентности: хеш шага и входов",
-      "title": "Key"
+      "title": "Idempotency Hash"
     },
     "status": {
       "anyOf": [

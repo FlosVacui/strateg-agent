@@ -437,13 +437,13 @@ def _check_events(events: list[JournalEvent], sources: SourcesFile | None, error
     done: dict[str, int] = {}
     ids = {s.id for s in sources.sources} if sources else None
     for n, e in enumerate(events, start=1):
-        if e.kind == "действие" and e.status == "выполнено" and e.key:
-            if e.key in done:
+        if e.kind == "действие" and e.status == "выполнено" and e.idempotency_hash:
+            if e.idempotency_hash in done:
                 errors.append(
-                    f"{JOURNAL_FILE}, строка {n}: действие уже выполнено (строка {done[e.key]}), "
+                    f"{JOURNAL_FILE}, строка {n}: действие уже выполнено (строка {done[e.idempotency_hash]}), "
                     "повторная отметка выполнения с тем же ключом"
                 )
-            done.setdefault(e.key, n)
+            done.setdefault(e.idempotency_hash, n)
         if e.source and ids is not None and e.source not in ids:
             errors.append(f"{JOURNAL_FILE}, строка {n}: ссылка на несуществующий источник {e.source}")
 

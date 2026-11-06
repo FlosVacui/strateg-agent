@@ -623,7 +623,7 @@ class JournalEvent(_Model):
     step: Step
     name: Text | None = Field(None, description="Что за действие, например «запрос получен»")
     message: Text | None = Field(None, description="Пояснение или причина")
-    key: Sha256 | None = Field(None, description="Ключ идемпотентности: хеш шага и входов")
+    idempotency_hash: Sha256 | None = Field(None, description="Ключ идемпотентности: хеш шага и входов")
     status: ActionStatus | None = None
     duration_s: Number | None = Field(None, ge=0, description="Длительность действия, секунды")
     gate: GateEvent | None = None
@@ -640,8 +640,8 @@ class JournalEvent(_Model):
         if k == "действие":
             if self.name is None:
                 p.append("у действия нет названия (name)")
-            if self.key is None:
-                p.append("у действия нет ключа идемпотентности (key)")
+            if self.idempotency_hash is None:
+                p.append("у действия нет ключа идемпотентности (idempotency_hash)")
             if self.status is None:
                 p.append("у действия нет статуса (status)")
             if self.status == "выполнено" and self.duration_s is None:
@@ -651,8 +651,8 @@ class JournalEvent(_Model):
         else:
             if self.status is not None or self.duration_s is not None:
                 p.append(f"status и duration_s бывают только у действия, а не у «{k}»")
-            if self.key is not None and k != "ошибка":
-                p.append(f"key бывает только у действия и ошибки, а не у «{k}»")
+            if self.idempotency_hash is not None and k != "ошибка":
+                p.append(f"idempotency_hash бывает только у действия и ошибки, а не у «{k}»")
         if (k == "ворота") != (self.gate is not None):
             p.append("блок gate нужен событию «ворота» и только ему")
         if k == "смена режима" and self.mode is None:

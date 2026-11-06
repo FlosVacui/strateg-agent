@@ -174,8 +174,8 @@ def test_journal_event_rules():
     def event(**kw):
         return {"schema_version": 1, "time": T, "actor": "CLI", "kind": "действие", "step": "1"} | kw
 
-    JournalEvent.model_validate(event(name="a", key=SHA, status="выполнено", duration_s=1.5))
-    text = messages(JournalEvent, event(name="a", key=SHA, status="выполнено"))
+    JournalEvent.model_validate(event(name="a", idempotency_hash=SHA, status="выполнено", duration_s=1.5))
+    text = messages(JournalEvent, event(name="a", idempotency_hash=SHA, status="выполнено"))
     assert "нет длительности" in text
     assert "нет ключа идемпотентности" in messages(JournalEvent, event(name="a", status="начато"))
     assert "блок gate" in messages(JournalEvent, event(kind="ворота"))
@@ -322,9 +322,9 @@ def test_interrupted_action_status():
     def event(**kw):
         return {"schema_version": 1, "time": T, "actor": "CLI", "kind": "действие", "step": "2б"} | kw
 
-    started = event(name="fetch", key=SHA, status="начато")
-    interrupted = event(name="fetch", key=SHA, status="прервано", duration_s=3, message="процесс остановлен")
-    for e in (started, interrupted, event(name="fetch", key=SHA, status="прервано")):
+    started = event(name="fetch", idempotency_hash=SHA, status="начато")
+    interrupted = event(name="fetch", idempotency_hash=SHA, status="прервано", duration_s=3, message="процесс остановлен")
+    for e in (started, interrupted, event(name="fetch", idempotency_hash=SHA, status="прервано")):
         JournalEvent.model_validate(e)
     assert "нет ключа идемпотентности" in messages(JournalEvent, event(name="fetch", status="прервано"))
     assert "бывают только у действия" in messages(
@@ -393,5 +393,5 @@ def test_cost_and_duration_are_finite_numbers(bad):
     event = {"schema_version": 1, "time": T, "actor": "CLI", "kind": "действие", "step": "1"}
     with pytest.raises(ValidationError):
         JournalEvent.model_validate(
-            event | {"name": "a", "key": SHA, "status": "выполнено", "duration_s": bad}
+            event | {"name": "a", "idempotency_hash": SHA, "status": "выполнено", "duration_s": bad}
         )

@@ -17,7 +17,7 @@ next_action: Собрать источники по вопросу плана «
 files:
   sources.yaml: 13c37a134c43b3bfc492c74963b3a1ecbf6816df4702fe5c9116f9bd36aac549
   claims.yaml: d2e48845025fcf4536a5bac5dcbcae624d0ee297affaa9513b2b403f60fd69a2
-  journal.jsonl: 27cb1347cf58ab893c777c9c4e877e7100c3d231389482eead4e255def5c4688
+  journal.jsonl: f87348649eeaa52dbc15a85a6335e8de2f752a05d88d507a99d924bb1ea07b21
   cost.jsonl: 21212d8a0542a475c80d9c498dbd4c335356edf9452ae4c24e961db769cfba6d
   sources/i-1.txt: deb6df4405ae41f9142e96d68fd96b66a8ecab5c638f4d3d18ba03ef22e55a19
   inputs/report.txt: 34326b0d65529a0332f93a344458e25ced1cda4c1f39cd96c4b9487068d088d4
