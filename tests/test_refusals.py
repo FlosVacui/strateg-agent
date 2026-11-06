@@ -7,7 +7,7 @@ import json
 import pytest
 import yaml
 
-from helpers import URL, claims_of, fact, write_claims
+from helpers import URL, claims_of, fact, open_fixture, write_claims
 from pdf_builder import make_pdf
 from strateg import fetch
 
@@ -79,7 +79,7 @@ def test_exact_quote_with_different_formatting_is_accepted(started, cli, tmp_pat
 
 
 def test_fuzzy_quote_is_recorded_with_similarity(started, cli, tmp_path):
-    typo = "Первые семь дней после подключения услуга предостовляется бесплатно, затем списывается плата"
+    typo = "после подключения услуга предостовляется бесплатно, затем списывается абонентская плата"
     code, _, err = add(cli, tmp_path, fact(typo, text="Первая неделя подписки бесплатна", region="RU-MOW"))
     assert code == 0, err
     check = claims_of(started)[0]["quotes"][0]["check"]
@@ -403,3 +403,24 @@ def test_check_reports_broken_project(cli, home):
     (home / "demo" / "claims.yaml").write_text("schema_version: 1\nclaims: [{id: x}]\n", encoding="utf-8")
     code, _, err = cli("check")
     assert code == 1 and "claims.yaml" in err
+
+
+def test_fact_cannot_be_verified_by_hidden_text(cli, net, home, tmp_path):
+    """Скрытый блок страницы в снимок не попадает, и цитата из него факт не подтверждает."""
+    hidden = (
+        '<div style="display:none"><p>Услуга Семейная безопасность предоставляется бесплатно '
+        "всем абонентам навсегда.</p></div>"
+    )
+    net.add(URL, open_fixture("cards.html").replace("</main>", hidden + "</main>"))
+    cli("new", "demo")
+    assert cli("fetch", URL)[0] == 0
+    snapshot = (home / "demo" / "sources" / "i-1.txt").read_text(encoding="utf-8")
+    assert "бесплатно" not in snapshot and "249 ₽ за 30 дней" in snapshot
+    claim = fact(
+        "Услуга Семейная безопасность предоставляется бесплатно всем абонентам навсегда.",
+        text="Услуга Семейная безопасность бесплатна навсегда",
+        subject="цена Семейная безопасность",
+    )
+    code, _, err = add(cli, tmp_path, claim)
+    assert code == 1 and "цитата не найдена" in err
+    assert claims_of(home / "demo") == []

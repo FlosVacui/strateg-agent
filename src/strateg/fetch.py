@@ -4,11 +4,11 @@
   локальные, внутренние, link-local, multicast и зарезервированные запрещены; не больше 5 перенаправлений;
 - таймаут 20 секунд и один повтор; ответ больше 5 МиБ обрывается;
 - `robots.txt` по RFC 9309 через protego: читается не больше 500 КиБ, кэш не дольше 24 часов;
-  4xx — можно всё, 5xx или недоступность — запрещено;
+  4xx — можно всё, 5xx, недоступность и перенаправление без адреса — запрещено;
 - не чаще одного запроса в секунду к хосту, время последнего запроса — в кэше проекта;
 - честный `User-Agent`: `strateg/<версия> (+<адрес репозитория>)`;
 - кодировка по байтам: заголовок, `<meta>`, charset-normalizer;
-- HTML — trafilatura, PDF — pypdfium2 (текст по страницам с метками `[стр. N]`).
+- HTML — очистка от скрытого, затем trafilatura, PDF — pypdfium2 (текст по страницам с метками `[стр. N]`).
 
 Капчи и защиту от ботов модуль не обходит: такой ответ — отказ с понятной причиной.
 """
@@ -303,6 +303,8 @@ class Fetcher:
                 if resp.status_code in _REDIRECTS and resp.headers.get("location"):
                     url = normalize_url(urljoin(url, resp.headers["location"]))
                     continue
+                if 300 <= resp.status_code < 400:
+                    break  # перенаправление без адреса: правил нет, robots.txt считается недоступным
                 if resp.status_code < 300:
                     entry.update(mode="rules", ttl=ROBOTS_TTL_S)
                     entry["text"] = resp.content.decode("utf-8-sig", errors="replace")
@@ -422,19 +424,75 @@ _BLOCK_TAGS = {
     "details", "summary",
 }  # fmt: skip
 _INLINE_BREAK_TAGS = {"a", "span", "td", "th", "option", "b", "strong", "em", "i", "small", "sup", "sub"}
-_DROP_XPATH = (
-    "//script|//style|//noscript|//template|//svg|//iframe|//head|//nav|//header|//footer|//aside"
-    "|//*[@hidden]|//*[@aria-hidden='true']"
+_DROP_XPATH = "//script|//style|//svg|//iframe|//head"
+_PAGE_FRAME_XPATH = "|".join(
+    f"//{t}[not(ancestor::main or ancestor::article)]" for t in ("nav", "header", "footer", "aside")
 )
+_HIDDEN_XPATH = "//template|//noscript|//*[@hidden]|//*[@aria-hidden]|//input[@type]|//*[@style]"
+_XML_PROLOG = re.compile(r"^[\ufeff\s]*<\?xml[^>]*\?>")
+_CSS_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
+_ZERO = re.compile(r"0*\.?0*(?:[a-z%]+)?")  # «0», «0px», «0.0em», «0%»
+
+
+def _hidden_by_style(style: str) -> bool:
+    """Встроенный стиль прячет элемент: display:none, visibility:hidden, font-size:0, opacity:0."""
+    for decl in _CSS_COMMENT.sub("", style).split(";"):
+        name, _, value = decl.partition(":")
+        value = value.lower().replace("!important", "").strip()
+        match name.strip().lower():
+            case "display":
+                hidden = value == "none"
+            case "visibility":
+                hidden = value in ("hidden", "collapse")
+            case "font-size" | "opacity":
+                hidden = bool(_ZERO.fullmatch(value)) and any(c.isdigit() for c in value)
+            case _:
+                hidden = False
+        if hidden:
+            return True
+    return False
+
+
+def _is_hidden(el) -> bool:
+    attrs = el.attrib
+    return (
+        el.tag in ("template", "noscript")
+        or "hidden" in attrs
+        or attrs.get("aria-hidden", "").strip().lower() == "true"
+        or (el.tag == "input" and attrs.get("type", "").strip().lower() == "hidden")
+        or _hidden_by_style(attrs.get("style", ""))
+    )
+
+
+def _drop(doc, xpath: str, *, only_hidden: bool = False) -> None:
+    for node in doc.xpath(xpath):
+        if node.getparent() is not None and (not only_hidden or _is_hidden(node)):
+            node.drop_tree()
 
 
 def _parse(html: str):
     from lxml import html as lxml_html
 
     try:
-        return lxml_html.fromstring(html)
+        return lxml_html.fromstring(_XML_PROLOG.sub("", html, count=1))
     except (ValueError, lxml_html.etree.ParserError):
         return None
+
+
+def clean_html(html: str) -> str:
+    """HTML без скрытого: `hidden`, `aria-hidden`, `<template>`, `<noscript>`, `<input type=hidden>` и
+    элементов с встроенным стилем `display:none`, `visibility:hidden`, `font-size:0`, `opacity:0`.
+
+    Одна очистка перед обоими путями извлечения. Скрытое классами и внешними стилями не видно без
+    отрисовки страницы. Не разобрать — пустая строка.
+    """
+    from lxml import html as lxml_html
+
+    doc = _parse(html)
+    if doc is None:
+        return ""
+    _drop(doc, _HIDDEN_XPATH, only_hidden=True)
+    return lxml_html.tostring(doc, encoding="unicode")
 
 
 def page_title(html: str) -> str:
@@ -445,13 +503,16 @@ def page_title(html: str) -> str:
 
 
 def visible_text(html: str) -> str:
-    """Весь видимый текст страницы: без скриптов, стилей, навигации, шапки и подвала; строки по блокам."""
+    """Весь видимый текст страницы: без скрытого, скриптов, стилей и рамки страницы; строки по блокам.
+
+    Навигация, шапка, подвал и боковая колонка отбрасываются только вне `main` и `article`.
+    """
     doc = _parse(html)
     if doc is None:
         return ""
-    for node in doc.xpath(_DROP_XPATH):
-        if node.getparent() is not None:
-            node.drop_tree()
+    _drop(doc, _HIDDEN_XPATH, only_hidden=True)
+    _drop(doc, _DROP_XPATH)
+    _drop(doc, _PAGE_FRAME_XPATH)
     for el in doc.iter():
         if not isinstance(el.tag, str):
             continue
@@ -523,6 +584,7 @@ def extract_page(html: str) -> Extraction:
     выбрасывает; цены при этом теряются. Запасной путь берёт весь видимый текст без скриптов, стилей и
     навигации. Способ пишется в метаданные снимка (`extractor`).
     """
+    html = clean_html(html)
     main = extract_html(html)
     visible = visible_text(html)
     in_main, in_visible = _significant_numbers(main), _significant_numbers(visible)

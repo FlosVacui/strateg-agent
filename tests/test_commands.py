@@ -309,6 +309,27 @@ def test_cost_same_command_twice_is_two_messages_but_explicit_id_is_idempotent(c
     assert cli("check")[0] == 0
 
 
+@pytest.mark.parametrize("usd", ["nan", "inf", "-inf", "-0.5"])
+def test_cost_usd_must_be_finite_and_not_negative(cli, usd):
+    cli("new", "demo")
+    code, out, err = cli("cost", "add", "--session", "s1", "--role", "r", "--model", "m", "--usd", usd)
+    assert code == 2 and "--usd" in err and "Traceback" not in err + out
+    assert json.loads(cli("status", "--json")[1])["cost_usd"] is None
+
+
+def test_cost_without_message_id_never_merges_identical_messages(cli):
+    cli("new", "demo")
+    args = ("cost", "add", "--session", "s1", "--role", "r", "--model", "m", "--usd", "0.1")
+    for _ in range(3):
+        assert cli(*args)[0] == 0
+    assert json.loads(cli("status", "--json")[1])["cost_usd"] == pytest.approx(0.3)
+
+
+def test_cost_message_id_help_warns_about_repeat(cli):
+    code, out, _ = cli("cost", "add", "--help")
+    assert code == 0 and "тот же id" in " ".join(out.split()) and "расход удвоится" in " ".join(out.split())
+
+
 def test_cost_total_without_price_does_not_displace_known_prices(cli):
     cli("new", "demo")
     base = ("cost", "add", "--session", "s1", "--role", "r", "--model", "m")

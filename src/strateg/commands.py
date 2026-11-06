@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import sys
 import time
@@ -840,6 +841,40 @@ def _key_of_claim(c: Claim) -> str:
     )
 
 
+def _locator_key(locator: str) -> str:
+    """Место цитаты для сравнения: «стр. 3», «стр 3» и «3» — одна страница."""
+    m = re.fullmatch(r"(?:стр\.?\s*)?(\d+)", locator.strip().lower())
+    return m.group(1) if m else norm(locator)
+
+
+def _extras(c: ClaimIn | Claim) -> dict[str, Any]:
+    """Входные поля, которые не входят в ключ `claim add`: по ним повтор отличают от дубля."""
+    out: dict[str, Any] = {
+        "forecast_range": c.forecast_range.model_dump() if c.forecast_range else None,
+        "dispute": (c.dispute.claim, norm(c.dispute.reason)) if c.dispute else None,
+        "check_method": norm(c.check_method or ""),
+        "taken_from": norm(c.taken_from or ""),
+        "plan_question": norm(c.plan_question or ""),
+    }
+    for i, q in enumerate(sorted(c.quotes, key=lambda q: (q.source, quotelib.norm_text(q.text))), start=1):
+        out[f"publisher (цитата {i})"] = norm(q.publisher or "")
+        out[f"publisher_kind (цитата {i})"] = q.publisher_kind
+        out[f"self_reported (цитата {i})"] = q.self_reported
+        out[f"locator (цитата {i})"] = _locator_key(q.locator) if q.locator else None
+    return out
+
+
+def _differs(recorded: dict[str, Any], incoming: dict[str, Any]) -> str | None:
+    """Первое входное поле, которым повтор отличается от записанного. Пустое место цитаты не спорит:
+    у PDF оно определяется по снимку."""
+    for name, value in incoming.items():
+        if name.startswith("locator") and value is None:
+            continue
+        if recorded.get(name) != value:
+            return name
+    return None
+
+
 def _default_origin(c: ClaimIn) -> str:
     if c.origin:
         return c.origin
@@ -1008,7 +1043,7 @@ def cmd_claim_add(args: argparse.Namespace) -> int:
         raise CliError("утверждения не записаны: файл не по схеме", errors)
 
     started = time.monotonic()
-    known = {_key_of_claim(c): c.id for c in p.claims.claims}
+    recorded = {_key_of_claim(c): (c.id, _extras(c)) for c in p.claims.claims}
     results: list[dict[str, Any]] = []
     new_claims: list[tuple[Claim, str]] = []
     batch_keys: dict[str, str] = {}
@@ -1017,11 +1052,17 @@ def cmd_claim_add(args: argparse.Namespace) -> int:
     attempt = max(_attempts(p, p.state.step), 1)
     for c, label in prepared:
         key = _key_of_input(c)
-        if key in known:
-            results.append({"id": known[key], "duplicate": True, "type": c.type})
-            continue
-        if key in batch_keys:
-            results.append({"id": batch_keys[key], "duplicate": True, "type": c.type})
+        if key in recorded:
+            cid, extras = recorded[key]
+            field = _differs(extras, _extras(c))
+            if field:
+                errors.append(
+                    f"{label}: такое утверждение уже записано как {cid}, но поле {field} отличается; "
+                    "записанное в этой версии не исправляется: запишите новое утверждение "
+                    "с другим текстом, предметом, периодом или цитатой"
+                )
+            else:
+                results.append({"id": cid, "duplicate": True, "type": c.type})
             continue
         before = len(errors)
         known_ids = {x.id for x in p.claims.claims} | set(batch_keys.values())
@@ -1061,6 +1102,7 @@ def cmd_claim_add(args: argparse.Namespace) -> int:
             continue
         next_no += 1
         batch_keys[key] = cid
+        recorded[key] = (cid, _extras(c))
         new_claims.append((claim, key))
         results.append({"id": cid, "duplicate": False, "type": c.type, "suspicious": claim.suspicious})
     if errors:
@@ -1140,8 +1182,8 @@ def cmd_cost_add(args: argparse.Namespace) -> int:
     p = _open(args)
     if args.usd is None and args.source:
         raise UsageError("--source задаётся вместе с --usd")
-    if args.usd is not None and args.usd < 0:
-        raise UsageError("--usd не может быть отрицательным")
+    if args.usd is not None and not (math.isfinite(args.usd) and args.usd >= 0):
+        raise UsageError("--usd должно быть конечным числом не меньше нуля")
     tokens = {
         "input_tokens": args.input,
         "output_tokens": args.output,
@@ -1154,16 +1196,8 @@ def cmd_cost_add(args: argparse.Namespace) -> int:
     entry = "итог сессии" if args.total else "по сообщению"
     message_id = None
     if not args.total:
-        if args.message_id:
-            message_id = args.message_id
-        else:
-            prefix = (
-                "авто-" + proj.key_hash("cost", args.session, args.role, args.model, args.usd, tokens)[:12]
-            )
-            same = sum(
-                1 for r in p.costs if r.session_id == args.session and (r.message_id or "").startswith(prefix)
-            )
-            message_id = f"{prefix}-{same + 1}"  # одинаковые записи подряд — разные сообщения
+        # Без --message-id каждая запись новая, даже одинаковая: время и число записей (часы Windows грубые).
+        message_id = args.message_id or f"auto-{time.time_ns() // 1000}-{len(p.costs)}"
         if any(r.session_id == args.session and r.message_id == message_id for r in p.costs):
             return emit(
                 args,
@@ -1220,6 +1254,9 @@ def _status_data(p: Project) -> dict[str, Any]:
         or (c.type in ("гипотеза", "прогноз") and not (c.basis or c.quotes))
     )
     total_usd, precision, complete = proj.cost_total(p.costs)
+    running = None  # сколько минут идёт начатый и не завершённый шаг (без ожидания на воротах)
+    if p.state.step in [e.step for e in _open_steps(p).values()]:
+        running = round((proj.work_seconds(p.journal, at=proj.now()) - proj.work_seconds(p.journal)) / 60, 2)
     open_steps = [e.step for e in _open_steps(p).values()]
     waiting = [g for g in GATES if p.state.gates.get(g) == "ждут ответа"]  # type: ignore[call-overload]
     if waiting:
@@ -1254,6 +1291,7 @@ def _status_data(p: Project) -> dict[str, Any]:
         },
         "failures": sum(1 for e in p.journal if e.kind == "действие" and e.status == "ошибка"),
         "work_minutes": round(proj.work_seconds(p.journal, at=proj.now()) / 60, 2),
+        "running_minutes": running,
         "limit_minutes": p.state.budget.limit_minutes,
         "cost_usd": total_usd,
         "cost_precision": precision,
@@ -1291,6 +1329,11 @@ def cmd_status(args: argparse.Namespace) -> int:
         if d["cost_usd"] is None
         else f"{_usd(d['cost_usd'])} ({d['cost_precision']}{'' if d['cost_complete'] else ', неполно'})"
     )
+    running = ""
+    if d["running_minutes"] is not None:
+        running = f" · шаг идёт {round(d['running_minutes'])} мин"
+        if d["running_minutes"] > 60:
+            running += " (больше часа: возможно, был перерыв, и время завышено)"
     kinds = ", ".join(f"{k} {v}" for k, v in d["sources"]["by_kind"].items())
     types = ", ".join(f"{k} {v}" for k, v in d["claims"]["by_type"].items())
     lines = [
@@ -1301,7 +1344,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         + (f" ({kinds})" if kinds else "")
         + (f", недоступны: {d['sources']['unavailable']}" if d["sources"]["unavailable"] else ""),
         f"Утверждения: {d['claims']['active']} действуют" + (f" ({types})" if types else ""),
-        f"Время работы: {_num(d['work_minutes'])} из {d['limit_minutes']:g} мин · стоимость: {cost}",
+        f"Время работы: {_num(d['work_minutes'])} из {d['limit_minutes']:g} мин{running} · стоимость: {cost}",
     ]
     if d["sources"]["suspicious"]:
         lines.append(

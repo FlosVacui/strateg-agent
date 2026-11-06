@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import yaml
 
 URL = "https://example.com/protection"
@@ -34,3 +36,7 @@ def write_claims(tmp_path, data, name="claims.yaml"):
 
 def claims_of(root):
     return yaml.safe_load((root / "claims.yaml").read_text(encoding="utf-8"))["claims"]
+
+
+def open_fixture(name: str) -> str:
+    return (Path(__file__).parent / "fixtures" / "pages" / name).read_text(encoding="utf-8")
