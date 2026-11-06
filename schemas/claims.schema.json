@@ -1,0 +1,470 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "Claim": {
+      "additionalProperties": false,
+      "description": "Утверждение `У-n`.",
+      "properties": {
+        "id": {
+          "pattern": "^У-[1-9][0-9]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "text": {
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "факт",
+            "гипотеза",
+            "прогноз",
+            "допущение",
+            "синтетика"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "origin": {
+          "enum": [
+            "источник",
+            "пользователь",
+            "агент",
+            "синтетика"
+          ],
+          "title": "Origin",
+          "type": "string"
+        },
+        "subject": {
+          "description": "Предмет утверждения; вместе с периодом и регионом задаёт, что оно заменяет",
+          "minLength": 1,
+          "title": "Subject",
+          "type": "string"
+        },
+        "period": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Period"
+        },
+        "region": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Region"
+        },
+        "basis": {
+          "description": "Утверждения-основания",
+          "items": {
+            "pattern": "^У-[1-9][0-9]*$",
+            "type": "string"
+          },
+          "title": "Basis",
+          "type": "array"
+        },
+        "check_method": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Гипотеза: чем и как проверить",
+          "title": "Check Method"
+        },
+        "forecast_range": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ForecastRange"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Прогноз: диапазон"
+        },
+        "taken_from": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Допущение: откуда взято",
+          "title": "Taken From"
+        },
+        "quotes": {
+          "items": {
+            "$ref": "#/$defs/Quote"
+          },
+          "title": "Quotes",
+          "type": "array"
+        },
+        "suspicious": {
+          "default": false,
+          "description": "Хотя бы один источник помечен «подозрительный»",
+          "title": "Suspicious",
+          "type": "boolean"
+        },
+        "dispute": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Dispute"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "status": {
+          "enum": [
+            "действует",
+            "заменено",
+            "отозвано"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "status_history": {
+          "items": {
+            "$ref": "#/$defs/StatusChange"
+          },
+          "title": "Status History",
+          "type": "array"
+        },
+        "replaces": {
+          "anyOf": [
+            {
+              "pattern": "^У-[1-9][0-9]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "«Заменяет»",
+          "title": "Replaces"
+        },
+        "replaced_by": {
+          "anyOf": [
+            {
+              "pattern": "^У-[1-9][0-9]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "«Заменено на»",
+          "title": "Replaced By"
+        },
+        "plan_question": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Вопрос плана строкой",
+          "title": "Plan Question"
+        }
+      },
+      "required": [
+        "id",
+        "text",
+        "type",
+        "origin",
+        "subject",
+        "status",
+        "status_history"
+      ],
+      "title": "Claim",
+      "type": "object"
+    },
+    "Dispute": {
+      "additionalProperties": false,
+      "description": "Спор: утверждение с расхождением и причина.",
+      "properties": {
+        "claim": {
+          "pattern": "^У-[1-9][0-9]*$",
+          "title": "Claim",
+          "type": "string"
+        },
+        "reason": {
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "claim",
+        "reason"
+      ],
+      "title": "Dispute",
+      "type": "object"
+    },
+    "ForecastRange": {
+      "additionalProperties": false,
+      "properties": {
+        "low": {
+          "title": "Low",
+          "type": "number"
+        },
+        "high": {
+          "title": "High",
+          "type": "number"
+        },
+        "unit": {
+          "minLength": 1,
+          "title": "Unit",
+          "type": "string"
+        }
+      },
+      "required": [
+        "low",
+        "high",
+        "unit"
+      ],
+      "title": "ForecastRange",
+      "type": "object"
+    },
+    "Quote": {
+      "additionalProperties": false,
+      "description": "Цитата из источника и поля источника по ADR-0005.",
+      "properties": {
+        "source": {
+          "pattern": "^И-[1-9][0-9]*$",
+          "title": "Source",
+          "type": "string"
+        },
+        "text": {
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        },
+        "locator": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Место: страница PDF, лист и ячейка, слайд, строка",
+          "title": "Locator"
+        },
+        "publisher": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Издатель первоисточника",
+          "title": "Publisher"
+        },
+        "publisher_kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "официальный первоисточник",
+                "отраслевое исследование",
+                "СМИ",
+                "вторичный пересказ",
+                "отзыв пользователя",
+                "материал пользователя"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Publisher Kind"
+        },
+        "self_reported": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Источник пишет о себе или своём продукте",
+          "title": "Self Reported"
+        },
+        "check": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/QuoteCheck"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Нет записи — цитата не проверена"
+        }
+      },
+      "required": [
+        "source",
+        "text"
+      ],
+      "title": "Quote",
+      "type": "object"
+    },
+    "QuoteCheck": {
+      "additionalProperties": false,
+      "description": "Запись проверки цитаты по снимку.",
+      "properties": {
+        "method": {
+          "enum": [
+            "точное вхождение",
+            "без пробелов и дефисов",
+            "нечёткое"
+          ],
+          "title": "Method",
+          "type": "string"
+        },
+        "similarity": {
+          "description": "Сходство, 0–100; для точных способов — 100",
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Similarity",
+          "type": "number"
+        },
+        "snapshot_sha256": {
+          "description": "sha256 снимка, по которому проверяли",
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Snapshot Sha256",
+          "type": "string"
+        },
+        "checked_at": {
+          "format": "date-time",
+          "title": "Checked At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "method",
+        "similarity",
+        "snapshot_sha256",
+        "checked_at"
+      ],
+      "title": "QuoteCheck",
+      "type": "object"
+    },
+    "StatusChange": {
+      "additionalProperties": false,
+      "description": "Запись истории статуса: старые записи не стираются.",
+      "properties": {
+        "status": {
+          "enum": [
+            "действует",
+            "заменено",
+            "отозвано"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "at": {
+          "format": "date-time",
+          "title": "At",
+          "type": "string"
+        },
+        "by": {
+          "enum": [
+            "агент",
+            "пользователь",
+            "CLI",
+            "хук"
+          ],
+          "title": "By",
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        }
+      },
+      "required": [
+        "status",
+        "at",
+        "by"
+      ],
+      "title": "StatusChange",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Файл `claims.yaml`: реестр утверждений. Пишут скиллы через CLI.",
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "claims": {
+      "items": {
+        "$ref": "#/$defs/Claim"
+      },
+      "title": "Claims",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version"
+  ],
+  "title": "ClaimsFile",
+  "type": "object"
+}

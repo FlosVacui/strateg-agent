@@ -1,0 +1,299 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "GateEvent": {
+      "additionalProperties": false,
+      "description": "Событие ворот. Ожидание ответа не входит во время работы.",
+      "properties": {
+        "gate": {
+          "enum": [
+            "В1",
+            "В2",
+            "В3",
+            "В4",
+            "В5"
+          ],
+          "title": "Gate",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "пилот",
+            "автопилот"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "questions": {
+          "description": "Сколько вопросов задано человеку",
+          "minimum": 0,
+          "title": "Questions",
+          "type": "integer"
+        },
+        "opened_at": {
+          "format": "date-time",
+          "title": "Opened At",
+          "type": "string"
+        },
+        "answered_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Нет ответа — ворота прошли сообщением или ждут",
+          "title": "Answered At"
+        },
+        "answer": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Answer"
+        }
+      },
+      "required": [
+        "gate",
+        "mode",
+        "questions",
+        "opened_at"
+      ],
+      "title": "GateEvent",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Строка `journal.jsonl`. Только добавление. Пишет только CLI.",
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "time": {
+      "format": "date-time",
+      "title": "Time",
+      "type": "string"
+    },
+    "actor": {
+      "enum": [
+        "агент",
+        "пользователь",
+        "CLI",
+        "хук"
+      ],
+      "title": "Actor",
+      "type": "string"
+    },
+    "kind": {
+      "enum": [
+        "действие",
+        "ворота",
+        "ошибка",
+        "исправление",
+        "смена режима",
+        "выбор модели",
+        "изменено вне агента",
+        "найдена инструкция в источнике",
+        "бюджет",
+        "учёт недоступен"
+      ],
+      "title": "Kind",
+      "type": "string"
+    },
+    "step": {
+      "enum": [
+        "1",
+        "2а",
+        "2б",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8"
+      ],
+      "title": "Step",
+      "type": "string"
+    },
+    "name": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Что за действие, например «запрос получен»",
+      "title": "Name"
+    },
+    "message": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Пояснение или причина",
+      "title": "Message"
+    },
+    "key": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Ключ идемпотентности: хеш шага и входов",
+      "title": "Key"
+    },
+    "status": {
+      "anyOf": [
+        {
+          "enum": [
+            "начато",
+            "выполнено",
+            "ошибка",
+            "пропущено"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Status"
+    },
+    "duration_s": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Длительность действия, секунды",
+      "title": "Duration S"
+    },
+    "gate": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/GateEvent"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "mode": {
+      "anyOf": [
+        {
+          "enum": [
+            "пилот",
+            "автопилот"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Для смены режима",
+      "title": "Mode"
+    },
+    "role": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Для выбора модели",
+      "title": "Role"
+    },
+    "model": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Для выбора модели",
+      "title": "Model"
+    },
+    "source": {
+      "anyOf": [
+        {
+          "pattern": "^И-[1-9][0-9]*$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Для найденной инструкции в источнике",
+      "title": "Source"
+    },
+    "path": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "pattern": "^(?!/)(?!\\\\)(?![A-Za-z]:)(?!.*\\\\)(?!(?:.*/)?\\.\\.(?:/|$)).+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Для «изменено вне агента»",
+      "title": "Path"
+    }
+  },
+  "required": [
+    "schema_version",
+    "time",
+    "actor",
+    "kind",
+    "step"
+  ],
+  "title": "JournalEvent",
+  "type": "object"
+}

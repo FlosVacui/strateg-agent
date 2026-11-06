@@ -1,0 +1,87 @@
+schema_version: 1
+claims:
+  - id: У-1
+    text: Подписка «Защита» стоит 149 рублей в месяц
+    type: допущение
+    origin: пользователь
+    subject: цена подписки «Защита»
+    period: "2026"
+    region: RU-MOW
+    taken_from: слова пользователя в чате, ссылки не было
+    status: заменено
+    status_history:
+      - status: действует
+        at: "2026-11-06T10:05:00+03:00"
+        by: пользователь
+      - status: заменено
+        at: "2026-11-06T10:14:00+03:00"
+        by: CLI
+        reason: пользователь дал ссылку, цена подтверждена снимком
+    replaced_by: У-2
+    plan_question: Сколько стоит подписка «Защита» в Москве?
+  - id: У-2
+    text: Подписка «Защита» в Москве стоит 199 рублей в месяц
+    type: факт
+    origin: источник
+    subject: цена подписки «Защита»
+    period: "2026"
+    region: RU-MOW
+    quotes:
+      - source: И-1
+        text: Стоимость подписки в Москве — 199 рублей в месяц
+        publisher: компания «Пример»
+        publisher_kind: официальный первоисточник
+        self_reported: true
+        check:
+          method: точное вхождение
+          similarity: 100
+          snapshot_sha256: deb6df4405ae41f9142e96d68fd96b66a8ecab5c638f4d3d18ba03ef22e55a19
+          checked_at: "2026-11-06T10:13:00+03:00"
+    status: действует
+    status_history:
+      - status: действует
+        at: "2026-11-06T10:13:00+03:00"
+        by: агент
+    replaces: У-1
+    plan_question: Сколько стоит подписка «Защита» в Москве?
+  - id: У-3
+    text: Подключают защиту чаще всего семьи с пожилыми родителями
+    type: гипотеза
+    origin: агент
+    subject: кто подключает защиту
+    period: "2026"
+    basis: [У-2]
+    check_method: спросить в интервью с пятью семьями, кто и почему подключил
+    status: действует
+    status_history:
+      - status: действует
+        at: "2026-11-06T10:20:00+03:00"
+        by: агент
+  - id: У-4
+    text: За год доля абонентов с подключённой защитой вырастет до 15–17 %
+    type: прогноз
+    origin: источник
+    subject: доля абонентов с защитой
+    period: "2027"
+    basis: [У-2]
+    forecast_range:
+      low: 15
+      high: 17
+      unit: "% абонентов"
+    quotes:
+      - source: И-2
+        text: в течение года вырастет с 12 до 15–17 процентов
+        locator: стр. 3
+        publisher: компания «Пример-Аналитика»
+        publisher_kind: отраслевое исследование
+        self_reported: false
+        check:
+          method: без пробелов и дефисов
+          similarity: 100
+          snapshot_sha256: 34326b0d65529a0332f93a344458e25ced1cda4c1f39cd96c4b9487068d088d4
+          checked_at: "2026-11-06T10:18:00+03:00"
+    status: действует
+    status_history:
+      - status: действует
+        at: "2026-11-06T10:18:00+03:00"
+        by: агент

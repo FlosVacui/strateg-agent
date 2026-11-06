@@ -37,6 +37,8 @@ jobs:
         run: uv run pytest -q
       - name: Ссылки в документах
         run: uv run python scripts/check_links.py
+      - name: Схемы совпадают с моделями
+        run: uv run python scripts/gen_schemas.py --check
       - name: Копия скиллов совпадает
         run: uv run python scripts/sync_skills.py --check
 

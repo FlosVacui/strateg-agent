@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Строка `cost.jsonl`. Только добавление. Стоимость может быть оценкой или отсутствовать.",
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "time": {
+      "format": "date-time",
+      "title": "Time",
+      "type": "string"
+    },
+    "session_id": {
+      "minLength": 1,
+      "title": "Session Id",
+      "type": "string"
+    },
+    "role": {
+      "minLength": 1,
+      "title": "Role",
+      "type": "string"
+    },
+    "model": {
+      "minLength": 1,
+      "title": "Model",
+      "type": "string"
+    },
+    "environment": {
+      "description": "Среда: claude-code, claude-p, cursor и т. п.",
+      "minLength": 1,
+      "title": "Environment",
+      "type": "string"
+    },
+    "step": {
+      "anyOf": [
+        {
+          "enum": [
+            "1",
+            "2а",
+            "2б",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7",
+            "8"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Step"
+    },
+    "entry": {
+      "enum": [
+        "по сообщению",
+        "итог сессии"
+      ],
+      "title": "Entry",
+      "type": "string"
+    },
+    "message_id": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "id сообщения транскрипта — ключ против удвоения",
+      "title": "Message Id"
+    },
+    "input_tokens": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Input Tokens",
+      "type": "integer"
+    },
+    "output_tokens": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Output Tokens",
+      "type": "integer"
+    },
+    "cache_write_5m_tokens": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Cache Write 5M Tokens",
+      "type": "integer"
+    },
+    "cache_write_1h_tokens": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Cache Write 1H Tokens",
+      "type": "integer"
+    },
+    "cache_read_tokens": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Cache Read Tokens",
+      "type": "integer"
+    },
+    "web_searches": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Web Searches",
+      "type": "integer"
+    },
+    "cost_usd": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Cost Usd"
+    },
+    "cost_source": {
+      "enum": [
+        "измерено",
+        "оценка",
+        "нет данных"
+      ],
+      "title": "Cost Source",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "time",
+    "session_id",
+    "role",
+    "model",
+    "environment",
+    "entry",
+    "cost_source"
+  ],
+  "title": "CostRecord",
+  "type": "object"
+}
