@@ -26,6 +26,10 @@ PATTERNS = {
     "номер замечания ревью": re.compile(r"\b" + "R" + "V-"),
     "номер замечания вида R-n.n-n": re.compile(r"\bR-\d+\.\d+-\d+"),
     "папка заданий": re.compile(r"\b" + "brief" + r"s\b", re.IGNORECASE),
+    "номер пакета работ": re.compile(
+        r"\b" + "пакет" + r"\w*\s+\d+\.\d+(?!\d)(?!\.\d)(?!\s*(?:[гмкт]б|gb|mb|мин|смс|sms|₽|руб))",
+        re.IGNORECASE,
+    ),
 }
 # Исключения: путь файла от корня -> какие ключи FORBIDDEN в нём допустимы.
 # В LICENSE и NOTICE имя автора уместно (развилка Р-1).
@@ -89,10 +93,21 @@ def test_patterns_catch_review_and_brief_numbers():
         "номер замечания ревью": "см. " + "RV" + "-2.3-1",
         "номер замечания вида R-n.n-n": "замечание " + "R" + "-2.3-14",
         "папка заданий": "docs/" + "brief" + "s/2.3.md",
+        "номер пакета работ": "появится в " + "пакет" + "е 3.1",
     }
     for label, sample in samples.items():
         assert PATTERNS[label].search(sample), label
-    for harmless in ("SERV-1", "OBSERV-2", "R-значение", "версия 2.3-1", "нет брифов"):
+    for harmless in (
+        "SERV-1",
+        "OBSERV-2",
+        "R-значение",
+        "версия 2.3-1",
+        "нет брифов",
+        "пакет pydantic 2.14",
+        "пакет 1.5 ГБ",
+        "пакет 3.5 мин",
+        "пакет 2.14.3",
+    ):
         assert not any(p.search(harmless) for p in PATTERNS.values()), harmless
 
 
