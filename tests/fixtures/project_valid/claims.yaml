@@ -4,6 +4,8 @@ claims:
     text: Подписка «Защита» стоит 149 рублей в месяц
     type: допущение
     origin: пользователь
+    step: "2а"
+    attempt: 1
     subject: цена подписки «Защита»
     period: "2026"
     region: RU-MOW
@@ -23,6 +25,8 @@ claims:
     text: Подписка «Защита» в Москве стоит 199 рублей в месяц
     type: факт
     origin: источник
+    step: "2б"
+    attempt: 1
     subject: цена подписки «Защита»
     period: "2026"
     region: RU-MOW
@@ -48,6 +52,8 @@ claims:
     text: Подключают защиту чаще всего семьи с пожилыми родителями
     type: гипотеза
     origin: агент
+    step: "2б"
+    attempt: 1
     subject: кто подключает защиту
     period: "2026"
     basis: [У-2]
@@ -61,6 +67,8 @@ claims:
     text: За год доля абонентов с подключённой защитой вырастет до 15–17 %
     type: прогноз
     origin: источник
+    step: "2б"
+    attempt: 1
     subject: доля абонентов с защитой
     period: "2027"
     basis: [У-2]

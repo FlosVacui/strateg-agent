@@ -198,6 +198,28 @@
           "default": null,
           "description": "Вопрос плана строкой",
           "title": "Plan Question"
+        },
+        "step": {
+          "description": "Шаг, на котором записано утверждение (ADR-0002)",
+          "enum": [
+            "1",
+            "2а",
+            "2б",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7",
+            "8"
+          ],
+          "title": "Step",
+          "type": "string"
+        },
+        "attempt": {
+          "description": "Номер попытки шага: при повторе прерванного шага растёт, записанное не дублируется",
+          "minimum": 1,
+          "title": "Attempt",
+          "type": "integer"
         }
       },
       "required": [
@@ -207,7 +229,9 @@
         "origin",
         "subject",
         "status",
-        "status_history"
+        "status_history",
+        "step",
+        "attempt"
       ],
       "title": "Claim",
       "type": "object"
@@ -368,7 +392,7 @@
           "type": "string"
         },
         "similarity": {
-          "description": "Сходство, 0–100; для точных способов — 100",
+          "description": "Сходство, 0–100; для точных способов — 100, для нечёткого — не ниже порога",
           "maximum": 100,
           "minimum": 0,
           "title": "Similarity",

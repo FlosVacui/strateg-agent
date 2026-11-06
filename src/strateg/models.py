@@ -13,21 +13,26 @@ JSON Schema генерирует `scripts/gen_schemas.py`. Схема описы
 
 from __future__ import annotations
 
+import datetime as dt
 import re
 import unicodedata
-from typing import Annotated, Literal, Self
+from typing import Annotated, Any, Literal, Self
 
 from pydantic import (
     AfterValidator,
     AwareDatetime,
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
+    Strict,
+    StrictBool,
     model_validator,
 )
 
 SCHEMA_VERSION = 1
-MIN_FUZZY_QUOTE_LEN = 40  # нечёткая проверка — только для цитаты от 40 знаков
+MIN_FUZZY_QUOTE_LEN = 40  # цитата короче проходит проверку только точным вхождением
+FUZZY_THRESHOLD = 93  # стартовый порог нечёткого сходства, процентов
 WEB_DIR = "sources"  # снимки веба
 INPUTS_DIR = "inputs"  # материалы человека и извлечённый из них текст
 
@@ -35,11 +40,13 @@ INPUTS_DIR = "inputs"  # материалы человека и извлечён
 # Общие типы
 # ---------------------------------------------------------------------------
 
-_PATH_PATTERN = r"^(?!/)(?!\\)(?![A-Za-z]:)(?!.*\\)(?!(?:.*/)?\.\.(?:/|$)).+$"
+# Элемент пути: не пустой, не «.» и «..», без пробелов по краям, не кончается точкой.
+_SEGMENT = r"(?:[^/\\\s\x00.]|[^/\\\s\x00][^/\\\x00]*[^/\\\s\x00.])"
+_PATH_PATTERN = rf"^(?![A-Za-z]:){_SEGMENT}(?:/{_SEGMENT})*$"
 
 
 def _check_rel_path(value: str) -> str:
-    """Путь внутри проекта: только относительный, через `/`, без выхода за папку."""
+    """Путь внутри проекта: только относительный, через `/`, в одном каноническом виде."""
     if not value.strip():
         raise ValueError("путь пустой")
     if value.startswith("\\\\"):
@@ -50,10 +57,21 @@ def _check_rel_path(value: str) -> str:
         raise ValueError("абсолютный путь (начинается с /) недопустим: путь должен быть относительным")
     if "\\" in value:
         raise ValueError("в пути обратная косая черта: пишите пути через /")
-    if ".." in value.split("/"):
-        raise ValueError("путь выходит за папку проекта через ..")
     if "\x00" in value:
         raise ValueError("в пути недопустимый символ")
+    parts = value.split("/")
+    if ".." in parts:
+        raise ValueError("путь выходит за папку проекта через ..")
+    if "" in parts:
+        raise ValueError("в пути пустой элемент: двойной / или / в конце; один файл — одна запись пути")
+    if "." in parts:
+        raise ValueError("в пути элемент «.»: уберите его, один файл — одна запись пути")
+    for part in parts:
+        if part != part.strip() or part.endswith("."):
+            raise ValueError(
+                f"элемент пути «{part}» начинается или кончается пробелом либо кончается точкой: "
+                "один файл — одна запись пути"
+            )
     return value
 
 
@@ -75,7 +93,75 @@ ClaimId = Annotated[str, Field(pattern=r"^У-[1-9][0-9]*$")]
 ProjectId = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")]
 Url = Annotated[str, Field(pattern=r"^https?://[^\s]+$")]
 Extractor = Annotated[str, Field(pattern=r"^[^\s]+ [0-9][^\s]*$")]
-Percent = Annotated[float, Field(ge=0, le=100)]
+
+
+def show(value: Any) -> str:
+    """Значение для сообщения об ошибке: без имён типов Python."""
+    if value is None:
+        return "пусто"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, list):
+        return "список"
+    if isinstance(value, dict):
+        return "набор полей"
+    return str(value)
+
+
+def kind_of(value: Any) -> str:
+    """Название вида значения по-русски, для «ожидается …, а получено …»."""
+    if value is None:
+        return "пусто"
+    if isinstance(value, bool):
+        return "логическое значение"
+    if isinstance(value, int):
+        return "целое число"
+    if isinstance(value, float):
+        return "дробное число"
+    if isinstance(value, str):
+        return "строка"
+    if isinstance(value, list):
+        return "список"
+    if isinstance(value, dict):
+        return "набор полей"
+    if isinstance(value, dt.date):
+        return "дата"
+    return "значение другого вида"
+
+
+_TIME_START = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}")
+
+
+def _check_time_input(value: Any) -> Any:
+    """Время — строка ISO 8601 (с буквой T); число и строка из цифр не считаются временем.
+
+    Время с поясом без кавычек YAML 1.1 читает сам как дату и время — его принимаем.
+    """
+    if isinstance(value, dt.datetime):
+        return value
+    if isinstance(value, str) and _TIME_START.match(value):
+        return value
+    raise ValueError(
+        "время должно быть строкой ISO 8601 с поясом, например 2026-11-06T10:00:00+03:00; "
+        f"получено: {show(value)} ({kind_of(value)})"
+    )
+
+
+def _check_schema_version(value: Any) -> Any:
+    """Версия схемы — целое число; `true`, `1.0` и строка «1» не годятся."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    raise ValueError(
+        f"версия схемы «{show(value)}» не поддерживается; ожидается целое число {SCHEMA_VERSION}"
+    )
+
+
+Time = Annotated[AwareDatetime, BeforeValidator(_check_time_input)]
+SchemaVersion = Annotated[Literal[1], BeforeValidator(_check_schema_version)]
+Number = Annotated[float, Strict(), Field(allow_inf_nan=False)]  # конечное число
+Percent = Annotated[float, Strict(), Field(ge=0, le=100, allow_inf_nan=False)]
+Count = Annotated[int, Strict(), Field(ge=0)]
+Flag = StrictBool
 
 Mode = Literal["пилот", "автопилот"]
 Step = Literal["1", "2а", "2б", "3", "4", "5", "6", "7", "8"]
@@ -128,7 +214,7 @@ EventKind = Literal[
     "бюджет",
     "учёт недоступен",
 ]
-ActionStatus = Literal["начато", "выполнено", "ошибка", "пропущено"]
+ActionStatus = Literal["начато", "выполнено", "ошибка", "пропущено", "прервано"]
 
 CostEntry = Literal["по сообщению", "итог сессии"]
 CostSource = Literal["измерено", "оценка", "нет данных"]
@@ -146,6 +232,40 @@ def norm(text: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", text).casefold().split())
 
 
+_QUOTES = dict.fromkeys("«»„“”‟‹›‘’‚‛'`", '"')
+_DASHES = dict.fromkeys("‐‑‒–—―−﹘﹣－", "-")
+_TRANSLATE = str.maketrans({**_QUOTES, **_DASHES, "­": None, "ё": "е"})
+
+
+def normalize_quote(text: str) -> str:
+    """Нормализация для сверки цитаты со снимком (ADR-0005).
+
+    NFKC, удаление мягких переносов, ё -> е, кавычки одного вида, все тире и дефисы одним знаком,
+    регистр, пробелы схлопнуты.
+    """
+    text = unicodedata.normalize("NFKC", text).casefold().translate(_TRANSLATE)
+    return " ".join(text.split())
+
+
+def strip_spaces_and_hyphens(text: str) -> str:
+    """Вид «без пробелов и дефисов» от уже нормализованного текста."""
+    return "".join(ch for ch in text if not ch.isspace() and ch != "-")
+
+
+def quote_in_snapshot(method: str, quote: str, snapshot: str) -> bool:
+    """Есть ли цитата в тексте снимка способом «точное вхождение» или «без пробелов и дефисов».
+
+    Нечёткое сходство здесь не считается: пересчёт идёт в `quote check` (пакет 3.2).
+    """
+    q, s = normalize_quote(quote), normalize_quote(snapshot)
+    if method == "точное вхождение":
+        return q in s
+    if method == "без пробелов и дефисов":
+        q2 = strip_spaces_and_hyphens(q)
+        return bool(q2) and q2 in strip_spaces_and_hyphens(s)
+    raise ValueError(f"способ «{method}» не проверяется по тексту снимка")
+
+
 def _raise(problems: list[str]) -> None:
     if problems:
         raise ValueError("\n".join(problems))
@@ -159,7 +279,7 @@ def _raise(problems: list[str]) -> None:
 class FetchInfo(_Model):
     """Метаданные снимка веб-страницы: что и когда скачано."""
 
-    accessed_at: AwareDatetime = Field(description="Дата и время обращения, ISO 8601 с поясом")
+    accessed_at: Time = Field(description="Дата и время обращения, ISO 8601 с поясом")
     final_url: Url | None = Field(None, description="Итоговый адрес после перенаправлений")
     region: Text | None = Field(None, description="Код региона, например RU-MOW; пусто, если не зависит")
     encoding: Text | None = Field(None, description="Кодировка ответа, например utf-8")
@@ -181,13 +301,13 @@ class Source(_Model):
         None, description="Файл текста: sources/ для веба, inputs/ для материалов"
     )
     text_sha256: Sha256 | None = Field(None, description="sha256 файла text_path — это хеш снимка")
-    suspicious: bool = False
-    untrusted: bool = False
+    suspicious: Flag = False
+    untrusted: Flag = False
     anonymized: list[Anonymized] = Field(default_factory=list, description="Что заменено при обезличивании")
-    anonymization_confirmed: bool = Field(False, description="Человек подтвердил обезличенную копию")
+    anonymization_confirmed: Flag = Field(False, description="Человек подтвердил обезличенную копию")
     closed_markers: list[Text] = Field(default_factory=list, description="Найденные признаки закрытых данных")
-    closed_confirmed: bool = Field(False, description="Человек подтвердил, что материал общедоступный")
-    no_personal_data_confirmed: bool = Field(
+    closed_confirmed: Flag = Field(False, description="Человек подтвердил, что материал общедоступный")
+    no_personal_data_confirmed: Flag = Field(
         False, description="Для изображения: человек подтвердил, что ПДн нет"
     )
 
@@ -248,7 +368,7 @@ class Source(_Model):
 class SourcesFile(_Model):
     """Файл `sources.yaml`: реестр источников. Пишет только CLI."""
 
-    schema_version: Literal[1]
+    schema_version: SchemaVersion
     sources: list[Source] = Field(default_factory=list)
 
 
@@ -261,9 +381,24 @@ class QuoteCheck(_Model):
     """Запись проверки цитаты по снимку."""
 
     method: CheckMethod
-    similarity: Percent = Field(description="Сходство, 0–100; для точных способов — 100")
+    similarity: Percent = Field(
+        description="Сходство, 0–100; для точных способов — 100, для нечёткого — не ниже порога"
+    )
     snapshot_sha256: Sha256 = Field(description="sha256 снимка, по которому проверяли")
-    checked_at: AwareDatetime
+    checked_at: Time
+
+    @model_validator(mode="after")
+    def _rules(self) -> Self:
+        p: list[str] = []
+        if self.method != "нечёткое" and self.similarity != 100:
+            p.append(f"способ «{self.method}» требует сходства 100, а в записи проверки {self.similarity:g}")
+        if self.method == "нечёткое" and self.similarity < FUZZY_THRESHOLD:
+            p.append(
+                f"сходство {self.similarity:g} ниже порога {FUZZY_THRESHOLD}: "
+                "цитата нечёткой проверкой не проходит"
+            )
+        _raise(p)
+        return self
 
 
 class Quote(_Model):
@@ -274,18 +409,18 @@ class Quote(_Model):
     locator: Text | None = Field(None, description="Место: страница PDF, лист и ячейка, слайд, строка")
     publisher: Text | None = Field(None, description="Издатель первоисточника")
     publisher_kind: PublisherKind | None = None
-    self_reported: bool | None = Field(None, description="Источник пишет о себе или своём продукте")
+    self_reported: Flag | None = Field(None, description="Источник пишет о себе или своём продукте")
     check: QuoteCheck | None = Field(None, description="Нет записи — цитата не проверена")
 
     @model_validator(mode="after")
     def _rules(self) -> Self:
         p: list[str] = []
-        if self.check is not None and self.check.method == "нечёткое":
+        if self.check is not None and self.check.method != "точное вхождение":
             n = len(" ".join(self.text.split()))
             if n < MIN_FUZZY_QUOTE_LEN:
                 p.append(
-                    f"нечёткая проверка допустима только для цитаты от {MIN_FUZZY_QUOTE_LEN} знаков "
-                    f"(в цитате {n}); короткую цитату проверяют точным вхождением"
+                    f"цитата короче {MIN_FUZZY_QUOTE_LEN} знаков (в цитате {n}) проверяется только "
+                    f"точным вхождением, а записан способ «{self.check.method}»"
                 )
         _raise(p)
         return self
@@ -295,7 +430,7 @@ class StatusChange(_Model):
     """Запись истории статуса: старые записи не стираются."""
 
     status: ClaimStatus
-    at: AwareDatetime
+    at: Time
     by: Actor
     reason: Text | None = None
 
@@ -308,8 +443,8 @@ class Dispute(_Model):
 
 
 class ForecastRange(_Model):
-    low: float
-    high: float
+    low: Number
+    high: Number
     unit: Text
 
 
@@ -330,13 +465,17 @@ class Claim(_Model):
     forecast_range: ForecastRange | None = Field(None, description="Прогноз: диапазон")
     taken_from: Text | None = Field(None, description="Допущение: откуда взято")
     quotes: list[Quote] = Field(default_factory=list)
-    suspicious: bool = Field(False, description="Хотя бы один источник помечен «подозрительный»")
+    suspicious: Flag = Field(False, description="Хотя бы один источник помечен «подозрительный»")
     dispute: Dispute | None = None
     status: ClaimStatus
     status_history: list[StatusChange]
     replaces: ClaimId | None = Field(None, description="«Заменяет»")
     replaced_by: ClaimId | None = Field(None, description="«Заменено на»")
     plan_question: Text | None = Field(None, description="Вопрос плана строкой")
+    step: Step = Field(description="Шаг, на котором записано утверждение (ADR-0002)")
+    attempt: Annotated[int, Strict(), Field(ge=1)] = Field(
+        description="Номер попытки шага: при повторе прерванного шага растёт, записанное не дублируется"
+    )
 
     @model_validator(mode="after")
     def _rules(self) -> Self:
@@ -413,7 +552,7 @@ class Claim(_Model):
 class ClaimsFile(_Model):
     """Файл `claims.yaml`: реестр утверждений. Пишут скиллы через CLI."""
 
-    schema_version: Literal[1]
+    schema_version: SchemaVersion
     claims: list[Claim] = Field(default_factory=list)
 
 
@@ -436,11 +575,9 @@ class GateEvent(_Model):
 
     gate: Gate
     mode: Mode
-    questions: int = Field(ge=0, description="Сколько вопросов задано человеку")
-    opened_at: AwareDatetime
-    answered_at: AwareDatetime | None = Field(
-        None, description="Нет ответа — ворота прошли сообщением или ждут"
-    )
+    questions: Count = Field(description="Сколько вопросов задано человеку")
+    opened_at: Time
+    answered_at: Time | None = Field(None, description="Нет ответа — ворота прошли сообщением или ждут")
     answer: Text | None = None
 
     @model_validator(mode="after")
@@ -459,8 +596,8 @@ class GateEvent(_Model):
 class JournalEvent(_Model):
     """Строка `journal.jsonl`. Только добавление. Пишет только CLI."""
 
-    schema_version: Literal[1]
-    time: AwareDatetime
+    schema_version: SchemaVersion
+    time: Time
     actor: Actor
     kind: EventKind
     step: Step
@@ -468,7 +605,7 @@ class JournalEvent(_Model):
     message: Text | None = Field(None, description="Пояснение или причина")
     key: Sha256 | None = Field(None, description="Ключ идемпотентности: хеш шага и входов")
     status: ActionStatus | None = None
-    duration_s: float | None = Field(None, ge=0, description="Длительность действия, секунды")
+    duration_s: Number | None = Field(None, ge=0, description="Длительность действия, секунды")
     gate: GateEvent | None = None
     mode: Mode | None = Field(None, description="Для смены режима")
     role: Text | None = Field(None, description="Для выбора модели")
@@ -520,8 +657,8 @@ class JournalEvent(_Model):
 class CostRecord(_Model):
     """Строка `cost.jsonl`. Только добавление. Стоимость может быть оценкой или отсутствовать."""
 
-    schema_version: Literal[1]
-    time: AwareDatetime
+    schema_version: SchemaVersion
+    time: Time
     session_id: Text
     role: Text
     model: Text
@@ -529,13 +666,13 @@ class CostRecord(_Model):
     step: Step | None = None
     entry: CostEntry
     message_id: Text | None = Field(None, description="id сообщения транскрипта — ключ против удвоения")
-    input_tokens: int = Field(0, ge=0)
-    output_tokens: int = Field(0, ge=0)
-    cache_write_5m_tokens: int = Field(0, ge=0)
-    cache_write_1h_tokens: int = Field(0, ge=0)
-    cache_read_tokens: int = Field(0, ge=0)
-    web_searches: int = Field(0, ge=0)
-    cost_usd: float | None = Field(None, ge=0)
+    input_tokens: Count = 0
+    output_tokens: Count = 0
+    cache_write_5m_tokens: Count = 0
+    cache_write_1h_tokens: Count = 0
+    cache_read_tokens: Count = 0
+    web_searches: Count = 0
+    cost_usd: Number | None = Field(None, ge=0)
     cost_source: CostSource
 
     @model_validator(mode="after")
@@ -559,16 +696,16 @@ class CostRecord(_Model):
 class Budget(_Model):
     """Бюджет и расход. Денег может не быть: тогда лимит действует по времени."""
 
-    limit_usd: float | None = Field(None, gt=0)
-    spent_usd: float | None = Field(None, ge=0, description="Нет данных о стоимости — пусто")
-    limit_minutes: float = Field(gt=0)
-    spent_minutes: float = Field(ge=0)
+    limit_usd: Number | None = Field(None, gt=0)
+    spent_usd: Number | None = Field(None, ge=0, description="Нет данных о стоимости — пусто")
+    limit_minutes: Number = Field(gt=0)
+    spent_minutes: Number = Field(ge=0)
 
 
 class ProjectState(_Model):
     """Файл `state.yaml`. Пишет только CLI."""
 
-    schema_version: Literal[1]
+    schema_version: SchemaVersion
     id: ProjectId
     mode: Mode
     step: Step

@@ -15,6 +15,7 @@ from strateg.models import (
     JournalEvent,
     ProjectState,
     SourcesFile,
+    quote_in_snapshot,
 )
 
 SHA = "a" * 64
@@ -50,6 +51,8 @@ def claim(**kw: Any) -> dict[str, Any]:
         "taken_from": "рамка",
         "status": "действует",
         "status_history": [{"status": "действует", "at": T, "by": "агент"}],
+        "step": "2б",
+        "attempt": 1,
     }
     return c | kw
 
@@ -122,7 +125,7 @@ def test_fuzzy_threshold_is_forty_characters_after_whitespace_normalization():
     ok = claim(type="факт", origin="источник", quotes=[quote(text="а" * 40, check=check)])
     parse(ok)
     short = claim(type="факт", origin="источник", quotes=[quote(text="а" * 39, check=check)])
-    assert "от 40 знаков" in messages(ClaimsFile, {"schema_version": 1, "claims": [short]})
+    assert "короче 40 знаков" in messages(ClaimsFile, {"schema_version": 1, "claims": [short]})
     spaced = claim(type="факт", origin="источник", quotes=[quote(text="а" * 39 + "  \n  ", check=check)])
     assert "(в цитате 39)" in messages(ClaimsFile, {"schema_version": 1, "claims": [spaced]})
 
@@ -260,3 +263,117 @@ def test_messages_do_not_depend_on_console_encoding():
         JournalEvent, {"schema_version": 1, "time": T, "actor": "CLI", "kind": "ошибка", "step": "1"}
     )
     assert re.search("[А-Яа-я]", text)
+
+
+def test_quote_check_similarity_rules():
+    exact = quote()["check"]
+    parse(claim(type="факт", origin="источник", taken_from=None, quotes=[quote()]))
+    bad_exact = quote(check=exact | {"similarity": 3})
+    assert "требует сходства 100" in messages(
+        ClaimsFile, {"schema_version": 1, "claims": [claim(quotes=[bad_exact])]}
+    )
+    long_text = "а" * 50
+    fuzzy = exact | {"method": "нечёткое"}
+    parse(claim(quotes=[quote(text=long_text, check=fuzzy | {"similarity": 93})]))
+    low = quote(text=long_text, check=fuzzy | {"similarity": 92.9})
+    assert "ниже порога 93" in messages(ClaimsFile, {"schema_version": 1, "claims": [claim(quotes=[low])]})
+
+
+@pytest.mark.parametrize("method", ["без пробелов и дефисов", "нечёткое"])
+def test_short_quote_allows_only_exact_method(method):
+    check = quote()["check"] | {"method": method}
+    short = claim(quotes=[quote(text="не рост", check=check)])
+    text = messages(ClaimsFile, {"schema_version": 1, "claims": [short]})
+    assert "короче 40 знаков" in text and "только точным вхождением" in text
+    parse(claim(quotes=[quote(text="не рост")]))  # точное вхождение — можно
+
+
+def test_quote_matching_follows_adr_normalization():
+    snapshot = "Стоимость подписки в Москве — «199» рублей в тече-\nние месяца. ЁЖ"
+    assert quote_in_snapshot("точное вхождение", 'стоимость  подписки в москве - "199" рублей', snapshot)
+    assert quote_in_snapshot("точное вхождение", "еж", snapshot)  # ё и е, регистр
+    assert quote_in_snapshot("точное вхождение", "течение месяца", "тече­ние месяца")  # мягкий перенос
+    assert not quote_in_snapshot("точное вхождение", "в течение месяца", snapshot)
+    assert quote_in_snapshot("без пробелов и дефисов", "в течение месяца", snapshot)
+    assert not quote_in_snapshot("без пробелов и дефисов", "в течение года", snapshot)
+    with pytest.raises(ValueError):
+        quote_in_snapshot("нечёткое", "а", snapshot)
+
+
+def test_interrupted_action_status():
+    def event(**kw):
+        return {"schema_version": 1, "time": T, "actor": "CLI", "kind": "действие", "step": "2б"} | kw
+
+    started = event(name="fetch", key=SHA, status="начато")
+    interrupted = event(name="fetch", key=SHA, status="прервано", duration_s=3, message="процесс остановлен")
+    for e in (started, interrupted, event(name="fetch", key=SHA, status="прервано")):
+        JournalEvent.model_validate(e)
+    assert "нет ключа идемпотентности" in messages(JournalEvent, event(name="fetch", status="прервано"))
+    assert "бывают только у действия" in messages(
+        JournalEvent, event(kind="бюджет", message="m", status="прервано")
+    )
+
+
+def test_claim_has_step_and_attempt():
+    parse(claim(step="2а", attempt=3))
+    with pytest.raises(ValidationError):
+        parse({k: v for k, v in claim().items() if k != "step"})
+    with pytest.raises(ValidationError):
+        parse(claim(attempt=0))
+    with pytest.raises(ValidationError):
+        parse(claim(attempt=1.0))
+    with pytest.raises(ValidationError):
+        parse(claim(step="9"))
+
+
+@pytest.mark.parametrize("bad", [1730000000, "1730000000", 1730000000.0, True, None, "2026-11-06"])
+def test_time_is_iso_string_only(bad):
+    event = {"schema_version": 1, "time": bad, "actor": "CLI", "kind": "ошибка", "step": "1", "message": "m"}
+    with pytest.raises(ValidationError):
+        JournalEvent.model_validate(event)
+
+
+def test_time_accepts_iso_strings_and_aware_datetimes():
+    import datetime as dt
+
+    event = {"schema_version": 1, "actor": "CLI", "kind": "ошибка", "step": "1", "message": "m"}
+    for ok in (T, "2026-11-06T10:00:00Z", "2026-11-06T10:00+03:00", dt.datetime(2026, 11, 6, tzinfo=dt.UTC)):
+        JournalEvent.model_validate(event | {"time": ok})
+    with pytest.raises(ValidationError):
+        JournalEvent.model_validate(event | {"time": "2026-11-06T10:00:00"})  # без пояса
+
+
+@pytest.mark.parametrize("bad", [True, 1.0, "1", 2, None])
+def test_schema_version_is_strict_integer(bad):
+    state = {
+        "schema_version": bad,
+        "id": "demo",
+        "mode": "автопилот",
+        "step": "1",
+        "gates": {g: "впереди" for g in ("В1", "В2", "В3", "В4", "В5")},
+        "budget": {"limit_minutes": 60, "spent_minutes": 0},
+    }
+    with pytest.raises(ValidationError):
+        ProjectState.model_validate(state)
+
+
+@pytest.mark.parametrize("bad", [float("inf"), float("-inf"), float("nan"), "0.1", True])
+def test_cost_and_duration_are_finite_numbers(bad):
+    base = {
+        "schema_version": 1,
+        "time": T,
+        "session_id": "s",
+        "role": "r",
+        "model": "m",
+        "environment": "claude-code",
+        "entry": "итог сессии",
+        "cost_source": "оценка",
+    }
+    with pytest.raises(ValidationError):
+        CostRecord.model_validate(base | {"cost_usd": bad})
+    CostRecord.model_validate(base | {"cost_usd": 3})  # целое — тоже число
+    event = {"schema_version": 1, "time": T, "actor": "CLI", "kind": "действие", "step": "1"}
+    with pytest.raises(ValidationError):
+        JournalEvent.model_validate(
+            event | {"name": "a", "key": SHA, "status": "выполнено", "duration_s": bad}
+        )

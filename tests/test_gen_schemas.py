@@ -65,7 +65,10 @@ def test_path_pattern_in_schema_agrees_with_validator():
     schema_text = (ROOT / "schemas" / "sources.schema.json").read_text(encoding="utf-8")
     assert json.dumps(models._PATH_PATTERN, ensure_ascii=False) in schema_text
     good = ["inputs/a.pdf", "sources/i-1.txt", "inputs/папка/файл.txt", "a..b/c", "inputs/.hidden"]
+    good += ["a b/c d.txt", "inputs/файл (1).txt", "x"]
     bad = ["/etc/a", "C:\\x", "d:/x", "\\\\srv\\s", "inputs\\a", "../a", "a/../b", "a/..", ".."]
+    bad += ["inputs//a.pdf", "inputs/./a.pdf", "./a", "inputs/a.pdf ", "inputs/a.pdf/", "inputs/a.pdf."]
+    bad += [" inputs/a.pdf", "inputs/ a.pdf", "inputs/a\x00b", ".", "a/.", "inputs/"]
     for value in good:
         assert pattern.match(value), value
         assert models._check_rel_path(value) == value

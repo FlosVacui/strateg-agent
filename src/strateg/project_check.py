@@ -3,7 +3,11 @@
 Каждая ошибка называет файл и запись: `claims.yaml, запись У-3 (№3), поле quotes[0].text: ...`.
 Форму записей проверяют модели из `strateg.models`; здесь — чтение файлов (UTF-8, LF), перевод
 сообщений pydantic на русский и правила между записями и файлами: ссылки на существующие номера,
-замена утверждений, циклы в основаниях, снимки и их хеши, повторные отметки выполнения.
+замена утверждений, циклы в основаниях и замене, снимки и их хеши, повторное вхождение цитаты в текст
+снимка, повторные отметки выполнения.
+
+Абсолютные пути проверяют поля путей (тип `RelPath`); свободный текст — цитаты, пояснения,
+сообщения — не просматривается.
 """
 
 from __future__ import annotations
@@ -24,8 +28,12 @@ from strateg.models import (
     CostRecord,
     JournalEvent,
     ProjectState,
+    Source,
     SourcesFile,
+    kind_of,
     norm,
+    quote_in_snapshot,
+    show,
 )
 
 STATE_FILE = "state.yaml"
@@ -34,15 +42,6 @@ CLAIMS_FILE = "claims.yaml"
 JOURNAL_FILE = "journal.jsonl"
 COST_FILE = "cost.jsonl"
 PROJECT_FILES = (STATE_FILE, SOURCES_FILE, CLAIMS_FILE, JOURNAL_FILE, COST_FILE)
-
-# Абсолютные пути в тексте: диск Windows, сетевой путь, домашние и системные папки Unix.
-_ABS_PATH_RE = re.compile(
-    r"(?<![A-Za-z0-9])[A-Za-z]:[\\/]"
-    r"|(?<![\w.:\\])\\\\[^\s\\]+\\"
-    r"|(?<![\w.:/~-])/(?:Users|home|tmp|var|etc|mnt|root|opt)/"
-)
-# Поля адресов и путей проверяют сами модели; в остальном тексте ищем абсолютные пути.
-_SKIP_KEYS = {"url", "final_url", "path", "text_path"}
 
 
 def sha256_file(path: Path) -> str:
@@ -65,10 +64,19 @@ _QUOTE_HINT = "если это значение вроде no, 1.10 или да�
 
 
 def _where(loc: Iterable[Any]) -> str:
-    out = ""
-    for part in loc:
-        out += f"[{part}]" if isinstance(part, int) else (("." if out else "") + str(part))
-    return out
+    """Путь поля: `quotes[0].text`; ключ словаря — `files[«путь»] (ключ)`."""
+    parts = list(loc)
+    out, suffix = "", ""
+    for i, part in enumerate(parts):
+        if part == "[key]":
+            suffix = " (ключ)"
+        elif isinstance(part, int):
+            out += f"[{part}]"
+        elif i + 1 < len(parts) and parts[i + 1] == "[key]":
+            out += f"[«{part}»]"
+        else:
+            out += ("." if out else "") + str(part)
+    return out + suffix
 
 
 def _explain(err: dict[str, Any]) -> list[str]:
@@ -81,26 +89,28 @@ def _explain(err: dict[str, Any]) -> list[str]:
     if t == "extra_forbidden":
         return ["неизвестное поле: опечатка или поле не из этой версии схемы"]
     if t == "literal_error" and loc and loc[-1] == "schema_version":
-        return [f"версия схемы «{err.get('input')}» не поддерживается; ожидается {ctx.get('expected')}"]
+        return [f"версия схемы «{show(err.get('input'))}» не поддерживается; ожидается {ctx.get('expected')}"]
     if t == "literal_error":
         hint = "" if isinstance(err.get("input"), str) else f"; {_QUOTE_HINT}"
         allowed = str(ctx.get("expected")).replace(" or ", ", ")
-        return [f"недопустимое значение «{err.get('input')}»; допустимо: {allowed}{hint}"]
+        return [f"недопустимое значение «{show(err.get('input'))}»; допустимо: {allowed}{hint}"]
     if t == "string_type":
-        return [f"ожидается строка, а получено {type(err.get('input')).__name__}; {_QUOTE_HINT}"]
+        return [f"ожидается строка, а получено: {kind_of(err.get('input'))}; {_QUOTE_HINT}"]
     if t == "string_pattern_mismatch":
         hint = _PATTERN_HINTS.get(ctx.get("pattern", ""), f"шаблон {ctx.get('pattern')}")
-        return [f"значение «{err.get('input')}» не подходит: нужно {hint}"]
+        return [f"значение «{show(err.get('input'))}» не подходит: нужно {hint}"]
     if t == "string_too_short":
         return ["строка пустая"]
     if t in ("bool_type", "bool_parsing"):
-        return ["ожидается логическое значение true или false"]
+        return [f"ожидается логическое значение true или false, а получено: {kind_of(err.get('input'))}"]
     if t in ("int_type", "int_parsing", "int_from_float"):
-        return ["ожидается целое число"]
+        return [f"ожидается целое число, а получено: {kind_of(err.get('input'))}"]
+    if t == "finite_number":
+        return ["ожидается конечное число: Infinity и NaN недопустимы"]
     if t in ("float_type", "float_parsing"):
-        return ["ожидается число"]
+        return [f"ожидается число, а получено: {kind_of(err.get('input'))}"]
     if t in ("greater_than_equal", "greater_than", "less_than_equal", "less_than"):
-        return [f"число {err.get('input')} вне допустимых границ"]
+        return [f"число {show(err.get('input'))} вне допустимых границ"]
     if t == "timezone_aware":
         return ["время без часового пояса: добавьте пояс, например 2026-11-06T10:00:00+03:00"]
     if t.startswith("datetime") or t.startswith("date_"):
@@ -109,7 +119,10 @@ def _explain(err: dict[str, Any]) -> list[str]:
         return ["ожидается список"]
     if t in ("dict_type", "model_type", "model_attributes_type"):
         return ["ожидается набор полей «ключ: значение»"]
-    return [f"некорректное значение ({t})"]
+    return ["некорректное значение"]
+
+
+_RECORD_ID = re.compile(r"^[УИ]-[1-9][0-9]*$")
 
 
 def _record_label(file: str, section: str | None, raw: Any, index: int) -> str:
@@ -117,7 +130,9 @@ def _record_label(file: str, section: str | None, raw: Any, index: int) -> str:
     if section and isinstance(raw, dict) and isinstance(raw.get(section), list) and index < len(raw[section]):
         rec = raw[section][index]
     ident = rec.get("id") if isinstance(rec, dict) else None
-    return f"{file}, запись {ident} (№{index + 1})" if ident else f"{file}, запись №{index + 1}"
+    if isinstance(ident, str) and _RECORD_ID.match(ident):
+        return f"{file}, запись {ident} (№{index + 1})"
+    return f"{file}, запись №{index + 1}"
 
 
 def _format_errors(file: str, section: str | None, raw: Any, exc: ValidationError) -> list[str]:
@@ -159,12 +174,41 @@ def _read_text(root: Path, rel: str, errors: list[str]) -> str | None:
     return text
 
 
+class _DuplicateKeyError(yaml.YAMLError):
+    def __init__(self, key: Any, line: int) -> None:
+        super().__init__(key, line)
+        self.key = key
+        self.line = line
+
+
+class _UniqueKeyLoader(yaml.SafeLoader):
+    """`yaml.safe_load` молча берёт последний из повторяющихся ключей; здесь повтор — ошибка."""
+
+    def construct_mapping(self, node: yaml.Node, deep: bool = False) -> dict[Any, Any]:
+        if isinstance(node, yaml.MappingNode):
+            seen: set[Any] = set()
+            for key_node, _ in node.value:
+                if key_node.tag == "tag:yaml.org,2002:merge":
+                    continue
+                key = self.construct_object(key_node, deep=True)
+                try:
+                    if key in seen:
+                        raise _DuplicateKeyError(key, key_node.start_mark.line + 1)
+                    seen.add(key)
+                except TypeError:
+                    break  # ключ нельзя хешировать: ошибку даст сам разбор
+        return super().construct_mapping(node, deep)
+
+
 def _load_yaml(root: Path, rel: str, errors: list[str]) -> Any | None:
     text = _read_text(root, rel, errors)
     if text is None:
         return None
     try:
-        data = yaml.safe_load(text)
+        data = yaml.load(text, Loader=_UniqueKeyLoader)  # noqa: S506 - загрузчик на базе SafeLoader
+    except _DuplicateKeyError as e:
+        errors.append(f"{rel}: повторяющийся ключ {show(e.key)} в строке {e.line}; второй перекрыл бы первый")
+        return None
     except yaml.YAMLError as e:
         mark = getattr(e, "problem_mark", None)
         where = f" в строке {mark.line + 1}" if mark else ""
@@ -193,9 +237,13 @@ def _load_jsonl(root: Path, rel: str, model: type[BaseModel], errors: list[str])
         return None
     records: list[Any] = []
     ok = True
-    for n, line in enumerate(text.split("\n"), start=1):
-        if n == len(text.split("\n")) and not line:
-            break  # завершающий перевод строки
+    lines = text.split("\n")
+    if lines[-1] == "":
+        lines.pop()  # завершающий перевод строки
+    elif lines:
+        errors.append(f"{rel}: нет завершающего перевода строки; следующая запись склеилась бы с последней")
+        ok = False
+    for n, line in enumerate(lines, start=1):
         if not line.strip():
             errors.append(f"{rel}, строка {n}: пустая строка")
             ok = False
@@ -214,18 +262,6 @@ def _load_jsonl(root: Path, rel: str, model: type[BaseModel], errors: list[str])
                 m.replace(rel, f"{rel}, строка {n}", 1) for m in _format_errors(rel, None, raw, exc)
             )
     return records if ok else None
-
-
-def _scan_abs_paths(rel: str, node: Any, errors: list[str], trail: str = "") -> None:
-    if isinstance(node, dict):
-        for k, v in node.items():
-            if k not in _SKIP_KEYS:
-                _scan_abs_paths(rel, v, errors, f"{trail}.{k}" if trail else str(k))
-    elif isinstance(node, list):
-        for i, v in enumerate(node):
-            _scan_abs_paths(rel, v, errors, f"{trail}[{i}]")
-    elif isinstance(node, str) and _ABS_PATH_RE.search(node):
-        errors.append(f"{rel}, поле {trail}: в тексте абсолютный путь; внутри проекта только относительные")
 
 
 # ---------------------------------------------------------------------------
@@ -257,32 +293,49 @@ def _check_sources_files(root: Path, sources: SourcesFile, errors: list[str]) ->
             )
 
 
-def _basis_cycle(claims: dict[str, Any]) -> list[str] | None:
-    """Цикл в основаниях: список номеров по кругу или None."""
-    state: dict[str, int] = {}
-    stack: list[str] = []
-
-    def visit(cid: str) -> list[str] | None:
-        state[cid] = 1
-        stack.append(cid)
-        for nxt in claims[cid].basis:
-            if nxt not in claims:
+def _find_cycle(edges: dict[str, list[str]]) -> list[str] | None:
+    """Первый цикл в графе ссылок без рекурсии: список номеров по кругу или None."""
+    state: dict[str, int] = {}  # 1 — на текущем пути, 2 — разобран
+    for start in edges:
+        if start in state:
+            continue
+        path = [start]
+        iters = [iter(edges[start])]
+        state[start] = 1
+        while path:
+            nxt = next(iters[-1], None)
+            if nxt is None:
+                state[path.pop()] = 2
+                iters.pop()
+                continue
+            if nxt not in edges:
                 continue
             if state.get(nxt) == 1:
-                return stack[stack.index(nxt) :] + [nxt]
-            if nxt not in state and (found := visit(nxt)):
-                return found
-        stack.pop()
-        state[cid] = 2
-        return None
-
-    for cid in claims:
-        if cid not in state and (found := visit(cid)):
-            return found
+                return path[path.index(nxt) :] + [nxt]
+            if nxt not in state:
+                state[nxt] = 1
+                path.append(nxt)
+                iters.append(iter(edges[nxt]))
     return None
 
 
-def _check_claims(sources: SourcesFile, claims: ClaimsFile, errors: list[str]) -> None:
+def _snapshot_text(root: Path, src: Source, cache: dict[str, str | None]) -> str | None:
+    """Текст снимка источника; None, если файла нет, он изменён или не читается (ошибки уже названы)."""
+    if src.id not in cache:
+        text = None
+        if src.text_path and src.text_sha256:
+            path = root / src.text_path
+            if path.is_file() and sha256_file(path) == src.text_sha256:
+                try:
+                    text = path.read_bytes().decode("utf-8")
+                except UnicodeDecodeError:
+                    text = None
+        cache[src.id] = text
+    return cache[src.id]
+
+
+def _check_claims(root: Path, sources: SourcesFile, claims: ClaimsFile, errors: list[str]) -> None:
+    snapshots: dict[str, str | None] = {}
     by_src = {s.id: s for s in sources.sources}
     by_id = {c.id: c for c in claims.claims}
     for dup in sorted(_duplicates([c.id for c in claims.claims])):
@@ -343,6 +396,19 @@ def _check_claims(sources: SourcesFile, claims: ClaimsFile, errors: list[str]) -
                 )
             if src.kind in LOCATOR_KINDS and q.locator is None:
                 err(f"{where}: у цитаты из источника вида «{src.kind}» нет места (locator)")
+            # Запись проверки перепроверяется по тексту снимка. «Нечёткое» сходство пересчитывает
+            # `quote check` (пакет 3.2): здесь только порог из модели.
+            if q.check is not None and q.check.snapshot_sha256 == src.text_sha256:
+                text = _snapshot_text(root, src, snapshots)
+                if (
+                    text is not None
+                    and q.check.method != "нечёткое"
+                    and not quote_in_snapshot(q.check.method, q.text, text)
+                ):
+                    err(
+                        f"{where}: цитата не найдена в снимке {src.id} ({src.text_path}) способом "
+                        f"«{q.check.method}»; запись проверки текстом снимка не подтверждается"
+                    )
 
         if c.type == "факт":
             checked = [by_src[q.source] for q in c.quotes if q.check is not None and q.source in by_src]
@@ -359,9 +425,12 @@ def _check_claims(sources: SourcesFile, claims: ClaimsFile, errors: list[str]) -
         if any(s.suspicious for s in quote_sources) and not c.suspicious:
             err("источник помечен «подозрительный», а утверждение нет (suspicious)")
 
-    cycle = _basis_cycle(by_id)
+    cycle = _find_cycle({c.id: list(c.basis) for c in claims.claims})
     if cycle:
         errors.append(f"{CLAIMS_FILE}: цикл в основаниях: {' -> '.join(cycle)}")
+    cycle = _find_cycle({c.id: [c.replaced_by] if c.replaced_by else [] for c in claims.claims})
+    if cycle:
+        errors.append(f"{CLAIMS_FILE}: цикл замены: {' -> '.join(cycle)}")
 
 
 def _check_events(events: list[JournalEvent], sources: SourcesFile | None, errors: list[str]) -> None:
@@ -402,9 +471,6 @@ def check_project(root: Path | str) -> list[str]:
     state_raw = _load_yaml(root, STATE_FILE, errors)
     sources_raw = _load_yaml(root, SOURCES_FILE, errors)
     claims_raw = _load_yaml(root, CLAIMS_FILE, errors)
-    for rel, raw in ((STATE_FILE, state_raw), (SOURCES_FILE, sources_raw), (CLAIMS_FILE, claims_raw)):
-        if raw is not None:
-            _scan_abs_paths(rel, raw, errors)
 
     if state_raw is not None:
         _validate(STATE_FILE, None, ProjectState, state_raw, errors)
@@ -416,7 +482,7 @@ def check_project(root: Path | str) -> list[str]:
             errors.append(f"{SOURCES_FILE}: номер {dup} встречается больше одного раза")
         _check_sources_files(root, sources, errors)
     if isinstance(sources, SourcesFile) and isinstance(claims, ClaimsFile):
-        _check_claims(sources, claims, errors)
+        _check_claims(root, sources, claims, errors)
 
     for rel, model, check in (
         (JOURNAL_FILE, JournalEvent, "events"),
@@ -425,50 +491,8 @@ def check_project(root: Path | str) -> list[str]:
         records = _load_jsonl(root, rel, model, errors)
         if records is None:
             continue
-        for n, rec in enumerate(records, start=1):
-            _scan_abs_paths(f"{rel}, строка {n}", rec.model_dump(mode="json"), errors)
         if check == "events":
             _check_events(records, sources if isinstance(sources, SourcesFile) else None, errors)
         else:
             _check_costs(records, errors)
     return errors
-
-
-# ---------------------------------------------------------------------------
-# Вычисляемое по файлам (ничего из этого не хранится)
-# ---------------------------------------------------------------------------
-
-
-def work_minutes(events: Iterable[JournalEvent]) -> float:
-    """Время работы агента по ADR: сумма длительностей выполненных действий; ожидание ответа не входит."""
-    return sum(e.duration_s or 0.0 for e in events if e.kind == "действие" and e.status == "выполнено") / 60
-
-
-def total_cost_usd(records: Iterable[CostRecord]) -> float | None:
-    """Стоимость проекта: по сессии — последний «итог сессии», а если его нет, сумма записей по сообщениям.
-
-    None — ни в одной записи нет стоимости.
-    """
-    sessions: dict[str, dict[str, Any]] = {}
-    for r in records:
-        s = sessions.setdefault(r.session_id, {"total": None, "sum": None})
-        if r.cost_usd is None:
-            continue
-        if r.entry == "итог сессии":
-            s["total"] = r.cost_usd
-        else:
-            s["sum"] = (s["sum"] or 0.0) + r.cost_usd
-    values = [s["total"] if s["total"] is not None else s["sum"] for s in sessions.values()]
-    values = [v for v in values if v is not None]
-    return sum(values) if values else None
-
-
-def changed_outside_agent(root: Path | str) -> list[str]:
-    """Файлы из `state.yaml: files`, чей sha256 не совпал или которых больше нет."""
-    root = Path(root)
-    state = ProjectState.model_validate(yaml.safe_load((root / STATE_FILE).read_text(encoding="utf-8")))
-    return [
-        rel
-        for rel, digest in state.files.items()
-        if not (root / rel).is_file() or sha256_file(root / rel) != digest
-    ]
