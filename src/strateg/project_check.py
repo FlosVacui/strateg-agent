@@ -43,6 +43,7 @@ from strateg.models import (
     kind_of,
     latin_hint,
     norm,
+    normalize_quote,
     quote_in_snapshot,
     show,
 )
@@ -83,18 +84,18 @@ def sha256_file(path: Path) -> str:
 # ---------------------------------------------------------------------------
 
 _PATTERN_HINTS = {
-    r"^И-[1-9][0-9]*$": "номер источника вида И-1 (буква русская)",
-    r"^У-[1-9][0-9]*$": "номер утверждения вида У-1 (буква русская)",
-    r"^ВП-[1-9][0-9]*$": "номер вопроса плана вида ВП-1 (буквы русские)",
-    r"^П-[1-9][0-9]*$": "номер пробела вида П-1 (буква русская)",
-    r"^Вар-[1-9][0-9]*$": "номер варианта вида Вар-1 (буквы русские)",
-    r"^О-[1-9][0-9]*$": "номер обещания вида О-1 (буква русская)",
-    r"^ПП-[1-9][0-9]*$": "номер строки плана проверки вида ПП-1 (буквы русские)",
-    r"^Реш-[1-9][0-9]*$": "номер решения вида Реш-1 (буквы русские)",
-    r"^[0-9a-f]{64}$": "sha256: 64 символа 0-9 и a-f, строчными",
-    r"^https?://[^\s]+$": "адрес, начинающийся с http:// или https://",
-    r"^[^\s]+ [0-9][^\s]*$": "название и версия через пробел, например «trafilatura 2.0.0»",
-    r"^[a-z0-9][a-z0-9_-]*$": "латинские строчные буквы, цифры, «-» и «_»",
+    r"^И-[1-9][0-9]*$": "нужен номер источника вида И-1 (буква русская)",
+    r"^У-[1-9][0-9]*$": "нужен номер утверждения вида У-1 (буква русская)",
+    r"^ВП-[1-9][0-9]*$": "нужен номер вопроса плана вида ВП-1 (буквы русские)",
+    r"^П-[1-9][0-9]*$": "нужен номер пробела вида П-1 (буква русская)",
+    r"^Вар-[1-9][0-9]*$": "нужен номер варианта вида Вар-1 (буквы русские)",
+    r"^О-[1-9][0-9]*$": "нужен номер обещания вида О-1 (буква русская)",
+    r"^ПП-[1-9][0-9]*$": "нужен номер строки плана проверки вида ПП-1 (буквы русские)",
+    r"^Реш-[1-9][0-9]*$": "нужен номер решения вида Реш-1 (буквы русские)",
+    r"^[0-9a-f]{64}$": "нужен sha256: 64 символа 0-9 и a-f, строчными",
+    r"^https?://[^\s]+$": "нужен адрес, начинающийся с http:// или https://",
+    r"^[^\s]+ [0-9][^\s]*$": "нужны название и версия через пробел, например «trafilatura 2.0.0»",
+    r"^[a-z0-9][a-z0-9_-]*$": "нужны латинские строчные буквы, цифры, «-» и «_»",
 }
 _ID_PATTERNS = frozenset(k for k in _PATTERN_HINTS if "-[1-9]" in k)
 _QUOTE_HINT = "если это значение вроде no, 1.10 или дата, возьмите его в кавычки"
@@ -116,6 +117,14 @@ def _where(loc: Iterable[Any]) -> str:
     return out + suffix
 
 
+def _allowed(expected: str) -> str:
+    """Допустимые значения: «а», «б» или «в» — запятая внутри значения не путает со списком."""
+    values = [f"«{v}»" for v in re.findall(r"'([^']*)'", expected)]
+    if not values:
+        return expected
+    return values[0] if len(values) == 1 else ", ".join(values[:-1]) + " или " + values[-1]
+
+
 def _explain(err: dict[str, Any]) -> list[str]:
     """Одна ошибка pydantic -> одно или несколько русских сообщений."""
     t, ctx, loc = err["type"], err.get("ctx") or {}, err["loc"]
@@ -129,15 +138,15 @@ def _explain(err: dict[str, Any]) -> list[str]:
         return [f"версия схемы «{show(err.get('input'))}» не поддерживается; ожидается {ctx.get('expected')}"]
     if t == "literal_error":
         hint = "" if isinstance(err.get("input"), str) else f"; {_QUOTE_HINT}"
-        allowed = str(ctx.get("expected")).replace(" or ", ", ").replace("'", "")
+        allowed = _allowed(str(ctx.get("expected")))
         return [f"недопустимое значение «{show(err.get('input'))}»; допустимо: {allowed}{hint}"]
     if t == "string_type":
         return [f"ожидается строка, а получено: {kind_of(err.get('input'))}; {_QUOTE_HINT}"]
     if t == "string_pattern_mismatch":
         pattern = ctx.get("pattern", "")
-        hint = _PATTERN_HINTS.get(pattern, f"шаблон {pattern}")
+        hint = _PATTERN_HINTS.get(pattern, f"нужен шаблон {pattern}")
         latin = latin_hint(err.get("input")) if pattern in _ID_PATTERNS else ""
-        return [f"значение «{show(err.get('input'))}» не подходит: нужно {hint}{latin}"]
+        return [f"значение «{show(err.get('input'))}» не подходит: {hint}{latin}"]
     if t == "string_too_short":
         return ["строка пустая"]
     if t in ("too_short", "too_long"):
@@ -271,7 +280,7 @@ def _validate(
     rel: str, sections: str | tuple[str, ...] | None, model: type[BaseModel], raw: Any, errors: list[str]
 ) -> BaseModel | None:
     try:
-        return model.model_validate(raw)
+        return model.model_validate(raw, by_name=False)
     except ValidationError as exc:
         names = (sections,) if isinstance(sections, str) else sections or ()
         errors.extend(_format_errors(rel, names, raw, exc))
@@ -303,7 +312,7 @@ def _load_jsonl(root: Path, rel: str, model: type[BaseModel], errors: list[str])
             ok = False
             continue
         try:
-            records.append(model.model_validate(raw))
+            records.append(model.model_validate(raw, by_name=False))
         except ValidationError as exc:
             ok = False
             errors.extend(m.replace(rel, f"{rel}, строка {n}", 1) for m in _format_errors(rel, (), raw, exc))
@@ -507,7 +516,7 @@ def _check_events(
         if g is None:
             continue
         if g.frame is not None:
-            _frame_sources(errors, f"{JOURNAL_FILE}, строка {n}, поле gate.frame", g.frame, ids)
+            _frame_sources(errors, f"{JOURNAL_FILE}, строка {n}", "gate.frame.", g.frame, ids)
         elif frame_present and g.gate == "В1" and g.answered_at is not None:
             errors.append(
                 f"{JOURNAL_FILE}, строка {n}: у отвеченного В1 нет поля frame, а {FRAME_FILE} есть; "
@@ -543,8 +552,12 @@ _FRAME_FIELDS = (
     "success_criteria",
     "out_of_scope",
 )
-_PLAN_REF = re.compile(r"^([BВ])П-[1-9][0-9]*$")
-_GAP_REF = re.compile(r"^П-[1-9][0-9]*$")
+_PLAN_REF = re.compile(r"ВП-[1-9][0-9]*")
+_GAP_REF = re.compile(r"П-[1-9][0-9]*")
+# «Почти номера»: латинские буквы вместо русских, строчные, ведущий ноль, несколько номеров в одном поле.
+_PLAN_LIKE_ONE = r"[ВB][ПP]\s*[-–—]\s*[0-9]+"
+_PLAN_LIKE = re.compile(rf"{_PLAN_LIKE_ONE}(?:(?:\s*[,;/]\s*|\s+и\s+){_PLAN_LIKE_ONE})*", re.IGNORECASE)
+_GAP_LIKE = re.compile(r"[ПP]\s*[-–—]\s*[0-9]+", re.IGNORECASE)
 _PROMISE_MARK = re.compile(r"\[([OО])-([0-9]+)\]")
 
 
@@ -570,13 +583,17 @@ class _Claims:
         self.by_id: dict[str, Claim] | None = {c.id: c for c in claims.claims} if claims else None
         self.errors = errors
 
+    def type_of(self, ref: str) -> str | None:
+        c = self.by_id.get(ref) if self.by_id is not None else None
+        return c.type if c else None
+
     def ref(
         self,
         where: str,
         field: str,
         ref: str,
         *,
-        type_: str | None = None,
+        type_: str | tuple[str, ...] | None = None,
         live_for: str | None = None,
         synthetic_note: str | None = None,
     ) -> None:
@@ -588,8 +605,9 @@ class _Claims:
             return
         if c.type == "синтетика" and synthetic_note:
             self.errors.append(f"{where}, поле {field}: {ref} — синтетика: {synthetic_note}")
-        elif type_ is not None and c.type != type_:
-            self.errors.append(f"{where}, поле {field}: {ref} имеет тип «{c.type}», а здесь нужен «{type_}»")
+        elif type_ is not None and c.type not in ((type_,) if isinstance(type_, str) else type_):
+            wanted = "» или «".join((type_,) if isinstance(type_, str) else type_)
+            self.errors.append(f"{where}, поле {field}: {ref} имеет тип «{c.type}», а здесь нужен «{wanted}»")
         if live_for and c.status != "действует":
             self.errors.append(
                 f"{where}, поле {field}: {ref} имеет статус «{c.status}»; {live_for} нельзя держать "
@@ -597,13 +615,15 @@ class _Claims:
             )
 
 
-def _frame_sources(errors: list[str], where: str, body: Any, source_ids: set[str] | None) -> None:
+def _frame_sources(
+    errors: list[str], where: str, prefix: str, body: Any, source_ids: set[str] | None
+) -> None:
     if source_ids is None:
         return
     for name in _FRAME_FIELDS:
         src = getattr(body, name).source
         if src is not None and src not in source_ids:
-            errors.append(f"{where}.{name}.source: ссылка на несуществующий источник {src}")
+            errors.append(f"{where}, поле {prefix}{name}.source: ссылка на несуществующий источник {src}")
 
 
 def _load_optional(
@@ -638,7 +658,7 @@ def _check_outputs(
     gaps_ok, gaps = _load_optional(root, GAPS_FILE, GapsFile, ("gaps", "metric_coverage"), errors)
     opts_ok, opts = _load_optional(root, OPTIONS_FILE, OptionsFile, ("options",), errors)
     prom_ok, prom = _load_optional(root, PROMISES_FILE, PromisesFile, ("promises",), errors)
-    _, ver = _load_optional(
+    ver_ok, ver = _load_optional(
         root, VERIFICATION_FILE, VerificationFile, ("rows", "premortem", "undesired_effects"), errors
     )
     _, dec = _load_optional(root, DECISIONS_FILE, DecisionsFile, ("decisions",), errors)
@@ -646,9 +666,10 @@ def _check_outputs(
     gap_reg = _Registry(GAPS_FILE, {g.id for g in gaps.gaps} if gaps else None, gaps_ok)
     opt_reg = _Registry(OPTIONS_FILE, {o.id for o in opts.options} if opts else None, opts_ok)
     plan_reg = _Registry(PLAN_FILE, {q.id for q in plan.questions} if plan else None, plan_ok)
+    ver_reg = _Registry(VERIFICATION_FILE, {r.id for r in ver.rows} if ver else None, ver_ok)
 
     if frame is not None:
-        _frame_sources(errors, FRAME_FILE, frame, source_ids)
+        _frame_sources(errors, FRAME_FILE, "", frame, source_ids)
     if plan is not None:
         _check_plan(plan, gap_reg, errors)
     if gaps is not None:
@@ -660,7 +681,7 @@ def _check_outputs(
     if ver is not None:
         _check_verification(ver, cl, gap_reg, opts, errors)
     if dec is not None:
-        _check_decisions(dec, cl, opt_reg, errors)
+        _check_decisions(dec, cl, opt_reg, ver_reg, ver, errors)
     if plan is not None and claims is not None:
         _check_plan_questions(claims, plan_reg, errors)
     _check_promise_marks(root, prom_ok, prom, errors)
@@ -673,6 +694,9 @@ def _check_plan(plan: PlanFile, gap_reg: _Registry, errors: list[str]) -> None:
     for n, q in enumerate(plan.questions, start=1):
         if q.gap:
             gap_reg.check(errors, f"{PLAN_FILE}, запись {q.id} (№{n})", "gap", q.gap)
+
+
+_SYNTHETIC_PROOF = "ответ модельного респондента ничего не доказывает, опорой он быть не может"
 
 
 def _check_gaps(gaps: GapsFile, cl: _Claims, opt_reg: _Registry, errors: list[str]) -> None:
@@ -688,11 +712,11 @@ def _check_gaps(gaps: GapsFile, cl: _Claims, opt_reg: _Registry, errors: list[st
         if g.hypothesis:
             cl.ref(where, "hypothesis", g.hypothesis, type_="гипотеза")
         for ref in g.closed_by:
-            cl.ref(where, "closed_by", ref)
+            cl.ref(where, "closed_by", ref, synthetic_note=_SYNTHETIC_PROOF)
     for n, m in enumerate(gaps.metric_coverage, start=1):
         where = f"{GAPS_FILE}, metric_coverage, запись №{n}"
         for ref in m.claims or []:
-            cl.ref(where, "claims", ref)
+            cl.ref(where, "claims", ref, type_=("факт", "прогноз"), synthetic_note=_SYNTHETIC_PROOF)
         if m.gap:
             own.check(errors, where, "gap", m.gap)
             if kinds.get(m.gap) not in (None, m.kind):
@@ -719,7 +743,13 @@ def _check_options(opts: OptionsFile, cl: _Claims, errors: list[str]) -> None:
     where = f"{OPTIONS_FILE}, recommendation"
     own.check(errors, where, "option", rec.option)
     for ref in rec.claims:
-        cl.ref(where, "claims", ref, live_for="рекомендацию")
+        cl.ref(where, "claims", ref, live_for="рекомендацию", synthetic_note=_SYNTHETIC_PROOF)
+    known = [cl.type_of(ref) for ref in rec.claims]
+    if None not in known and "факт" not in known:
+        errors.append(
+            f"{where}, поле claims: среди оснований нет ни одного факта; рекомендация не держится "
+            "только на прогнозах, гипотезах и допущениях"
+        )
     if opts.chosen:
         own.check(errors, OPTIONS_FILE, "chosen", opts.chosen)
 
@@ -732,6 +762,10 @@ def _check_promises(prom: PromisesFile, cl: _Claims, errors: list[str]) -> None:
             cl.ref(where, "claims", ref, type_="факт", live_for="обещание")
 
 
+def _same_threshold(a: str, b: str) -> bool:
+    return normalize_quote(a).strip(" .,;:!") == normalize_quote(b).strip(" .,;:!")
+
+
 def _check_verification(
     ver: VerificationFile,
     cl: _Claims,
@@ -741,28 +775,55 @@ def _check_verification(
 ) -> None:
     _dup_ids(VERIFICATION_FILE, [r.id for r in ver.rows], errors)
     own = _own(VERIFICATION_FILE, [r.id for r in ver.rows])
+    kinds = {r.id: r.kind for r in ver.rows}
     synthetic = "ответ модельного респондента ничего не измеряет, показатель на нём не строится"
     for n, r in enumerate(ver.rows, start=1):
         where = f"{VERIFICATION_FILE}, запись {r.id} (№{n})"
         if r.hypothesis:
             cl.ref(where, "hypothesis", r.hypothesis, type_="гипотеза", synthetic_note=synthetic)
-        if _GAP_REF.match(r.baseline.strip()):
-            gap_reg.check(errors, where, "baseline", r.baseline.strip())
-        total = len(opts.recommendation.change_mind) if opts else None
-        if r.from_change_mind is not None and total is not None and r.from_change_mind > total:
+        base = r.baseline.strip()
+        if _GAP_REF.fullmatch(base):
+            gap_reg.check(errors, where, "baseline", base)
+        elif _GAP_LIKE.match(base):
             errors.append(
-                f"{where}, поле from_change_mind: записи {r.from_change_mind} нет в "
-                f"recommendation.change_mind из {OPTIONS_FILE} (там записей: {total})"
+                f"{where}, поле baseline: значение «{base}» похоже на номер пробела, но не подходит: "
+                f"нужен номер вида П-1 (буква русская заглавная, без нуля впереди){latin_hint(base)}; "
+                "если это текст, не начинайте его с номера"
             )
+        if r.from_change_mind is not None and opts is not None:
+            mind = opts.recommendation.change_mind
+            if r.from_change_mind > len(mind):
+                errors.append(
+                    f"{where}, поле from_change_mind: записи {r.from_change_mind} нет в "
+                    f"recommendation.change_mind из {OPTIONS_FILE} (там записей: {len(mind)})"
+                )
+            elif not _same_threshold(r.change_mind.threshold, mind[r.from_change_mind - 1].threshold):
+                errors.append(
+                    f"{where}, поле from_change_mind: порог строки «{r.change_mind.threshold}» не совпадает "
+                    f"с порогом «{mind[r.from_change_mind - 1].threshold}» записи {r.from_change_mind} "
+                    f"из recommendation.change_mind ({OPTIONS_FILE})"
+                )
     for n, c in enumerate(ver.premortem, start=1):
         where = f"{VERIFICATION_FILE}, premortem, запись №{n}"
         cl.ref(where, "claim", c.claim, type_="гипотеза", synthetic_note=synthetic)
         own.check(errors, where, "row", c.row)
+        if kinds.get(c.row) == "основной":
+            errors.append(
+                f"{where}, поле row: строка {c.row} основная, а причина пре-мортема должна вести "
+                "в защитный показатель"
+            )
     for n, u in enumerate(ver.undesired_effects, start=1):
         own.check(errors, f"{VERIFICATION_FILE}, undesired_effects, запись №{n}", "row", u.row)
 
 
-def _check_decisions(dec: DecisionsFile, cl: _Claims, opt_reg: _Registry, errors: list[str]) -> None:
+def _check_decisions(
+    dec: DecisionsFile,
+    cl: _Claims,
+    opt_reg: _Registry,
+    ver_reg: _Registry,
+    ver: VerificationFile | None,
+    errors: list[str],
+) -> None:
     _dup_ids(DECISIONS_FILE, [d.id for d in dec.decisions], errors)
     own = _own(DECISIONS_FILE, [d.id for d in dec.decisions])
     by_id = {d.id: d for d in dec.decisions}
@@ -772,9 +833,20 @@ def _check_decisions(dec: DecisionsFile, cl: _Claims, opt_reg: _Registry, errors
         for ref in d.rejected:
             opt_reg.check(errors, where, "rejected", ref)
         for ref in d.basis:
-            cl.ref(where, "basis", ref)
+            cl.ref(where, "basis", ref, synthetic_note=_SYNTHETIC_PROOF)
         for ref in d.assumptions:
-            cl.ref(where, "assumptions", ref)
+            cl.ref(where, "assumptions", ref, type_=("допущение", "гипотеза"))
+        rows = {r.id: r for r in ver.rows} if ver else {}
+        for i, c in enumerate(d.conditions):
+            if c.row is None:
+                continue
+            ver_reg.check(errors, where, f"conditions[{i}].row", c.row)
+            row = rows.get(c.row)
+            if row is not None and not _same_threshold(c.threshold, row.change_mind.threshold):
+                errors.append(
+                    f"{where}, поле conditions[{i}].row: порог условия «{c.threshold}» не совпадает "
+                    f"с порогом «{row.change_mind.threshold}» строки {c.row} из {VERIFICATION_FILE}"
+                )
         for field, ref in (("replaces", d.replaces), ("replaced_by", d.replaced_by)):
             if ref:
                 own.check(errors, where, field, ref)
@@ -792,20 +864,21 @@ def _check_decisions(dec: DecisionsFile, cl: _Claims, opt_reg: _Registry, errors
 
 
 def _check_plan_questions(claims: ClaimsFile, plan_reg: _Registry, errors: list[str]) -> None:
-    """`plan_question` — строка; значение вида ВП-n должно быть в плане, прочие тексты допустимы."""
+    """`plan_question` — строка; значение вида ВП-n должно быть в плане, прочие тексты допустимы.
+
+    Значение, похожее на номер (латинские буквы, строчные, ноль впереди, несколько номеров), — ошибка
+    с подсказкой: принятое молча за текст, оно оставило бы утверждение без связи с планом.
+    """
     for n, c in enumerate(claims.claims, start=1):
         value = (c.plan_question or "").strip()
-        m = _PLAN_REF.match(value)
-        if not m:
-            continue
         where = f"{CLAIMS_FILE}, запись {c.id} (№{n})"
-        if m.group(1) == "B":
-            errors.append(
-                f"{where}, поле plan_question: значение «{value}» не подходит: "
-                f"нужен номер вопроса плана вида ВП-1 (буквы русские){latin_hint(value)}"
-            )
-        else:
+        if _PLAN_REF.fullmatch(value):
             plan_reg.check(errors, where, "plan_question", value)
+        elif _PLAN_LIKE.fullmatch(value):
+            errors.append(
+                f"{where}, поле plan_question: значение «{value}» не подходит: нужен один номер вопроса "
+                f"плана вида ВП-1 (буквы русские заглавные, без нуля впереди){latin_hint(value)}"
+            )
 
 
 def _check_promise_marks(root: Path, prom_ok: bool, prom: PromisesFile | None, errors: list[str]) -> None:
@@ -826,24 +899,68 @@ def _check_promise_marks(root: Path, prom_ok: bool, prom: PromisesFile | None, e
             errors.append(f"{COMMS_STRATEGY}: метка {mark} не ведёт на обещание из {PROMISES_FILE}{tail}")
 
 
+_SERVICE_NAMES = frozenset({"Thumbs.db", "desktop.ini"})
+
+
+def _ranges(versions: list[int]) -> str:
+    """Номера версий сжатым видом: `2…4, 7`."""
+    out: list[str] = []
+    start = prev = versions[0]
+    for v in [*versions[1:], None]:
+        if v is not None and v == prev + 1:
+            prev = v
+            continue
+        out.append(str(start) if start == prev else f"{start}…{prev}")
+        if v is not None:
+            start = prev = v
+    return ", ".join(out)
+
+
 def _check_history(root: Path, frame: FrameFile | None, errors: list[str]) -> None:
-    """Имена версий в `history/` и полнота версий рамки."""
+    """Имена версий в `history/`, полнота версий рамки и то, что прежняя версия — рамка."""
     from strateg.project import history_path, history_source  # импорт здесь: project импортирует этот модуль
 
     folder = root / HISTORY_DIR
+    found: dict[int, str] = {}  # версии рамки, лежащие в history/
     if folder.is_dir():
         for p in sorted(folder.rglob("*")):
             rel = p.relative_to(root).as_posix()
-            if p.is_file() and history_source(rel) is None:
+            parts = p.relative_to(folder).parts
+            service = any(part.startswith(".") for part in parts) or p.name in _SERVICE_NAMES
+            if not p.is_file() or service:
+                continue  # .gitkeep, .DS_Store и подобное — не версии
+            source = history_source(rel)
+            if source is None:
                 errors.append(
                     f"{rel}: имя не подходит для версии: нужен вид <файл>.v<N>.<расширение>, "
                     f"например {history_path(FRAME_FILE, 1)}"
                 )
-    if frame is not None:
-        for v in range(1, frame.version):
-            rel = history_path(FRAME_FILE, v)
-            if not (root / rel).is_file():
-                errors.append(f"{FRAME_FILE}: версия {frame.version}, но прежней версии {v} нет: {rel}")
+            elif source[0] == FRAME_FILE:
+                found[source[1]] = rel
+    top = frame.version if frame is not None else None
+    for v, rel in sorted(found.items()):
+        if top is not None and v >= top:
+            errors.append(
+                f"{rel}: версия {v} не прежняя: у {FRAME_FILE} версия {top}, "
+                f"в history/ лежат версии до {top - 1}"
+            )
+            continue
+        raw = _load_yaml(root, rel, errors)
+        old = _validate(rel, (), FrameFile, raw, errors) if raw is not None else None
+        if isinstance(old, FrameFile) and old.version != v:
+            errors.append(f"{rel}: в файле версия рамки {old.version}, а в имени {v}")
+    if top is not None:
+        missing = sorted(set(range(1, top)) - set(found))  # top не больше MAX_FRAME_VERSION
+        if len(missing) == 1:
+            errors.append(
+                f"{FRAME_FILE}: версия {top}, но прежней версии {missing[0]} нет: "
+                f"{history_path(FRAME_FILE, missing[0])}"
+            )
+        elif missing:
+            errors.append(
+                f"{FRAME_FILE}: версия {top}, но прежних версий нет: {_ranges(missing)} "
+                f"(например {history_path(FRAME_FILE, missing[0])})"
+            )
 
 
 def check_project(root: Path | str) -> list[str]:

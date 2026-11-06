@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from strateg.models import (
     SCHEMA_VERSION,
@@ -40,6 +40,7 @@ from strateg.project_check import (
     OUTPUT_FILES,
     SOURCES_FILE,
     STATE_FILE,
+    _explain,
     check_project,
 )
 
@@ -91,7 +92,11 @@ def history_path(rel_path: str, version: int) -> str:
     """
     if isinstance(version, bool) or not isinstance(version, int) or version < 1:
         raise ValueError("номер версии — целое число от 1")
-    _REL_PATH.validate_python(rel_path)
+    try:
+        _REL_PATH.validate_python(rel_path)
+    except ValidationError as exc:
+        reasons = "; ".join(m for err in exc.errors() for m in _explain(err))
+        raise ValueError(f"путь «{rel_path}» не подходит: {reasons}") from None
     parts = rel_path.split("/")
     if parts[0] == HISTORY_DIR:
         raise ValueError("файл уже лежит в history/: версия берётся от файла проекта")
@@ -271,6 +276,9 @@ class Project:
     def _hashes(self) -> dict[str, str]:
         rels = [SOURCES_FILE, CLAIMS_FILE, JOURNAL_FILE, COST_FILE, *OUTPUT_FILES]
         rels += [s.text_path for s in self.sources.sources if s.text_path]
+        history = self.root / HISTORY_DIR
+        if history.is_dir():
+            rels += [p.relative_to(self.root).as_posix() for p in history.rglob("*") if p.is_file()]
         out = {}
         for rel in sorted(set(rels)):
             p = self.root / rel

@@ -53,6 +53,7 @@
     },
     "version": {
       "description": "Версия рамки: растёт при каждой перезаписи, прежние лежат в history/",
+      "maximum": 1000,
       "minimum": 1,
       "title": "Version",
       "type": "integer"

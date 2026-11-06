@@ -181,6 +181,20 @@
           ],
           "title": "Origin",
           "type": "string"
+        },
+        "row": {
+          "anyOf": [
+            {
+              "pattern": "^ПП-[1-9][0-9]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Строка плана проверки, из порога которой взято условие; порог совпадает",
+          "title": "Row"
         }
       },
       "required": [

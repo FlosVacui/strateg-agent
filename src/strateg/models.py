@@ -182,16 +182,15 @@ def latin_hint(value: Any) -> str:
     return f"; в записи латинские буквы ({shown}), а в номерах нужны русские"
 
 
-_DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 _CLAIM_REF = re.compile(r"^У-[1-9][0-9]*$")
 HYPOTHESIS_WORD = "гипотеза"
-_NOT_ROLES = frozenset({"все", "команда", "tbd"})
 
 
 def _check_day(value: str) -> str:
     """Дата — строка ГГГГ-ММ-ДД в кавычках: без кавычек YAML 1.1 читает её как другой тип."""
     try:
-        if not _DAY.match(value):
+        if not _DAY.fullmatch(value):
             raise ValueError
         dt.date(int(value[:4]), int(value[5:7]), int(value[8:]))
     except ValueError:
@@ -210,11 +209,32 @@ def _check_basis(value: str) -> str:
     )
 
 
+# Буквы, которые в кириллице и латинице выглядят одинаково: «ТВD» с русскими Т и В не обходит проверку.
+_TO_CYR = str.maketrans("abcehkmoptxy", "авсенкмортху")
+_TO_LAT = str.maketrans("авсенкмортху", "abcehkmoptxy")
+_NOT_ROLE_WORDS_CYR = frozenset({"все", "вся", "команда", "неназначен", "неназначена", "неназначено"})
+_NOT_ROLE_WORDS_LAT = frozenset({"tbd", "tba", "na"})
+
+
+def _is_not_role(value: str) -> bool:
+    """«все», «вся команда», «команда продукта», «TBD», «n/a», «-», «?», «не назначен» — не роль."""
+    text = unicodedata.normalize("NFKC", value).casefold().replace("ё", "е")
+    text = "".join(ch for ch in text if unicodedata.category(ch) != "Cf")
+    if not any(ch.isalpha() for ch in text):
+        return True  # «-», «?», «...» — роли нет
+    words = re.findall(r"[^\W_]+", text)
+    # Слитно проверяется и всё значение: «T B D», «n/a».
+    return any(
+        w.translate(_TO_CYR) in _NOT_ROLE_WORDS_CYR or w.translate(_TO_LAT) in _NOT_ROLE_WORDS_LAT
+        for w in [*words, "".join(words)]
+    )
+
+
 def _check_owner(value: str) -> str:
-    """Владелец — одна роль; «все», «команда» и «TBD» ответственности не задают."""
-    if norm(value).strip(" .,;:!") in _NOT_ROLES:
+    """Владелец — одна роль; «все», «команда», «TBD», «n/a» и их написания ответственности не задают."""
+    if _is_not_role(value):
         raise ValueError(
-            f"владелец «{value}» не роль: «все», «команда» и «TBD» отвергаются, "
+            f"владелец «{value}» не роль: «все», «команда», «TBD», «n/a» и пустые знаки отвергаются, "
             "назовите одну роль, например «руководитель направления»"
         )
     return value
@@ -231,6 +251,26 @@ BasisRef = Annotated[
     Field(json_schema_extra={"pattern": r"^(У-[1-9][0-9]*|гипотеза)$"}),
 ]
 Owner = Annotated[Text, AfterValidator(_check_owner)]
+
+
+def _check_has_digit(value: str) -> str:
+    """Порог — граница, которую можно измерить: в нём есть хотя бы одна цифра."""
+    if not any(ch.isdecimal() for ch in value):
+        raise ValueError(f"в пороге «{value}» нет числа: порог задаёт границу цифрой, например «ниже 20 %»")
+    return value
+
+
+def _check_why_empty(value: str) -> str:
+    """Причина пустой ячейки — слова, а не заглушка вроде «-» или «нет»."""
+    if len(value.strip()) < 10 or not any(ch.isalpha() for ch in value):
+        raise ValueError(
+            f"причина «{value}» слишком короткая: напишите словами, почему ячейка пуста (не короче 10 знаков)"
+        )
+    return value
+
+
+ThresholdText = Annotated[Text, AfterValidator(_check_has_digit)]
+WhyEmpty = Annotated[Text, AfterValidator(_check_why_empty)]
 
 Mode = Literal["пилот", "автопилот"]
 Step = Literal["1", "2а", "2б", "3", "4", "5", "6", "7", "8"]
@@ -314,6 +354,21 @@ def normalize_quote(text: str) -> str:
     """
     text = unicodedata.normalize("NFKC", text).casefold().translate(_TRANSLATE)
     return " ".join(text.split())
+
+
+def text_key(text: str) -> str:
+    """Ключ сравнения свободных текстов: нормализация цитат, затем без знаков препинания и невидимых знаков.
+
+    «Продавать-отдельно», «продавать отдельно.» и «Продавать «отдельно»» дают один ключ.
+    """
+    text = normalize_quote(text)
+    chars = []
+    for ch in text:
+        cat = unicodedata.category(ch)
+        if cat == "Cf":
+            continue
+        chars.append(" " if cat.startswith("P") else ch)
+    return " ".join("".join(chars).split())
 
 
 def strip_spaces_and_hyphens(text: str) -> str:
@@ -655,6 +710,7 @@ def independent_primary_sources(claim: Claim) -> int:
 # frame.yaml — рамка задачи; те же поля хранит событие ворот В1
 # ---------------------------------------------------------------------------
 
+MAX_FRAME_VERSION = 1000  # верхняя граница: рамка не переписывается тысячу раз
 FrameOrigin = Literal["из запроса", "из материалов", "ответ человека", "допущение"]
 
 
@@ -699,7 +755,7 @@ class FrameBody(_Model):
 
 class _FrameHeader(_Model):
     schema_version: SchemaVersion
-    version: Annotated[int, Strict(), Field(ge=1)] = Field(
+    version: Annotated[int, Strict(), Field(ge=1, le=MAX_FRAME_VERSION)] = Field(
         description="Версия рамки: растёт при каждой перезаписи, прежние лежат в history/"
     )
 
@@ -885,7 +941,11 @@ QuestionStatus = Literal["открыт", "закрыт", "пробел"]
 class _AliasModel(_Model):
     """Модель с ключами `if` и `from`: это слова Python, поле называется иначе, файл пишет ключ."""
 
-    model_config = ConfigDict(extra="forbid", serialize_by_alias=True)
+    # Файл пишет ключи `if` и `from`; в коде модель собирается и по имени поля: `Branch(if_=...)`.
+    # Файлы проверяет `check_project` с `by_name=False`: ключ `if_` в файле остаётся ошибкой.
+    model_config = ConfigDict(
+        extra="forbid", serialize_by_alias=True, validate_by_name=True, validate_by_alias=True
+    )
 
 
 class Estimate(_Model):
@@ -900,10 +960,6 @@ class Branch(_AliasModel):
 
     if_: Text = Field(alias="if", description="Ответ или находка")
     then: Text = Field(description="Что делаем при таком ответе")
-
-
-def _action_key(text: str) -> str:
-    return norm(text).strip(" .,;:!")
 
 
 class PlanQuestion(_Model):
@@ -923,7 +979,7 @@ class PlanQuestion(_Model):
         p: list[str] = []
         seen: set[str] = set()
         for b in self.branches:
-            key = _action_key(b.then)
+            key = text_key(b.then)
             if key in seen:
                 p.append(
                     f"в ветках одинаковое действие «{b.then}»: вопрос, ответы на который ведут к одному "
@@ -933,8 +989,8 @@ class PlanQuestion(_Model):
             seen.add(key)
         if self.status == "пробел" and self.gap is None:
             p.append("статус «пробел» без ссылки на пробел (gap)")
-        if self.status != "пробел" and self.gap is not None:
-            p.append(f"gap задано при статусе «{self.status}»: ссылка на пробел бывает только у «пробел»")
+        if self.status == "открыт" and self.gap is not None:
+            p.append("gap задано при статусе «открыт»: ссылка на пробел бывает у «пробел» и у «закрыт»")
         _raise(p)
         return self
 
@@ -1092,7 +1148,7 @@ class Cell(_Model):
     """Ячейка сравнения: текст или причина, почему пусто."""
 
     text: Text | None = None
-    why_empty: Text | None = None
+    why_empty: WhyEmpty | None = None
 
     @model_validator(mode="after")
     def _cell(self) -> Self:
@@ -1172,6 +1228,15 @@ class Option(_Model):
             p.append(f"у «{self.kind}» нет условия возврата (return_condition)")
         if self.differs.from_ == self.id:
             p.append("вариант отличается сам от себя: в differs.from нужен другой вариант")
+        first: dict[str, int] = {}
+        for n, obj in enumerate(self.objections, start=1):
+            key = text_key(obj.drops_if)
+            if key in first:
+                p.append(
+                    f"возражения №{first[key]} и №{n} совпадают: одинаковое «drops_if», "
+                    "возражения должны быть разными"
+                )
+            first.setdefault(key, n)
         _raise(p)
         return self
 
@@ -1180,7 +1245,7 @@ class ChangeMind(_Model):
     """«Передумаю, если»: показатель, порог и действие."""
 
     metric: Text
-    threshold: Text
+    threshold: ThresholdText
     action: Text
 
 
@@ -1216,6 +1281,12 @@ class OptionsFile(_Model):
             p.append("нет варианта «закрыть направление» (для нового продукта — «не запускать»)")
         if kinds.count("активный") < 2:
             p.append(f"активных вариантов {kinds.count('активный')}, нужно не меньше двух")
+        first: dict[str, str] = {}
+        for o in self.options:
+            key = text_key(o.title)
+            if key in first:
+                p.append(f"названия вариантов {first[key]} и {o.id} совпадают: варианты должны быть разными")
+            first.setdefault(key, o.id)
         _raise(p)
         return self
 
@@ -1278,7 +1349,7 @@ class Magnitude(_Model):
 class Threshold(_Model):
     """Порог и действие при его пересечении."""
 
-    threshold: Text
+    threshold: ThresholdText
     action: Text
 
 
@@ -1325,7 +1396,7 @@ class PremortemCause(_Model):
 
     claim: ClaimId
     signal: Text
-    threshold: Text
+    threshold: ThresholdText
     row: RowId
     hits_choice: Flag = Field(description="Причина бьёт по главному допущению выбранного варианта")
 
@@ -1340,8 +1411,27 @@ class VerificationFile(_Model):
 
     schema_version: SchemaVersion
     rows: list[VerificationRow] = Field(min_length=1)
-    premortem: list[PremortemCause] = Field(min_length=3, max_length=3, description="Ровно три причины")
+    premortem: list[PremortemCause] = Field(
+        json_schema_extra={"minItems": 3, "maxItems": 3}, description="Ровно три причины"
+    )
     undesired_effects: list[UndesiredEffect] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _rules(self) -> Self:
+        p: list[str] = []
+        if len(self.premortem) != 3:
+            p.append(f"причин пре-мортема {len(self.premortem)}, нужно ровно 3")
+        for name, key in (("claim", lambda c: c.claim), ("signal", lambda c: text_key(c.signal))):
+            first: dict[str, int] = {}
+            for n, c in enumerate(self.premortem, start=1):
+                if key(c) in first:
+                    p.append(
+                        f"причины пре-мортема №{first[key(c)]} и №{n} совпадают: одинаковое «{name}», "
+                        "причины должны быть разными"
+                    )
+                first.setdefault(key(c), n)
+        _raise(p)
+        return self
 
 
 # ---------------------------------------------------------------------------
@@ -1356,10 +1446,13 @@ class DecisionCondition(_Model):
     """Условие отказа: без порога и даты его не проверить."""
 
     metric: Text
-    threshold: Text
+    threshold: ThresholdText
     date: Day
     action: Text
     origin: ConditionOrigin
+    row: RowId | None = Field(
+        None, description="Строка плана проверки, из порога которой взято условие; порог совпадает"
+    )
 
 
 class Commitment(_Model):

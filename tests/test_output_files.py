@@ -118,7 +118,7 @@ def test_frame_decision_space_values_differ(project):
 
 def test_frame_field_needs_origin_from_the_list(project):
     edit_yaml(project, "frame.yaml", lambda d: d["deadline"].update(origin="придумано"))
-    assert_error(project, "frame.yaml", "deadline.origin", "допустимо: из запроса, из материалов")
+    assert_error(project, "frame.yaml", "deadline.origin", "допустимо: «из запроса», «из материалов»")
 
 
 def test_frame_source_only_for_materials(project):
@@ -230,7 +230,12 @@ def test_frame_version_needs_all_previous_versions(project):
 def test_frame_version_three_needs_versions_one_and_two(project):
     edit_yaml(project, "frame.yaml", lambda d: d.update(version=3))
     assert_error(project, "frame.yaml", "версия 3", "версии 2 нет")
-    shutil.copy(project / "history" / "frame.v1.yaml", project / "history" / "frame.v2.yaml")
+    v2 = (
+        (project / "history" / "frame.v1.yaml")
+        .read_text(encoding="utf-8")
+        .replace("\nversion: 1\n", "\nversion: 2\n")
+    )
+    put(project / "history" / "frame.v2.yaml", v2)
     assert errors_of(project) == []
 
 
@@ -281,7 +286,7 @@ def test_plan_gap_status_needs_gap_reference(project):
     edit_yaml(project, "plan.yaml", lambda d: d["questions"][2].pop("gap"))
     assert_error(project, "plan.yaml", "ВП-3", "«пробел» без ссылки на пробел")
     edit_yaml(project, "plan.yaml", lambda d: d["questions"][2].update(status="открыт", gap="П-1"))
-    assert_error(project, "plan.yaml", "ВП-3", "ссылка на пробел бывает только у «пробел»")
+    assert_error(project, "plan.yaml", "ВП-3", "gap задано при статусе «открыт»")
 
 
 def test_plan_gap_must_exist(project):
@@ -306,7 +311,7 @@ def test_plan_close_cost_may_be_empty(project):
 
 def test_plan_impact_is_from_the_list(project):
     edit_yaml(project, "plan.yaml", lambda d: d["questions"][0].update(impact="огромное"))
-    assert_error(project, "plan.yaml", "ВП-1", "impact", "допустимо: высокое, среднее, низкое")
+    assert_error(project, "plan.yaml", "ВП-1", "impact", "допустимо: «высокое», «среднее» или «низкое»")
 
 
 def test_plan_question_of_claim_must_exist_in_plan(project):
@@ -361,7 +366,7 @@ def test_gap_reason_other_needs_note(project):
 
 def test_gap_reason_is_from_the_list(project):
     edit_yaml(project, "gaps.yaml", lambda d: d["gaps"][0].update(reason="лень"))
-    assert_error(project, "gaps.yaml", "П-1", "reason", "допустимо: нет данных, данные закрыты")
+    assert_error(project, "gaps.yaml", "П-1", "reason", "допустимо: «нет данных», «данные закрыты»")
 
 
 def test_closed_gap_needs_closing_claims(project):
@@ -408,7 +413,7 @@ def test_gap_hypothesis_must_be_a_hypothesis_claim(project):
 def test_gap_close_via_is_from_the_list(project):
     edit_yaml(project, "gaps.yaml", lambda d: d["gaps"][0].update(close_via="спросить у знакомого"))
     assert_error(
-        project, "gaps.yaml", "П-1", "close_via", "допустимо: открытый источник, материал руководителя"
+        project, "gaps.yaml", "П-1", "close_via", "допустимо: «открытый источник», «материал руководителя»"
     )
     edit_yaml(project, "gaps.yaml", lambda d: d["gaps"][0].update(close_via="открытый источник"))
     assert errors_of(project) == []
@@ -434,7 +439,7 @@ def test_metric_coverage_kind_is_not_repeated(project):
 
 def test_metric_coverage_kind_is_from_the_list(project):
     edit_yaml(project, "gaps.yaml", lambda d: d["metric_coverage"][0].update(kind="настроение"))
-    assert_error(project, "gaps.yaml", "metric_coverage", "kind", "допустимо: охват, конверсия")
+    assert_error(project, "gaps.yaml", "metric_coverage", "kind", "допустимо: «охват», «конверсия»")
 
 
 def test_metric_coverage_references_must_exist(project):
@@ -573,7 +578,11 @@ def test_option_differs_from_another_option(project):
     assert_error(project, "options.yaml", "Вар-2", "differs.from", "Вар-9")
     edit_yaml(project, "options.yaml", lambda d: option(d, "Вар-2")["differs"].update(axis="масштаб"))
     assert_error(
-        project, "options.yaml", "Вар-2", "differs.axis", "допустимо: аудитория, ценность, модель дохода"
+        project,
+        "options.yaml",
+        "Вар-2",
+        "differs.axis",
+        "допустимо: «аудитория», «ценность» или «модель дохода»",
     )
 
 
@@ -601,10 +610,10 @@ def test_recommendation_rules(project):
         project,
         "options.yaml",
         lambda d: d["recommendation"].update(
-            change_mind=[{"metric": "m", "threshold": "t", "action": "a"}], loses_on="цвет"
+            change_mind=[{"metric": "m", "threshold": "ниже 5", "action": "a"}], loses_on="цвет"
         ),
     )
-    assert_error(project, "options.yaml", "loses_on", "допустимо: эффект, затраты, риск")
+    assert_error(project, "options.yaml", "loses_on", "допустимо: «эффект», «затраты», «риск»")
     edit_yaml(project, "options.yaml", lambda d: d["recommendation"].update(loses_on="риск"))
     edit_yaml(project, "options.yaml", lambda d: d["recommendation"].update(option="Вар-9"))
     assert_error(project, "options.yaml", "recommendation", "option", "Вар-9")
@@ -665,7 +674,7 @@ def test_promise_cannot_stand_on_replaced_claim(project):
 
 def test_promise_status_is_from_the_list(project):
     edit_yaml(project, "promises.yaml", lambda d: d["promises"][0].update(status="по данным компании"))
-    assert_error(project, "promises.yaml", "О-1", "status", "допустимо: подтверждено")
+    assert_error(project, "promises.yaml", "О-1", "status", "допустимо: «подтверждено»")
 
 
 def test_promise_number_with_latin_o_is_explained(project):
@@ -742,7 +751,9 @@ def test_row_with_method_needs_strength_and_limits(project):
     edit_yaml(project, "verification.yaml", lambda d: d["rows"][0].pop("not_prove"))
     assert_error(project, "verification.yaml", "ПП-1", "не докажет")
     edit_yaml(project, "verification.yaml", lambda d: d["rows"][0].update(strength="огромная", not_prove="x"))
-    assert_error(project, "verification.yaml", "ПП-1", "strength", "допустимо: сильная, средняя, слабая")
+    assert_error(
+        project, "verification.yaml", "ПП-1", "strength", "допустимо: «сильная», «средняя» или «слабая»"
+    )
 
 
 def test_row_without_method_may_omit_strength(project):
@@ -778,9 +789,9 @@ def test_row_baseline_may_point_to_a_gap(project):
 
 def test_premortem_has_exactly_three_causes(project):
     edit_yaml(project, "verification.yaml", lambda d: d["premortem"].pop())
-    assert_error(project, "verification.yaml", "premortem", "нужно не меньше 3")
-    edit_yaml(project, "verification.yaml", lambda d: d["premortem"].extend([d["premortem"][0]] * 2))
-    assert_error(project, "verification.yaml", "premortem", "нужно не больше 3")
+    assert_error(project, "verification.yaml", "причин пре-мортема 2", "нужно ровно 3")
+    edit_yaml(project, "verification.yaml", lambda d: d["premortem"].extend([dict(d["premortem"][0])] * 2))
+    assert_error(project, "verification.yaml", "причин пре-мортема 4", "нужно ровно 3")
 
 
 def test_premortem_cause_must_be_a_hypothesis_with_a_row(project):
@@ -850,7 +861,9 @@ def test_decision_condition_origin_is_from_the_list(project):
     edit_yaml(
         project, "decisions.yaml", lambda d: d["decisions"][0]["conditions"][0].update(origin="по настроению")
     )
-    assert_error(project, "decisions.yaml", "Реш-1", "origin", "допустимо: передумаю, если, пре-мортем")
+    assert_error(
+        project, "decisions.yaml", "Реш-1", "origin", "допустимо: «передумаю, если» или «пре-мортем»"
+    )
 
 
 def test_dates_without_quotes_are_explained(project):
@@ -919,7 +932,9 @@ def test_decision_replacement_cycle_is_reported(project):
 
 def test_decision_status_is_from_the_list(project):
     edit_yaml(project, "decisions.yaml", lambda d: d["decisions"][0].update(status="пересмотрено"))
-    assert_error(project, "decisions.yaml", "Реш-1", "status", "допустимо: действует, заменено, отменено")
+    assert_error(
+        project, "decisions.yaml", "Реш-1", "status", "допустимо: «действует», «заменено» или «отменено»"
+    )
 
 
 def test_decision_number_with_latin_letters_is_explained(project):
