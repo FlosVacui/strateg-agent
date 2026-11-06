@@ -1,0 +1,322 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "Estimate": {
+      "additionalProperties": false,
+      "description": "Оценка стоимости и времени: деньги или минуты могут быть неизвестны.",
+      "properties": {
+        "usd": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Usd"
+        },
+        "minutes": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Minutes"
+        }
+      },
+      "title": "Estimate",
+      "type": "object"
+    },
+    "Gap": {
+      "additionalProperties": false,
+      "description": "Пробел `П-n`: чего не знаем, почему и что искали.",
+      "properties": {
+        "id": {
+          "pattern": "^П-[1-9][0-9]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "text": {
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        },
+        "reason": {
+          "enum": [
+            "нет данных",
+            "данные закрыты",
+            "источники спорят",
+            "источник недоступен",
+            "другая"
+          ],
+          "title": "Reason",
+          "type": "string"
+        },
+        "reason_note": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Пояснение к причине «другая»",
+          "title": "Reason Note"
+        },
+        "searched": {
+          "items": {
+            "$ref": "#/$defs/Search"
+          },
+          "minItems": 1,
+          "title": "Searched",
+          "type": "array"
+        },
+        "affects_choice": {
+          "title": "Affects Choice",
+          "type": "boolean"
+        },
+        "affects_options": {
+          "description": "Может быть пустым до шага 4",
+          "items": {
+            "pattern": "^Вар-[1-9][0-9]*$",
+            "type": "string"
+          },
+          "title": "Affects Options",
+          "type": "array"
+        },
+        "how_to_close": {
+          "minLength": 1,
+          "title": "How To Close",
+          "type": "string"
+        },
+        "close_cost": {
+          "$ref": "#/$defs/Estimate"
+        },
+        "close_via": {
+          "anyOf": [
+            {
+              "enum": [
+                "открытый источник",
+                "материал руководителя",
+                "закрытые данные"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Чем пробел предлагается закрыть",
+          "title": "Close Via"
+        },
+        "assumption": {
+          "anyOf": [
+            {
+              "pattern": "^У-[1-9][0-9]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Допущение, принятое вместо значения",
+          "title": "Assumption"
+        },
+        "hypothesis": {
+          "anyOf": [
+            {
+              "pattern": "^У-[1-9][0-9]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Гипотеза, проверить которую мешает пробел",
+          "title": "Hypothesis"
+        },
+        "metric_kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "охват",
+                "конверсия",
+                "удержание и отток",
+                "выручка и затраты",
+                "качество продукта"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metric Kind"
+        },
+        "status": {
+          "enum": [
+            "открыт",
+            "закрыт"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "closed_by": {
+          "description": "Чем закрыт",
+          "items": {
+            "pattern": "^У-[1-9][0-9]*$",
+            "type": "string"
+          },
+          "title": "Closed By",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "text",
+        "reason",
+        "searched",
+        "affects_choice",
+        "how_to_close",
+        "close_cost",
+        "status"
+      ],
+      "title": "Gap",
+      "type": "object"
+    },
+    "MetricCoverage": {
+      "additionalProperties": false,
+      "description": "Показатель, без которого решение не проверить, и ровно один ответ по нему.",
+      "properties": {
+        "kind": {
+          "enum": [
+            "охват",
+            "конверсия",
+            "удержание и отток",
+            "выручка и затраты",
+            "качество продукта"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "claims": {
+          "anyOf": [
+            {
+              "items": {
+                "pattern": "^У-[1-9][0-9]*$",
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Что известно",
+          "title": "Claims"
+        },
+        "gap": {
+          "anyOf": [
+            {
+              "pattern": "^П-[1-9][0-9]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Пробел, если значение не найдено",
+          "title": "Gap"
+        },
+        "not_relevant": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Причина, почему показатель не относится к задаче",
+          "title": "Not Relevant"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "MetricCoverage",
+      "type": "object"
+    },
+    "Search": {
+      "additionalProperties": false,
+      "description": "Что искали и когда.",
+      "properties": {
+        "query": {
+          "minLength": 1,
+          "title": "Query",
+          "type": "string"
+        },
+        "date": {
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+          "title": "Date",
+          "type": "string"
+        }
+      },
+      "required": [
+        "query",
+        "date"
+      ],
+      "title": "Search",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Файл `gaps.yaml`: пробелы и перечень показателей. Пишет только CLI.",
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "gaps": {
+      "items": {
+        "$ref": "#/$defs/Gap"
+      },
+      "title": "Gaps",
+      "type": "array"
+    },
+    "metric_coverage": {
+      "description": "Полнота перечня — признак рубрики, до шага 3 перечня может не быть",
+      "items": {
+        "$ref": "#/$defs/MetricCoverage"
+      },
+      "title": "Metric Coverage",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version"
+  ],
+  "title": "GapsFile",
+  "type": "object"
+}

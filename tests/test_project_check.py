@@ -668,9 +668,9 @@ def test_jsonl_needs_final_newline(project, name):
 def test_duplicate_yaml_key_is_an_error(project):
     path = project / "claims.yaml"
     text = path.read_text(encoding="utf-8")
-    assert text.count("    type: гипотеза\n") == 1
-    text = text.replace("    type: гипотеза\n", "    type: гипотеза\n    type: допущение\n")
-    line = text.split("\n").index("    type: допущение") + 1
+    text = text.replace("    type: гипотеза\n", "    type: гипотеза\n    type: допущение\n", 1)
+    lines = text.split("\n")
+    line = lines.index("    type: допущение", lines.index("    type: гипотеза")) + 1
     path.write_bytes(text.encode("utf-8"))
     assert_error(project, "claims.yaml", "повторяющийся ключ type", f"в строке {line}")
 

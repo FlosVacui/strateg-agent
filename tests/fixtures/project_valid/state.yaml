@@ -16,8 +16,15 @@ budget:
 next_action: Собрать источники по вопросу плана «кто подключает защиту»
 files:
   sources.yaml: 13c37a134c43b3bfc492c74963b3a1ecbf6816df4702fe5c9116f9bd36aac549
-  claims.yaml: d2e48845025fcf4536a5bac5dcbcae624d0ee297affaa9513b2b403f60fd69a2
-  journal.jsonl: f87348649eeaa52dbc15a85a6335e8de2f752a05d88d507a99d924bb1ea07b21
+  claims.yaml: 509266dd7031f1bcb6ebffcbd4a2becc03824892fd42c7aef497fa72220c695a
+  journal.jsonl: 45b6404a2ab798e85d55e43430ee42af9e8d7392c00ca47df209daf844e0c2ce
   cost.jsonl: 21212d8a0542a475c80d9c498dbd4c335356edf9452ae4c24e961db769cfba6d
+  frame.yaml: 1dca43f57ac0ffba58f0f5ea0ea6b0e4b1c015e3632ccc3c338b5ceee2f38988
+  plan.yaml: 9cb9182ef1bf6d94a99535fbaf8a3c02eb26f38d9c7a75b0428e4d0444446fdf
+  gaps.yaml: 02f82810251a51f0146d6a70f7a31e4485bda27e3ba59855ce8935917768b64b
+  options.yaml: cb8bf7453a743dc41355887a02586e23a811f4909f8b47a0ecd7e79cac70fabd
+  promises.yaml: 018bf6cc763e5573c40283d7becbe8e3576fcf8d2709ab9ee5fae399b93ae1b1
+  verification.yaml: 73344f2494f12dc4276458f55667044466f6918219da7c68bfccbf16b87f0489
+  decisions.yaml: 8e92d4da994798eae6e9df2892fb0f39e202898b842e9e78a2115c9729559e40
   sources/i-1.txt: deb6df4405ae41f9142e96d68fd96b66a8ecab5c638f4d3d18ba03ef22e55a19
   inputs/report.txt: 34326b0d65529a0332f93a344458e25ced1cda4c1f39cd96c4b9487068d088d4

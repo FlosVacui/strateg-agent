@@ -1,0 +1,196 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "Branch": {
+      "additionalProperties": false,
+      "description": "Ветка вопроса плана: ответ и действие, к которому он ведёт.",
+      "properties": {
+        "if": {
+          "description": "Ответ или находка",
+          "minLength": 1,
+          "title": "If",
+          "type": "string"
+        },
+        "then": {
+          "description": "Что делаем при таком ответе",
+          "minLength": 1,
+          "title": "Then",
+          "type": "string"
+        }
+      },
+      "required": [
+        "if",
+        "then"
+      ],
+      "title": "Branch",
+      "type": "object"
+    },
+    "Estimate": {
+      "additionalProperties": false,
+      "description": "Оценка стоимости и времени: деньги или минуты могут быть неизвестны.",
+      "properties": {
+        "usd": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Usd"
+        },
+        "minutes": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Minutes"
+        }
+      },
+      "title": "Estimate",
+      "type": "object"
+    },
+    "Excluded": {
+      "additionalProperties": false,
+      "description": "Вопрос, который не меняет решение, и почему.",
+      "properties": {
+        "text": {
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        },
+        "reason": {
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "reason"
+      ],
+      "title": "Excluded",
+      "type": "object"
+    },
+    "PlanQuestion": {
+      "additionalProperties": false,
+      "description": "Вопрос плана `ВП-n`: попадает в план, только если разные ответы ведут к разным действиям.",
+      "properties": {
+        "id": {
+          "pattern": "^ВП-[1-9][0-9]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "text": {
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        },
+        "impact": {
+          "enum": [
+            "высокое",
+            "среднее",
+            "низкое"
+          ],
+          "title": "Impact",
+          "type": "string"
+        },
+        "branches": {
+          "items": {
+            "$ref": "#/$defs/Branch"
+          },
+          "minItems": 2,
+          "title": "Branches",
+          "type": "array"
+        },
+        "close_cost": {
+          "$ref": "#/$defs/Estimate"
+        },
+        "where": {
+          "description": "Где искать",
+          "minLength": 1,
+          "title": "Where",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "открыт",
+            "закрыт",
+            "пробел"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "gap": {
+          "anyOf": [
+            {
+              "pattern": "^П-[1-9][0-9]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Пробел, если вопрос остался без ответа",
+          "title": "Gap"
+        }
+      },
+      "required": [
+        "id",
+        "text",
+        "impact",
+        "branches",
+        "close_cost",
+        "where",
+        "status"
+      ],
+      "title": "PlanQuestion",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Файл `plan.yaml`: план исследования. Пишет только CLI.",
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "questions": {
+      "items": {
+        "$ref": "#/$defs/PlanQuestion"
+      },
+      "minItems": 1,
+      "title": "Questions",
+      "type": "array"
+    },
+    "excluded": {
+      "items": {
+        "$ref": "#/$defs/Excluded"
+      },
+      "title": "Excluded",
+      "type": "array"
+    },
+    "estimate": {
+      "$ref": "#/$defs/Estimate",
+      "description": "Оценка всего пути до выпуска"
+    }
+  },
+  "required": [
+    "schema_version",
+    "questions",
+    "estimate"
+  ],
+  "title": "PlanFile",
+  "type": "object"
+}
