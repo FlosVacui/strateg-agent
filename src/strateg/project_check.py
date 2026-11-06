@@ -397,7 +397,7 @@ def _check_claims(root: Path, sources: SourcesFile, claims: ClaimsFile, errors: 
             if src.kind in LOCATOR_KINDS and q.locator is None:
                 err(f"{where}: у цитаты из источника вида «{src.kind}» нет места (locator)")
             # Запись проверки перепроверяется по тексту снимка. «Нечёткое» сходство пересчитывает
-            # `quote check` (пакет 3.2): здесь только порог из модели.
+            # `claim add` при записи цитаты: здесь только порог из модели.
             if q.check is not None and q.check.snapshot_sha256 == src.text_sha256:
                 text = _snapshot_text(root, src, snapshots)
                 if (
