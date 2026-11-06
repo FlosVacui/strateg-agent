@@ -84,7 +84,7 @@ def test_number_boundary_does_not_block_normal_quotes():
     text = "С 1 января 2026 года цена 99 рублей, а в 2027 году — 120 рублей."
     assert quote.check_quote("цена 99 рублей", text) is not None
     assert quote.check_quote("в 2027 году — 120 рублей", text) is not None
-    assert quote.check_quote("цена 99 рублей, а в 2027", text) is not None
+    assert quote.check_quote("цена 99 рублей, а в 2027 году", text) is not None
 
 
 def test_quote_without_letters_or_digits_is_never_found():
@@ -188,7 +188,7 @@ def test_compact_view_keeps_words_and_digits_apart():
     ("a", "b", "ok"),
     [
         ("предостовляется", "предоставляется", True),
-        ("предоставляеться", "предоставляется", True),
+        ("предоставляеться", "предоставляется", False),  # лишний знак: иначе «включена» и «выключена»
         ("платно", "бесплатно", False),
         ("возможно", "невозможно", False),
         ("доступна", "недоступна", False),
@@ -322,3 +322,136 @@ def test_whole_number_with_slash_or_colon_is_found():
         is not None
     )
     assert quote.check_quote("отвечает в 10:30 минут", "Оператор отвечает в 10:30 минут после") is not None
+
+
+@pytest.mark.parametrize(
+    ("snapshot", "q"),
+    [
+        (
+            "Услуга защиты выключена по умолчанию для всех абонентов региона",
+            "Услуга защиты включена по умолчанию для всех абонентов региона",
+        ),
+        (
+            "Услуга защиты включена в тариф по умолчанию для всех абонентов",
+            "Услуга защиты выключена в тариф по умолчанию для всех абонентов",
+        ),
+        (
+            "Автоматическое выключение услуги защиты происходит при подключении тарифа",
+            "Автоматическое включение услуги защиты происходит при подключении тарифа",
+        ),
+        (
+            "Плата за услугу защиты выходит из стоимости тарифа для всех абонентов",
+            "Плата за услугу защиты входит из стоимости тарифа для всех абонентов",
+        ),
+    ],
+)
+def test_one_letter_antonym_is_not_a_typo(snapshot, q):
+    assert quote.check_quote(q, snapshot) is None
+
+
+@pytest.mark.parametrize(
+    ("snapshot", "q"),
+    [
+        (
+            "Стоимость тарифа для абонентов региона составляет 249 тыс. ₽",
+            "Стоимость тарифа для абонентов региона составляет 249 ₽",
+        ),
+        (
+            "Рост доли подключений к услуге за год составил 5 п.п.",
+            "Рост доли подключений к услуге за год составил 5 %",
+        ),
+        (
+            "Стоимость тарифа для абонентов региона составляет 249 ₽ в месяц",
+            "Стоимость тарифа для абонентов региона составляет 249 $ в месяц",
+        ),
+        (
+            "Стоимость тарифа для абонентов региона составляет 249 $ в месяц",
+            "Стоимость тарифа для абонентов региона составляет 249 € в месяц",
+        ),
+    ],
+)
+def test_currency_and_percent_signs_are_compared(snapshot, q):
+    assert quote.check_quote(q, snapshot) is None
+
+
+@pytest.mark.parametrize("tail", ["тыс. рублей в месяц", "₽ в месяц", "рублей в месяц", "% в месяц"])
+def test_quote_does_not_stop_on_number_before_its_unit(tail):
+    snapshot = f"Стоимость тарифа для абонентов составляет 249 {tail}."
+    cut = "Стоимость тарифа для абонентов составляет 249"
+    assert quote.check_quote(cut, snapshot) is None
+    assert "единица" in quote.explain_miss(cut, snapshot)
+    assert quote.check_quote(f"{cut} {tail}", snapshot) is not None
+
+
+def test_quote_may_stop_on_number_at_end_of_sentence():
+    snapshot = "Цена на тариф составляет 249. Дальше текст"
+    assert quote.check_quote("Цена на тариф составляет 249", snapshot) is not None
+
+
+def test_fuzzy_compares_sign_of_number():
+    snapshot = "Изменение абонентской платы за год составило -5 % для всех действующих абонентов"
+    q = "Изменение абонентской плвты за год составило 5 % для всех действующих абонентов"
+    assert quote.check_quote(q, snapshot) is None
+
+
+def test_fuzzy_checks_negation_at_the_edges_of_the_place():
+    q = "абонентская плвта списывается ежемесячно со счёта абонента"
+    assert quote.check_quote(q, "Абонентская плата списывается ежемесячно со счёта абонента.") is not None
+    assert quote.check_quote(q, "Не абонентская плата списывается ежемесячно со счёта абонента.") is None
+    assert (
+        quote.check_quote(q, "Абонентская плата списывается ежемесячно со счёта абонента не будет.") is None
+    )
+
+
+@pytest.mark.parametrize(
+    ("a", "b", "ok"),
+    [
+        ("тарифа", "тарфиа", False),  # перестановка — две замены, для короткого слова это много
+        ("предоставляется", "предостовляется", True),
+        ("предоставляется", "предостовлеется", True),  # две замены в длинном слове
+        ("предоставляется", "предостовлеотся", False),  # три замены
+        ("плата", "плвта", True),  # пять знаков — ещё слово
+        ("план", "плен", False),  # четыре знака — уже нет
+    ],
+)
+def test_typo_limits(a, b, ok):
+    assert quote._typo(a, b) is ok
+
+
+@pytest.mark.parametrize(
+    ("snapshot", "q", "ok"),
+    [
+        ("Цена тарифа стала выше обычной, и не более того.", "Цена тарифа стала выше обычной", False),
+        ("Цена тарифа стала выше обычной сейчас не более того.", "Цена тарифа стала выше обычной", False),
+        ("Цена тарифа стала выше обычной сейчас и потом не более.", "Цена тарифа стала выше обычной", True),
+    ],
+)
+def test_right_side_looks_at_two_words(snapshot, q, ok):
+    assert (quote.check_quote(q, snapshot) is not None) is ok
+
+
+@pytest.mark.parametrize(
+    ("snapshot", "q"),
+    [
+        ("Срок действия 2025/2026 года для всех абонентов", "Срок действия 2025 года для всех абонентов"),
+        ("Режим работы 10:30 ежедневно для всех абонентов", "Режим работы 10 ежедневно для всех абонентов"),
+    ],
+)
+def test_number_joined_on_the_right_is_one_number(snapshot, q):
+    assert quote.check_quote(q, snapshot) is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Тем не менее, по оценке аналитиков, ущерб за год превысил 600 млрд руб.",
+        "Ущерб за год превысил 600 млрд руб, тем не менее рост замедлился.",
+    ],
+)
+def test_turn_of_phrase_is_not_a_negation(text):
+    q = (
+        "по оценке аналитиков, ущерб за год превысил 600 млрд руб"
+        if text.startswith("Тем")
+        else "ущерб за год превысил 600 млрд руб"
+    )
+    assert quote.check_quote(q, text) is not None
