@@ -323,7 +323,9 @@ def test_interrupted_action_status():
         return {"schema_version": 1, "time": T, "actor": "CLI", "kind": "действие", "step": "2б"} | kw
 
     started = event(name="fetch", idempotency_hash=SHA, status="начато")
-    interrupted = event(name="fetch", idempotency_hash=SHA, status="прервано", duration_s=3, message="процесс остановлен")
+    interrupted = event(
+        name="fetch", idempotency_hash=SHA, status="прервано", duration_s=3, message="процесс остановлен"
+    )
     for e in (started, interrupted, event(name="fetch", idempotency_hash=SHA, status="прервано")):
         JournalEvent.model_validate(e)
     assert "нет ключа идемпотентности" in messages(JournalEvent, event(name="fetch", status="прервано"))
