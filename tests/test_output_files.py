@@ -635,7 +635,15 @@ def test_recommendation_cannot_stand_on_replaced_claim(project):
 
 def test_other_references_may_use_replaced_claim(project):
     """Прежняя версия может опираться на заменённое утверждение: ошибка только у рекомендации и обещания."""
-    edit_yaml(project, "options.yaml", lambda d: option(d, "Вар-2")["objections"][1].update(basis="У-1"))
+
+    def withdraw(d: dict[str, Any]) -> None:
+        d["claims"][2]["status"] = "отозвано"  # У-3 — основание возражения Вар-2
+        d["claims"][2]["status_history"].append(
+            {"status": "отозвано", "at": "2026-11-06T11:00:00+03:00", "by": "пользователь"}
+        )
+
+    edit_yaml(project, "claims.yaml", withdraw)
+    assert option(load(project, "options.yaml"), "Вар-2")["objections"][1]["basis"] == "У-3"
     edit_yaml(project, "decisions.yaml", lambda d: d["decisions"][0]["basis"].append("У-1"))
     edit_yaml(project, "gaps.yaml", lambda d: d["gaps"][0].update(status="закрыт", closed_by=["У-1"]))
     assert errors_of(project) == []

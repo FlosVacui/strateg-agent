@@ -216,26 +216,31 @@ _NOT_ROLE_WORDS_CYR = frozenset({"все", "вся", "команда", "нена
 _NOT_ROLE_WORDS_LAT = frozenset({"tbd", "tba", "na"})
 
 
-def _is_not_role(value: str) -> bool:
-    """«все», «вся команда», «команда продукта», «TBD», «n/a», «-», «?», «не назначен» — не роль."""
+def _not_role_word(value: str) -> str | None:
+    """Слово, из-за которого значение не роль: «все», «команда», «TBD», «n/a», «не назначен».
+
+    Пустую строку возвращает для значения без букв («-», «?»); None — значение допустимо.
+    """
     text = unicodedata.normalize("NFKC", value).casefold().replace("ё", "е")
     text = "".join(ch for ch in text if unicodedata.category(ch) != "Cf")
     if not any(ch.isalpha() for ch in text):
-        return True  # «-», «?», «...» — роли нет
+        return ""  # «-», «?», «...» — роли нет
     words = re.findall(r"[^\W_]+", text)
     # Слитно проверяется и всё значение: «T B D», «n/a».
-    return any(
-        w.translate(_TO_CYR) in _NOT_ROLE_WORDS_CYR or w.translate(_TO_LAT) in _NOT_ROLE_WORDS_LAT
-        for w in [*words, "".join(words)]
-    )
+    for w in [*words, "".join(words)]:
+        if w.translate(_TO_CYR) in _NOT_ROLE_WORDS_CYR or w.translate(_TO_LAT) in _NOT_ROLE_WORDS_LAT:
+            return w
+    return None
 
 
 def _check_owner(value: str) -> str:
     """Владелец — одна роль; «все», «команда», «TBD», «n/a» и их написания ответственности не задают."""
-    if _is_not_role(value):
+    word = _not_role_word(value)
+    if word is not None:
+        why = f"слово «{word}» не допускается" if word else "в значении нет слов"
         raise ValueError(
-            f"владелец «{value}» не роль: «все», «команда», «TBD», «n/a» и пустые знаки отвергаются, "
-            "назовите одну роль, например «руководитель направления»"
+            f"владелец «{value}» не роль: {why} («все», «команда», «TBD», «n/a», «не назначен» "
+            "отвергаются), назовите одну роль, например «руководитель продукта»"
         )
     return value
 
@@ -256,7 +261,10 @@ Owner = Annotated[Text, AfterValidator(_check_owner)]
 def _check_has_digit(value: str) -> str:
     """Порог — граница, которую можно измерить: в нём есть хотя бы одна цифра."""
     if not any(ch.isdecimal() for ch in value):
-        raise ValueError(f"в пороге «{value}» нет числа: порог задаёт границу цифрой, например «ниже 20 %»")
+        raise ValueError(
+            f"в пороге «{value}» нет числа: порог задаёт границу цифрой, например «ниже 20 %»; "
+            "для «любого случая» поставьте порог 0 или 1"
+        )
     return value
 
 
@@ -359,16 +367,18 @@ def normalize_quote(text: str) -> str:
 def text_key(text: str) -> str:
     """Ключ сравнения свободных текстов: нормализация цитат, затем без знаков препинания и невидимых знаков.
 
-    «Продавать-отдельно», «продавать отдельно.» и «Продавать «отдельно»» дают один ключ.
+    «Продавать-отдельно», «продавать отдельно.» и «Продавать «отдельно»» дают один ключ. Знак процента
+    и десятичная запятая или точка между цифрами остаются: «ниже 20%» и «ниже 20» — разные тексты.
     """
     text = normalize_quote(text)
-    chars = []
-    for ch in text:
+    chars: list[str] = []
+    for i, ch in enumerate(text):
         cat = unicodedata.category(ch)
         if cat == "Cf":
             continue
-        chars.append(" " if cat.startswith("P") else ch)
-    return " ".join("".join(chars).split())
+        decimal = ch in ",." and 0 < i < len(text) - 1 and text[i - 1].isdecimal() and text[i + 1].isdecimal()
+        chars.append(ch if ch in "%‰" or decimal else " " if cat.startswith("P") else ch)
+    return re.sub(r"\s+([%‰])", lambda m: m.group(1), " ".join("".join(chars).split()))
 
 
 def strip_spaces_and_hyphens(text: str) -> str:

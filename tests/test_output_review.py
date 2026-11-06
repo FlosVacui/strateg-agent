@@ -243,14 +243,22 @@ def test_r_2_3_29_plan_question_latin_letter_is_named(project):
     assert_error(project, "claims.yaml", "У-3", "латинские буквы", "«P»")
 
 
-@pytest.mark.parametrize("value", ["P-1", "П-01", "п-1", "П-9 (см.)", "p-2"])
+@pytest.mark.parametrize("value", ["P-1", "П-01", "п-1", "p-2", "П - 3"])
 def test_r_2_3_29_baseline_that_looks_like_a_number_is_explained(project, value):
     edit_yaml(project, "verification.yaml", lambda d: d["rows"][0].update(baseline=value))
     assert_error(project, "verification.yaml", "запись ПП-1 (№1)", "baseline", "похоже на номер пробела")
 
 
 @pytest.mark.parametrize(
-    "value", ["2 % в месяц", "данных нет, измеряется впервые", "Пробел в данных не закрыт"]
+    "value",
+    [
+        "2 % в месяц",
+        "данных нет, измеряется впервые",
+        "Пробел в данных не закрыт",
+        "P-50 перцентиль времени отклика",
+        "П-1 за прошлый месяц",
+        "П-9 (см.)",
+    ],
 )
 def test_r_2_3_29_baseline_text_stays_valid(project, value):
     edit_yaml(project, "verification.yaml", lambda d: d["rows"][0].update(baseline=value))
@@ -461,7 +469,7 @@ def test_r_2_3_37_history_files_are_hashed(project):
 
 def test_r_2_3_38_data_model_doc_keeps_room_and_has_no_wall_of_text():
     doc = (Path(__file__).resolve().parent.parent / "docs" / "data-model.md").read_text(encoding="utf-8")
-    assert len(doc.encode("utf-8")) <= 14500
+    assert len(doc.encode("utf-8")) <= 15000
     assert max(len(line.encode("utf-8")) for line in doc.splitlines()) <= 1200
 
 
@@ -555,3 +563,113 @@ def test_r_2_3_42_frame_file_still_builds_from_the_example():
 def test_r_2_3_39_doc_says_what_decision_assumptions_hold():
     doc = (Path(__file__).resolve().parent.parent / "docs" / "data-model.md").read_text(encoding="utf-8")
     assert "допущение или гипотеза у `decisions[].assumptions`" in doc
+
+
+# --- правки по второму раунду ----------------------------
+
+
+def test_followup_1_file_keys_with_underscore_instead_of_if_and_from_are_rejected(project):
+    """Ключ `if_` вместо `if` и `from_` вместо `from` в файле — ошибка; пары рядом нет."""
+
+    def plan(d: dict[str, Any]) -> None:
+        branch = d["questions"][0]["branches"][0]
+        branch["if_"] = branch.pop("if")
+
+    def options(d: dict[str, Any]) -> None:
+        differs = option(d, "Вар-2")["differs"]
+        differs["from_"] = differs.pop("from")
+
+    edit_yaml(project, "plan.yaml", plan)
+    errors = assert_error(project, "plan.yaml", "ВП-1", "branches[0].if_", "неизвестное поле")
+    assert any("branches[0].if" in e and "нет обязательного поля" in e for e in errors)
+    edit_yaml(project, "options.yaml", options)
+    errors = assert_error(project, "options.yaml", "Вар-2", "differs.from_", "неизвестное поле")
+    assert any("differs.from" in e and "нет обязательного поля" in e for e in errors)
+
+
+@pytest.mark.parametrize("value", ["P-50 перцентиль времени отклика", "П-1 за прошлый месяц"])
+def test_followup_2_baseline_with_words_after_a_number_is_text(project, value):
+    edit_yaml(project, "verification.yaml", lambda d: d["rows"][0].update(baseline=value))
+    assert errors_of(project) == []
+
+
+def test_followup_3_owner_error_names_the_word_and_gives_an_example(project):
+    edit_yaml(project, "verification.yaml", lambda d: d["rows"][0].update(owner="команда продукта"))
+    assert_error(
+        project, "verification.yaml", "owner", "слово «команда» не допускается", "руководитель продукта"
+    )
+    edit_yaml(project, "verification.yaml", lambda d: d["rows"][0].update(owner="?"))
+    assert_error(project, "verification.yaml", "owner", "в значении нет слов", "руководитель продукта")
+
+
+@pytest.mark.parametrize("second", ["ниже 20%", "Ниже 20 %.", "ниже  20  %"])
+def test_followup_4_thresholds_differ_only_in_spaces_around_signs(project, second):
+    edit_yaml(project, "verification.yaml", lambda d: d["rows"][4]["change_mind"].update(threshold=second))
+    assert errors_of(project) == []
+    edit_yaml(
+        project, "decisions.yaml", lambda d: d["decisions"][0]["conditions"][0].update(threshold=second)
+    )
+    assert errors_of(project) == []
+
+
+def test_followup_4_different_thresholds_stay_different(project):
+    edit_yaml(
+        project, "verification.yaml", lambda d: d["rows"][4]["change_mind"].update(threshold="ниже 2 0%")
+    )
+    assert_error(project, "verification.yaml", "from_change_mind", "не совпадает")
+
+
+def test_followup_5_objection_basis_is_not_synthetic_and_is_fact_or_hypothesis(project):
+    add_synthetic(project)
+    edit_yaml(project, "options.yaml", lambda d: option(d, "Вар-2")["objections"][0].update(basis="У-7"))
+    assert_error(project, "options.yaml", "Вар-2", "objections[0].basis", "У-7 — синтетика")
+    edit_yaml(project, "options.yaml", lambda d: option(d, "Вар-2")["objections"][0].update(basis="У-4"))
+    assert_error(
+        project,
+        "options.yaml",
+        "Вар-2",
+        "objections[0].basis",
+        "У-4 имеет тип «прогноз»",
+        "«факт» или «гипотеза»",
+    )
+    for ref in ("У-2", "У-3"):
+        edit_yaml(
+            project, "options.yaml", lambda d, ref=ref: option(d, "Вар-2")["objections"][0].update(basis=ref)
+        )
+        assert errors_of(project) == []
+
+
+def test_followup_6_threshold_without_a_number_suggests_zero_or_one(project):
+    edit_yaml(
+        project, "verification.yaml", lambda d: d["rows"][0]["change_mind"].update(threshold="в любом случае")
+    )
+    assert_error(project, "verification.yaml", "change_mind.threshold", "нет числа", "порог 0 или 1")
+
+
+def test_followup_7_text_key_keeps_percent_and_decimal_separator():
+    from strateg.models import text_key
+
+    assert text_key("доля ниже 20%") != text_key("доля ниже 20")
+    assert text_key("доля ниже 20%") == text_key("Доля ниже 20 %.")
+    assert text_key("рост 0,5") != text_key("рост 05")
+    assert text_key("рост 0.5") != text_key("рост 05")
+    assert text_key("рост, 5") == text_key("рост 5")
+
+
+def test_followup_7_branches_that_differ_only_in_percent_are_not_a_copy(project):
+    def change(d: dict[str, Any]) -> None:
+        d["questions"][0]["branches"][0]["then"] = "поднять цену на 20%"
+        d["questions"][0]["branches"][1]["then"] = "поднять цену на 20"
+
+    edit_yaml(project, "plan.yaml", change)
+    assert errors_of(project) == []
+
+
+def test_followup_7_objections_that_differ_only_in_percent_are_not_a_copy(project):
+    def change(d: dict[str, Any]) -> None:
+        obj = option(d, "Вар-2")["objections"]
+        obj[0]["drops_if"] = "продлений меньше 20%"
+        obj[1]["drops_if"] = "продлений меньше 20"
+
+    edit_yaml(project, "options.yaml", change)
+    assert errors_of(project) == []

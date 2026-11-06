@@ -734,7 +734,13 @@ def _check_options(opts: OptionsFile, cl: _Claims, errors: list[str]) -> None:
         own.check(errors, where, "differs.from", o.differs.from_)
         for i, obj in enumerate(o.objections):
             if obj.basis != "гипотеза":
-                cl.ref(where, f"objections[{i}].basis", obj.basis)
+                cl.ref(
+                    where,
+                    f"objections[{i}].basis",
+                    obj.basis,
+                    type_=("факт", "гипотеза"),
+                    synthetic_note=_SYNTHETIC_PROOF,
+                )
         for name in ("effect", "first_signal"):
             cell = getattr(o.comparison, name)
             if cell.forecast:
@@ -762,8 +768,13 @@ def _check_promises(prom: PromisesFile, cl: _Claims, errors: list[str]) -> None:
             cl.ref(where, "claims", ref, type_="факт", live_for="обещание")
 
 
+def _threshold_key(text: str) -> str:
+    """Порог для сравнения: нормализация цитат, пробелы вокруг знаков не важны («20%» и «20 %»)."""
+    return re.sub(r"\s*([^\w\s])\s*", lambda m: m.group(1), normalize_quote(text)).strip(" .,;:!")
+
+
 def _same_threshold(a: str, b: str) -> bool:
-    return normalize_quote(a).strip(" .,;:!") == normalize_quote(b).strip(" .,;:!")
+    return _threshold_key(a) == _threshold_key(b)
 
 
 def _check_verification(
@@ -784,11 +795,11 @@ def _check_verification(
         base = r.baseline.strip()
         if _GAP_REF.fullmatch(base):
             gap_reg.check(errors, where, "baseline", base)
-        elif _GAP_LIKE.match(base):
+        elif _GAP_LIKE.fullmatch(base):
             errors.append(
                 f"{where}, поле baseline: значение «{base}» похоже на номер пробела, но не подходит: "
                 f"нужен номер вида П-1 (буква русская заглавная, без нуля впереди){latin_hint(base)}; "
-                "если это текст, не начинайте его с номера"
+                "если нужен текст, добавьте слова к номеру"
             )
         if r.from_change_mind is not None and opts is not None:
             mind = opts.recommendation.change_mind
