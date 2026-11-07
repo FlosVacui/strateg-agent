@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import io
 import re
@@ -23,10 +24,25 @@ from test_no_internal import FORBIDDEN, PATTERNS
 ROOT = Path(__file__).resolve().parent.parent
 SKILLS = ROOT / ".claude" / "skills"
 AGENTS = ROOT / "AGENTS.md"
+AGENT_WRAPPERS = ROOT / ".claude" / "agents"
+ROLES = ROOT / "knowledge" / "roles"
+ROUTING = ROOT / "config" / "routing.yaml"
 
 MAX_DESCRIPTION = 1024
 MAX_SKILL_BODY_LINES = 500
 MAX_AGENTS_LINES = 200
+MAX_ROLE_LINES = 150
+
+# Роли с обёртками и их права по описанию ролей. Ключи `config/routing.yaml` — те же имена плюс
+# `classifier` и `respondent`: у них обёрток нет, это этап 4.
+ROLE_TOOLS = {
+    "researcher": ["WebSearch", "Read", "Grep", "Glob", "Bash"],
+    "critic": ["Read", "Grep", "Glob"],
+}
+ROUTING_ROLES = ("researcher", "critic", "classifier", "respondent")
+# Команды интерфейса, который делает ветка с командами `rubric` и `route`. Пока их нет в разборе CLI,
+# их использование в текстах не разбирается. Убрать после слияния той ветки: тогда тест разберёт их сам.
+PENDING_COMMANDS = ("rubric", "route")
 
 # Пять скиллов шагов; маршрутизатор `strateg` и остальные добавляются отдельно и в список не входят.
 STEP_SKILLS = {
@@ -114,8 +130,16 @@ def knowledge_files() -> list[Path]:
     return sorted(p for p in KNOWLEDGE.rglob("*") if p.is_file())
 
 
+def role_files() -> list[Path]:
+    return sorted(ROLES.glob("*.md")) if ROLES.is_dir() else []
+
+
+def wrapper_files() -> list[Path]:
+    return sorted(AGENT_WRAPPERS.glob("*.md")) if AGENT_WRAPPERS.is_dir() else []
+
+
 def all_texts() -> list[Path]:
-    return [AGENTS, *skill_files()]
+    return [AGENTS, *skill_files(), *role_files(), *wrapper_files()]
 
 
 def rel(path: Path) -> str:
@@ -278,17 +302,36 @@ def bad_values(argv: list[str]) -> list[str]:
     return problems
 
 
+def cli_commands() -> set[str]:
+    """Имена команд верхнего уровня, которые знает разбор CLI."""
+    return {
+        name
+        for action in build_parser()._actions
+        if isinstance(action, argparse._SubParsersAction)
+        for name in action.choices
+    }
+
+
+def is_pending(argv: list[str]) -> bool:
+    """Команда ожидаемая, но её ещё нет в CLI этой ветки."""
+    return argv[0] in PENDING_COMMANDS and argv[0] not in cli_commands()
+
+
 @pytest.mark.parametrize("path", all_texts(), ids=rel)
 def test_commands_are_parsed_by_the_cli(path):
     full, mentions = find_commands(path.read_text(encoding="utf-8"))
     bad = []
     for command in full:
         argv = normalize(command)
+        if is_pending(argv):
+            continue
         code, message = run_parser(argv)
         if code != 0:
             bad.append(f"{command} -> {message}")
         bad.extend(f"{command} -> {problem}" for problem in bad_values(argv))
     for mention in mentions:
+        if is_pending(normalize(mention)):
+            continue
         code, _ = run_parser([*normalize(mention), "--help"])
         if code != 0:
             bad.append(f"{mention} -> такой команды нет")
@@ -460,7 +503,7 @@ def test_example_checker_catches_broken_examples():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("path", [*all_texts(), *knowledge_files()], ids=rel)
+@pytest.mark.parametrize("path", sorted({*all_texts(), *knowledge_files()}), ids=rel)
 def test_no_case_strings(path):
     text = path.read_text(encoding="utf-8")
     low = text.casefold()
@@ -535,7 +578,7 @@ def test_texts_in_write_samples_are_quoted():
     assert not bare, bare
 
 
-@pytest.mark.parametrize("path", [*all_texts(), *knowledge_files()], ids=rel)
+@pytest.mark.parametrize("path", sorted({*all_texts(), *knowledge_files()}), ids=rel)
 def test_no_internal_traces(path):
     text = path.read_text(encoding="utf-8")
     found = [label for label, needle in FORBIDDEN.items() if needle.lower() in text.lower()]
@@ -747,3 +790,107 @@ def test_rubric_section_names_match_the_templates():
     known = {h for hs in TEMPLATE_HEADINGS.values() for h in hs}
     for name in re.findall(r"раздел\w* «([^»]+)»", text):
         assert name in known, f"в рубрике раздел «{name}», которого нет в шаблонах"
+
+
+# ---------------------------------------------------------------------------
+# Роли: тексты, обёртки, вызовы из скиллов
+# ---------------------------------------------------------------------------
+
+
+def split_wrapper(path: Path) -> tuple[dict, str]:
+    return split_skill(path)  # тот же вид: frontmatter между строками ---, затем тело
+
+
+def test_roles_and_wrappers_are_exactly_the_two_planned():
+    assert sorted(p.stem for p in role_files()) == sorted(ROLE_TOOLS)
+    assert sorted(p.stem for p in wrapper_files()) == sorted(ROLE_TOOLS)
+
+
+@pytest.mark.parametrize("name", ROLE_TOOLS)
+def test_wrapper_frontmatter(name):
+    path = AGENT_WRAPPERS / f"{name}.md"
+    meta, body = split_wrapper(path)
+    expected = {"name", "description", "tools", "model"} | ({"readonly"} if name == "critic" else set())
+    assert set(meta) == expected, f"{rel(path)}: поля {sorted(meta)}, нужны {sorted(expected)}"
+    assert meta["name"] == name and name in ROUTING_ROLES
+    assert meta["model"] == "inherit", "модель роли подставляет таблица маршрутизации, а не обёртка"
+    tools = [t.strip() for t in str(meta["tools"]).split(",")]
+    assert tools == ROLE_TOOLS[name], f"{rel(path)}: инструменты {tools}"
+    if name == "critic":
+        assert meta["readonly"] is True
+    desc = meta["description"]
+    assert isinstance(desc, str) and 0 < len(desc) <= MAX_DESCRIPTION
+    # тело — одна-две строки со ссылкой на текст роли; хуков в обёртке нет
+    lines = [x for x in body.strip().splitlines() if x.strip()]
+    assert 1 <= len(lines) <= 2, f"{rel(path)}: тело обёртки — одна-две строки"
+    assert f"knowledge/roles/{name}.md" in body
+    assert "hooks" not in meta
+
+
+def test_wrapper_names_are_routing_keys():
+    """Когда в ветке появится таблица маршрутизации, имя каждой обёртки должно быть в ней."""
+    if not ROUTING.is_file():
+        pytest.skip("config/routing.yaml появится вместе с командой route; список ролей — ROUTING_ROLES")
+    text = ROUTING.read_text(encoding="utf-8")
+    missing = [name for name in ROLE_TOOLS if name not in text]
+    assert not missing, f"в routing.yaml нет ролей {missing}"
+
+
+@pytest.mark.parametrize("name", ROLE_TOOLS)
+def test_role_text_is_short_and_references_exist(name):
+    path = ROLES / f"{name}.md"
+    text = path.read_text(encoding="utf-8")
+    assert text.startswith("# Роль: "), rel(path)
+    lines = len(text.splitlines())
+    assert lines <= MAX_ROLE_LINES, f"{rel(path)}: {lines} строк, предел {MAX_ROLE_LINES}"
+    broken = [ref for ref in sorted(file_refs(text)) if not (ROOT / ref).exists()]
+    assert not broken, f"{rel(path)}: нет файлов {broken}"
+
+
+def test_researcher_may_only_fetch():
+    """Исследователь не записывает ничего, кроме снимка через `fetch`: другой команды CLI в его тексте нет."""
+    text = (ROLES / "researcher.md").read_text(encoding="utf-8")
+    full, _ = find_commands(text)
+    assert full and all(normalize(c)[0] == "fetch" for c in full), full
+    for needle in ("Вход", "Права", "Как искать", "Что вернуть", "Утверждения", "Поиски", "Пометки"):
+        assert needle in text, needle
+    assert "type: факт" in text and "обращение к ии" in text.casefold()
+    assert "claim add" in text and "не вызываешь другие команды" in text
+
+
+def test_critic_has_three_modes_and_no_commands():
+    text = (ROLES / "critic.md").read_text(encoding="utf-8")
+    full, mentions = find_commands(text)
+    assert not full and not mentions, "критик только читает: команд CLI в его тексте нет"
+    for mode in ("возражения", "пре-мортем", "полнота"):
+        assert f"## Режим «{mode}»" in text, mode
+    assert "«Не знаю» нет" in text or "«не знаю»" in text.casefold()
+    assert "ничего не" in text.casefold() or "не пиши файлы" in text
+    assert "sources/" in text and "Не открывай" in text
+
+
+def test_skills_call_the_roles():
+    read = lambda *parts: (SKILLS.joinpath(*parts)).read_text(encoding="utf-8")  # noqa: E731
+    research, options, strategy = (
+        read("research", "SKILL.md"),
+        read("options", "SKILL.md"),
+        read("strategy", "SKILL.md"),
+    )
+    package, completeness = read("package", "SKILL.md"), read("strategy", "completeness.md")
+    assert "route researcher --reason" in research and "knowledge/roles/researcher.md" in research
+    assert "claim list --step 2б --plan-question" in research and "Запасной путь" in research
+    assert "route critic --reason 'возражения'" in options and "Режим: возражения" in options
+    assert "Режим: пре-мортем" in strategy and "route critic --reason 'пре-мортем'" in strategy
+    assert "rubric check" in completeness and "Режим: полнота" in completeness
+    assert "rubric record" in completeness and "--by критик" in completeness and "--by агент" in completeness
+    assert "route critic --upgrade" in completeness and "Запасной путь" in completeness
+    assert "completeness.yaml" in package and "не независимая" in package and "roles.md" in package
+
+
+def test_agents_md_has_the_roles_table_and_rules():
+    text = AGENTS.read_text(encoding="utf-8")
+    for needle in ("| Роль | Когда | Получает | Возвращает |", "Весь веб — у исследователя", "Запасной путь"):
+        assert needle in text, needle
+    assert "граница прав не активна" in text and "проверка не независимая" in text
+    table = [x for x in text.splitlines() if x.startswith("| `researcher`") or x.startswith("| `critic`")]
+    assert 3 <= len(table) <= 4
