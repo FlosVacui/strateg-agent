@@ -129,3 +129,65 @@ def test_find_names_uses_the_dictionary_and_only_warns():
     assert {"Иванов", "Иван", "Петрович", "Роза"} <= set(names) and "Москве" not in names
     assert names["Роза"] == 2
     assert safety.find_names("подписка стоит 199 рублей") == []
+
+
+_EN = "\N{EN DASH}"
+_NBH = "\N{NON-BREAKING HYPHEN}"
+
+
+@pytest.mark.parametrize(
+    "number",
+    [
+        "79051234567",
+        "7 905 123 45 67",
+        "7-905-123-45-67",
+        f"8 (905) 123{_EN}45{_EN}67",
+        f"8 (905) 123{_NBH}45{_NBH}67",
+        f"+7 905 123{_EN}45{_EN}67",
+        f"(495) 123{_EN}45{_EN}67",
+    ],
+)
+def test_raw_phone_records_are_replaced(number):
+    rep = safety.inspect_material(f"Клиент {number}, ждём звонка")
+    assert rep.text.strip() == "Клиент [телефон], ждём звонка"
+    assert rep.anonymized == ["телефоны"]
+
+
+@pytest.mark.parametrize("text", ["сумма 7 100 000 00 00", "79 000 000 рублей", "71234567890 шт"])
+def test_long_numbers_that_are_not_phones_stay(text):
+    assert safety.inspect_material(text).replacements == []
+
+
+def _with_luhn(prefix: str) -> str:
+    """Число с верной суммой Луна: к началу дописывается контрольная цифра."""
+    for check in "0123456789":
+        if safety.luhn_ok(prefix + check):
+            return prefix + check
+    raise AssertionError(prefix)
+
+
+@pytest.mark.parametrize("prefix", ["1234567890123", "7000000012345678", "9876543210123456"])
+def test_plain_digits_with_luhn_sum_but_not_a_payment_card_are_not_replaced(prefix):
+    number = _with_luhn(prefix)  # штрихкод, номер отправления: первая цифра не 2–6
+    assert safety.mask_personal(f"Отправление {number} в пути")[1] == []
+
+
+@pytest.mark.parametrize("prefix", ["411111111111111", "5555555555554", "2200123456789012"])
+def test_plain_payment_card_numbers_are_still_replaced(prefix):
+    number = _with_luhn(prefix)
+    masked, replacements, _ = safety.mask_personal(f"Карта {number}")
+    assert masked == "Карта [карта]" and len(replacements) == 1
+
+
+def test_grouped_card_number_is_replaced_whatever_the_first_digit():
+    number = _with_luhn("100000000000000")
+    grouped = " ".join(number[i : i + 4] for i in range(0, 16, 4))
+    assert safety.mask_personal(f"Карта {grouped}")[0] == "Карта [карта]"
+
+
+def test_what_the_detector_does_not_find_is_written_in_the_readme_and_is_true():
+    from pathlib import Path
+
+    readme = (Path(__file__).resolve().parent.parent / "README.md").read_text(encoding="utf-8")
+    assert "ИНН, записанный с пробелами по группам" in readme and "телефон из десяти цифр без" in readme
+    assert safety.mask_personal("ИНН 500 100 732 259 и 9161234567")[1] == []

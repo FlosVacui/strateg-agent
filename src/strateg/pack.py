@@ -16,9 +16,10 @@ import tempfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
 from strateg import project as proj
-from strateg.project import CliError
+from strateg.project import CliError, UsageError
 from strateg.project_check import check_project
 
 EXCLUDED_DIRS = frozenset({".tmp", ".cache", "__pycache__", ".git"})
@@ -38,16 +39,24 @@ SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("токен GitHub (github_pat_…)", re.compile(r"(?<![A-Za-z0-9])github_pat_[A-Za-z0-9_]{22,}")),
     ("ключ AWS (AKIA…)", re.compile(r"(?<![A-Za-z0-9])(?:AKIA|ASIA)[0-9A-Z]{16}(?![A-Za-z0-9])")),
     ("токен Slack (xoxb-, xoxp-)", re.compile(r"(?<![A-Za-z0-9])xox[bp]-[A-Za-z0-9\-]{10,}")),
-    ("закрытый ключ (BEGIN … PRIVATE KEY)", re.compile(r"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----")),
+    (
+        "закрытый ключ (BEGIN … PRIVATE KEY)",
+        re.compile(r"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----"),
+    ),
+    (
+        "заголовок Authorization: Bearer … с длинным значением",
+        re.compile(r"(?<![A-Za-z0-9])Bearer\s+(?=[A-Za-z0-9._~+/=\-]*\d)[A-Za-z0-9._~+/=\-]{20,}"),
+    ),
     (
         "строка password= или token= с длинным значением",
         re.compile(
-            r"""(?<![A-Za-z0-9_])(?:password|passwd|token)["']?\s*[=:]\s*["']?(?P<v>[^\s"',;]{12,})""",
+            r"""(?<![A-Za-z0-9])(?:password|passwd|token)["']?\s*[=:]\s*["']?(?P<v>[^\s"',;]{12,})""",
             re.IGNORECASE,
         ),
     ),
 )
-_PLACEHOLDER = re.compile(r"^(?:[$<{%\[*]|(.)\1{5,}$|x{4,})", re.IGNORECASE)
+# Подстановка вместо значения: ${NAME}, <описание>, {{шаблон}}, %NAME%, звёздочки, один повторяющийся знак.
+_PLACEHOLDER = re.compile(r"^(?:\$\{?\w+\}?$|<[^>]*>?|\{\{|%\w+%$|\*{4,}|(.)\1{5,}$|x{4,})", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -113,11 +122,20 @@ def scan_builtin(root: Path, files: list[Path]) -> list[Finding]:
     return found
 
 
-def scan_gitleaks(root: Path, files: list[Path]) -> list[Finding]:
-    """Сканер секретов gitleaks, если он есть в PATH; иначе пусто. Значения не выводятся (`--redact`)."""
+GITLEAKS_USED = "использован"
+GITLEAKS_MISSING = "не найден"
+GITLEAKS_FAILED = "не отработал"
+
+
+def scan_gitleaks(root: Path, files: list[Path]) -> tuple[list[Finding], str]:
+    """Сканер секретов gitleaks, если он есть в PATH: (находки, состояние сканера).
+
+    Состояние: «использован», «не найден», «не отработал» (не запустился, вышел с ошибкой или по таймауту,
+    отчёт не прочитан). Значения не выводятся (`--redact`).
+    """
     exe = shutil.which("gitleaks")
     if exe is None:
-        return []
+        return [], GITLEAKS_MISSING
     included = {p.relative_to(root).as_posix() for p in files}
     with tempfile.TemporaryDirectory() as tmp:
         report = Path(tmp) / "report.json"
@@ -132,17 +150,17 @@ def scan_gitleaks(root: Path, files: list[Path]) -> list[Finding]:
                     check=False,
                 )
             except (OSError, subprocess.SubprocessError):
-                return []
+                return [], GITLEAKS_FAILED
             if done.returncode in (0, 1) and (report.is_file() or done.returncode == 0):
                 break
         else:
-            return []
+            return [], GITLEAKS_FAILED
         if not report.is_file():
-            return []
+            return [], GITLEAKS_FAILED
         try:
             leaks = json.loads(report.read_text(encoding="utf-8") or "[]")
         except (OSError, ValueError):
-            return []
+            return [], GITLEAKS_FAILED
     found = []
     for leak in leaks or []:
         file = str(leak.get("File", ""))
@@ -154,7 +172,7 @@ def scan_gitleaks(root: Path, files: list[Path]) -> list[Finding]:
             found.append(
                 Finding(rel, int(leak.get("StartLine") or 0), f"gitleaks: {leak.get('RuleID', 'секрет')}")
             )
-    return found
+    return found, GITLEAKS_USED
 
 
 def personal_originals(root: Path, files: list[Path]) -> list[str]:
@@ -176,18 +194,20 @@ def personal_originals(root: Path, files: list[Path]) -> list[str]:
     return out
 
 
-def verify(root: Path) -> tuple[list[Path], list[str]]:
-    """Все проверки до архива: (файлы архива, причины отказа)."""
+def verify(root: Path) -> tuple[list[Path], list[str], str]:
+    """Все проверки до архива: (файлы архива, причины отказа, состояние gitleaks)."""
     problems = check_project(root)
     if problems:
-        return [], ["проверка проекта нашла ошибки (`strateg check`): " + m for m in problems]
+        reasons = ["проверка проекта нашла ошибки (`strateg check`): " + m for m in problems]
+        return [], reasons, GITLEAKS_MISSING
     files = project_files(root)
     builtin = scan_builtin(root, files)
     reasons = [f.text() for f in builtin]
     seen = {(f.file, f.line) for f in builtin}
-    reasons += [f.text() for f in scan_gitleaks(root, files) if (f.file, f.line) not in seen]
+    leaks, state = scan_gitleaks(root, files)
+    reasons += [f.text() for f in leaks if (f.file, f.line) not in seen]
     reasons += personal_originals(root, files)
-    return files, reasons
+    return files, reasons, state
 
 
 def build_archive(root: Path, files: list[Path], out: Path) -> int:
@@ -209,13 +229,25 @@ def default_out(root: Path) -> Path:
     return proj.projects_root() / f"{root.name}.zip"
 
 
-def pack(root: Path, out: Path | None) -> tuple[Path, int, int]:
-    """Упаковывает проект: (архив, число файлов, размер в байтах). Отказ — `CliError` с причинами."""
+class Packed(NamedTuple):
+    archive: Path
+    files: int
+    bytes: int
+    gitleaks: str  # «использован», «не найден», «не отработал»
+
+
+def pack(root: Path, out: Path | None) -> Packed:
+    """Упаковывает проект. Отказ — `CliError` с причинами."""
     target = (out or default_out(root)).resolve()
     if target.is_relative_to(root.resolve()):
         raise CliError("архив нельзя класть внутрь папки проекта: укажите другое место в --out")
-    files, reasons = verify(root)
+    if target.is_dir():
+        raise UsageError(f"--out — это папка: укажите имя файла, например {target / (root.name + '.zip')}")
+    files, reasons, scanner = verify(root)
     if reasons:
         raise CliError("проект не упакован: найдено то, чего в архиве быть не должно", reasons)
-    count = build_archive(root, files, target)
-    return target, count, target.stat().st_size
+    try:
+        count = build_archive(root, files, target)
+    except OSError as exc:
+        raise CliError(f"архив не записан в {target}: {exc.strerror or exc}") from exc
+    return Packed(target, count, target.stat().st_size, scanner)

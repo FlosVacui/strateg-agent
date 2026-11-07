@@ -435,3 +435,13 @@ def test_turn_of_phrase_is_not_a_negation(text):
         else "ущерб за год превысил 600 млрд руб"
     )
     assert quote.check_quote(q, text) is not None
+
+
+def test_hard_wrapped_note_hides_the_negation_on_the_next_line_and_this_is_documented():
+    # Ограничение блока «строка» для заметок: оборванную перед «не» цитату проверка принимает.
+    snapshot = "Услуга предоставляется бесплатно\nне для всех клиентов, а только для новых."
+    assert quote.check_quote("Услуга предоставляется бесплатно", snapshot) is not None
+    assert quote.check_quote("Услуга предоставляется бесплатно", snapshot, soft_wrap=True) is None
+    assert "жёстким переносом" in (quote.norm_blocks.__doc__ or "")
+    readme = (Path(__file__).resolve().parent.parent / "README.md").read_text(encoding="utf-8")
+    assert "жёстко переносит строки" in readme and "отрицание на следующей строке не видно" in readme

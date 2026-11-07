@@ -51,3 +51,8 @@ def test_doc_describes_the_rules_the_main_part_lacked():
         assert f"`{field}`" in DOC, field
     for number in ("ВП-n", "П-n", "Вар-n", "О-n", "ПП-n", "Реш-n"):
         assert number in DOC, number
+
+
+def test_doc_keeps_the_rule_that_an_incompatible_change_goes_to_the_changelog():
+    rule = next(line for line in DOC.splitlines() if "schema_version" in line and "Несовместимое" in line)
+    assert "поднимает `schema_version`" in rule and "`CHANGELOG.md`" in rule

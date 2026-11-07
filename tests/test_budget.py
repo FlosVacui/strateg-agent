@@ -268,6 +268,74 @@ def test_repeated_refusals_do_not_flood_the_journal(cli, home):
     assert len(budget_events(home / "demo")) == 2
 
 
+def test_a_refusal_is_written_once_while_the_time_keeps_growing(cli, home, clock):
+    new(cli)
+    assert cli("step", "start", "2б")[0] == 0
+    clock.advance(61 * 60)
+    for _ in range(5):
+        assert cli("budget", "check", "--action", "fetch")[0] == 1
+        clock.advance(30)  # шаг идёт, потрачено минут становится больше
+    assert len(budget_events(home / "demo")) == 1
+
+
+def test_a_refusal_is_not_repeated_after_another_event_in_between(cli, home):
+    new(cli)
+    cost(cli, 6)
+    for _ in range(3):
+        assert cli("budget", "check", "--action", "fetch")[0] == 1
+        assert cli("event", "error", "--message", "сбой сети")[0] == 0
+    assert len(budget_events(home / "demo")) == 1
+
+
+def test_changing_the_limit_starts_the_refusals_again(cli, home):
+    new(cli)
+    cost(cli, 6)
+    assert cli("budget", "check", "--action", "fetch")[0] == 1
+    assert cli("budget", "set", "--usd", "5.5")[0] == 0
+    assert cli("budget", "check", "--action", "fetch")[0] == 1
+    assert len(budget_events(home / "demo")) == 3  # отказ, изменение, отказ
+
+
+# --- границы: ровно 80 % и ровно 100 % ----------------------------------------------------------------
+
+
+def test_exactly_the_money_limit_is_a_refusal_and_just_below_is_not(cli, home):
+    new(cli)
+    cost(cli, 4.99)
+    assert cli("budget", "check")[0] == 0
+    cost(cli, 5)
+    assert cli("budget", "check")[0] == 1
+    assert "бюджет исчерпан: деньги" in cli("status", "--line")[1]
+
+
+def test_exactly_the_time_limit_is_a_refusal_and_just_below_is_not(cli, home, clock):
+    new(cli)
+    assert cli("step", "start", "2б")[0] == 0
+    clock.advance(59 * 60 + 59)
+    assert cli("budget", "check")[0] == 0
+    clock.advance(1)
+    assert cli("budget", "check")[0] == 1
+    assert "бюджет исчерпан: время" in cli("status", "--line")[1]
+
+
+def test_warning_starts_at_exactly_80_percent_of_money(cli, home):
+    new(cli)
+    cost(cli, 3.99)
+    assert "бюджета" not in cli("status", "--line")[1]
+    cost(cli, 4)
+    assert "израсходовано 80 % бюджета (деньги)" in cli("status", "--line")[1]
+    assert cli("budget", "check")[0] == 0
+
+
+def test_warning_starts_at_exactly_80_percent_of_time(cli, home, clock):
+    new(cli)
+    assert cli("step", "start", "2б")[0] == 0
+    clock.advance(48 * 60 - 1)
+    assert "бюджета" not in cli("status", "--line")[1]
+    clock.advance(1)
+    assert "израсходовано 80 % бюджета (время)" in cli("status", "--line")[1]
+
+
 def test_adding_budget_after_the_stop_lets_work_continue(cli, home):
     new(cli)
     cost(cli, 5.2)

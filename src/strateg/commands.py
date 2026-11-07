@@ -1699,6 +1699,11 @@ def cmd_add(args: argparse.Namespace) -> int:
             lines.append(f"  строка {r.line}: {r.label} — «{materials.line_context(rep.text, r.line)}»")
         if len(rep.replacements) > 30:
             lines.append(f"  … и ещё {len(rep.replacements) - 30}")
+    elif materials.NAME_CATEGORY in s.anonymized:
+        lines.append(
+            "В имени файла найдены персональные данные: текст записан под нейтральным именем. "
+            "Исходник убран из inputs/ в .tmp/ проекта и в работу не идёт."
+        )
     lines += [f"Внимание: {w}" for w in outcome.warnings]
     return emit(args, data, lines)
 
@@ -1788,9 +1793,12 @@ def cmd_budget_check(args: argparse.Namespace) -> int:
         f"деньги: потрачено {spent_usd} из {limit_usd}; "
         f"время: {_num(m.spent_minutes)} из {m.limit_minutes:g} мин"
     )
-    message = f"бюджет исчерпан ({reason}), отказ в действии {what}: {summary}"
-    last = p.journal[-1] if p.journal else None
-    if not (last is not None and last.kind == "бюджет" and last.message == message):
+    head = f"бюджет исчерпан ({reason}), отказ в действии {what}:"
+    message = f"{head} {summary}"
+    # Один отказ по одной причине, пока лимит не менялся: числа в тексте растут и не сравниваются,
+    # а событие «бюджет изменён» (и любое другое событие вида «бюджет») начинает счёт заново.
+    last = next((e for e in reversed(p.journal) if e.kind == "бюджет"), None)
+    if not (last is not None and (last.message or "").startswith(head)):
         with proj.transaction(p.root):
             p.add_event(p.event(kind="бюджет", message=message))
             p.save_state()
@@ -1821,14 +1829,25 @@ def cmd_budget_check(args: argparse.Namespace) -> int:
 
 def cmd_pack(args: argparse.Namespace) -> int:
     root = proj.resolve_project(getattr(args, "project", None))
-    target, count, size = packlib.pack(root, Path(args.out) if args.out else None)
+    packed = packlib.pack(root, Path(args.out) if args.out else None)
+    scanner = {
+        packlib.GITLEAKS_USED: "gitleaks использован",
+        packlib.GITLEAKS_MISSING: "gitleaks не найден: только встроенные шаблоны",
+        packlib.GITLEAKS_FAILED: "gitleaks не отработал: только встроенные шаблоны",
+    }[packed.gitleaks]
     return emit(
         args,
-        {"archive": str(target), "files": count, "bytes": size},
+        {
+            "archive": str(packed.archive),
+            "files": packed.files,
+            "bytes": packed.bytes,
+            "gitleaks": packed.gitleaks,
+        },
         [
-            f"Проект {root.name} упакован: {target}",
-            f"Файлов: {count}, размер: {max(size // 1024, 1)} КБ.",
-            "В архиве нет .tmp/, кэша fetch и исходников с персональными данными; секретов не найдено.",
+            f"Проект {root.name} упакован: {packed.archive}",
+            f"Файлов: {packed.files}, размер: {max(packed.bytes // 1024, 1)} КБ.",
+            "В архиве нет .tmp/, кэша fetch и исходников с персональными данными.",
+            f"Секретов не найдено: встроенные шаблоны, {scanner}.",
         ],
     )
 

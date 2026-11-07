@@ -399,3 +399,19 @@ def test_cost_and_duration_are_finite_numbers(bad):
         JournalEvent.model_validate(
             event | {"name": "a", "idempotency_hash": SHA, "status": "выполнено", "duration_s": bad}
         )
+
+
+def test_no_traces_of_the_removed_fuzzy_check_in_docs_of_the_models():
+    import inspect
+    import json
+    from pathlib import Path
+
+    from strateg import models
+
+    assert "Нечёткое" not in (models.quote_in_snapshot.__doc__ or "")
+    root = Path(__file__).resolve().parent.parent
+    schema = json.loads((root / "schemas" / "claims.schema.json").read_text(encoding="utf-8"))
+    desc = json.dumps(schema, ensure_ascii=False)
+    assert "нечёткого пути" not in desc and "нечётк" not in inspect.getsource(models.QuoteCheck)
+    changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert "Несовместимо: способ проверки цитаты «нечёткое» убран" in changelog

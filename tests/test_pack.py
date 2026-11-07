@@ -31,6 +31,7 @@ def fake_secret(name: str) -> str:
         "private": "-----BEGIN " + "RSA PRIVATE KEY" + "-----",
         "openssh": "-----BEGIN " + "OPENSSH PRIVATE KEY" + "-----",
         "bare": "-----BEGIN " + "PRIVATE KEY" + "-----",
+        "pgp": "-----BEGIN " + "PGP PRIVATE KEY BLOCK" + "-----",
     }[name]
 
 
@@ -49,6 +50,15 @@ SECRET_LINES = {
     "password-colon": 'password: "' + "Sup3rS3cretValue" + '"',
     "token": "token=" + "abcdef0123456789abcdef",
     "token-json": '{"token": "' + "abcdef0123456789abcdef" + '"}',
+    "pgp": fake_secret("pgp"),
+    "bearer": "Authorization: Bearer " + "abcdef0123456789abcdef0123",
+    "env-password": "DB_PASSWORD=" + "Sup3rS3cretValue123",
+    "env-token": "GITHUB_TOKEN=" + "abcdef0123456789abcdef",
+    "snake-token": "access_token=" + "abcdef0123456789abcdef",
+    "env-token-colon": "API_TOKEN: " + "abcdef0123456789abcdef",
+    "password-percent": "password=%" + "Sup3rS3cretValue123",
+    "password-bracket": "password=[" + "Sup3rS3cretValue123",
+    "password-brace": "token={" + "abcdef0123456789abcdef",
 }
 
 
@@ -192,6 +202,13 @@ def test_secret_in_the_journal_or_state_is_found_too(work, cli, tmp_path):
         "password=short",
         "token=xxxxxxxxxxxxxxxx",
         "token = ****************",
+        "password=${DATABASE_PASSWORD}",
+        "token=<your-api-token-here>",
+        "token=%GITHUB_ACCESS_TOKEN%",
+        "token={{vault_api_token_value}}",
+        "token=$GITHUB_ACCESS_TOKEN",
+        "Bearer authentication-scheme-description и Bearer short1",
+        "-----BEGIN PGP PUBLIC KEY BLOCK-----",
         "max_tokens: 4096 и tokens=12345678901234567890",
         "task-force и risk-averse-long-token-text-123 и desk-1234567890-abcdefghijklmn",
         "sk-learn и sk-short",
@@ -301,3 +318,67 @@ def test_original_with_personal_data_left_in_the_project_blocks_the_archive(work
     (work / ".tmp" / "копия.txt").write_text(NOTE_WITH_PII, encoding="utf-8")
     assert cli("pack", "--out", str(tmp_path / "demo.zip"))[0] == 0
     assert "kontrol.person" not in archive_text(tmp_path / "demo.zip")
+
+
+# --- ошибки записи ------------------------------------------------------------------------------------
+
+
+def test_out_pointing_to_an_existing_folder_is_a_usage_error_not_a_traceback(work, cli, tmp_path):
+    folder = tmp_path / "готовая папка"
+    folder.mkdir()
+    code, out, err = cli("pack", "--out", str(folder))
+    assert code == 2 and out == ""
+    assert "--out — это папка" in err and "demo.zip" in err and "Traceback" not in err
+    assert not list(folder.iterdir())
+
+
+def test_write_failure_is_a_plain_error_and_leaves_no_temp_file(work, cli, tmp_path, monkeypatch):
+    def broken(self, target):
+        raise PermissionError(13, "Отказано в доступе")
+
+    monkeypatch.setattr(Path, "replace", broken)
+    code, _, err = cli("pack", "--out", str(tmp_path / "demo.zip"))
+    assert code == 1 and "архив не записан" in err and "Traceback" not in err
+    assert not list(tmp_path.glob("demo.zip*"))
+
+
+# --- итоговая строка говорит, чем искали -------------------------------------------------------------
+
+
+def test_summary_says_gitleaks_was_used(work, cli, tmp_path, monkeypatch):
+    fake_gitleaks(monkeypatch, [], exit_code=0)
+    code, out, err = cli("pack", "--out", str(tmp_path / "demo.zip"))
+    assert code == 0, err
+    assert "встроенные шаблоны, gitleaks использован" in out
+    data = json.loads(cli("pack", "--out", str(tmp_path / "b.zip"), "--json")[1])
+    assert data["gitleaks"] == "использован"
+
+
+def test_summary_says_gitleaks_was_not_found(work, cli, tmp_path, monkeypatch):
+    monkeypatch.setattr(packlib.shutil, "which", lambda name: None)
+    code, out, err = cli("pack", "--out", str(tmp_path / "demo.zip"))
+    assert code == 0, err
+    assert "gitleaks не найден: только встроенные шаблоны" in out
+    assert json.loads(cli("pack", "--out", str(tmp_path / "b.zip"), "--json")[1])["gitleaks"] == "не найден"
+
+
+@pytest.mark.parametrize("how", ["no-start", "timeout", "bad-exit", "no-report"])
+def test_summary_says_gitleaks_did_not_work(work, cli, tmp_path, monkeypatch, how):
+    monkeypatch.setattr(
+        packlib.shutil, "which", lambda name: "gitleaks-for-tests" if name == "gitleaks" else None
+    )
+
+    def run(cmd, **kw):
+        if how == "no-start":
+            raise OSError("не запускается")
+        if how == "timeout":
+            raise subprocess.TimeoutExpired(cmd, 300)
+        if how == "bad-exit":
+            return subprocess.CompletedProcess(cmd, 2, b"", b"error")
+        return subprocess.CompletedProcess(cmd, 0, b"", b"")  # вышел без ошибки, но отчёта нет
+
+    monkeypatch.setattr(packlib.subprocess, "run", run)
+    code, out, err = cli("pack", "--out", str(tmp_path / "demo.zip"))
+    assert code == 0, err
+    assert "gitleaks не отработал: только встроенные шаблоны" in out
+    assert (tmp_path / "demo.zip").is_file()  # слой «дополнительно»: архив при этом собирается

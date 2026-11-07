@@ -10,8 +10,8 @@
 - имена людей — только предупреждение;
 - аудио и видео не разбираются.
 
-Метки места цитаты в тексте: `[стр. N]` (PDF), `[абз. N]` и `[таблица N]` (DOCX), `[лист: имя]` и адреса
-ячеек `B2:` (XLSX и CSV), `[слайд N]` (PPTX), `[строка N]` (расшифровка интервью).
+Метки места цитаты в тексте: `[стр. N]` (PDF), `[абз. N]`, `[таблица N]`, `[колонтитул]` (DOCX),
+`[лист: имя]` и адреса ячеек `B2:` (XLSX и CSV), `[слайд N]` (PPTX), `[строка N]` (расшифровка интервью).
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ import shutil
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from pydantic import ValidationError
 
@@ -54,6 +55,7 @@ MAX_TEXT_CHARS = 20_000_000
 INPUTS = "inputs"
 PENDING = ".tmp/pending"
 PRIVATE_NAME = "~/.strateg/private"
+NAME_CATEGORY = "имя файла"
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +107,35 @@ def _docx(body: bytes) -> str:
                     cells.append(_squash(cell.text))
                 if any(cells):
                     out.append(f"строка {r}: " + " | ".join(cells))
+    notes = _docx_header_footer(doc)
+    if notes:
+        out += ["[колонтитул]", *notes]
     return "\n".join(out)
+
+
+def _docx_header_footer(doc: Any) -> list[str]:
+    """Тексты колонтитулов всех разделов без повторов: в них тоже бывают телефоны и почта."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for section in doc.sections:
+        for part in (
+            section.header,
+            section.first_page_header,
+            section.even_page_header,
+            section.footer,
+            section.first_page_footer,
+            section.even_page_footer,
+        ):
+            if part.is_linked_to_previous:
+                continue
+            texts = [_squash(par.text) for par in part.paragraphs]
+            for table in part.tables:
+                texts += [_squash(cell.text) for row in table.rows for cell in row.cells]
+            for text in texts:
+                if text and text not in seen:
+                    seen.add(text)
+                    out.append(text)
+    return out
 
 
 def _cell_text(value: object) -> str:
@@ -365,6 +395,12 @@ def register(p: Project, file: Path, forced_kind: str | None) -> Outcome:
     ext = file.suffix.lower()
     refuse_audio_video(ext)
     kind = pick_kind(ext, forced_kind)
+    name_hit = bool(safety.mask_personal(file.name)[1])
+    if name_hit and kind == "изображение":
+        raise CliError(
+            "в имени файла есть персональные данные (телефон, почта или номер документа): "
+            "переименуйте файл и добавьте его снова"
+        )
     if file.stat().st_size > MAX_FILE_BYTES:
         raise CliError(f"файл больше {MAX_FILE_BYTES // 1024 // 1024} МБ: разделите его на части")
     body = file.read_bytes()
@@ -384,7 +420,7 @@ def register(p: Project, file: Path, forced_kind: str | None) -> Outcome:
     if kind != "изображение":
         report = safety.inspect_material(extract_text(body, ext, kind))
         text = report.text
-    pii = bool(report and report.replacements)
+    pii = bool(report and report.replacements) or name_hit
     number = _next_number(p)
     sid = f"И-{number}"
     text_rel = _text_rel(p, file.name, number, pii=pii) if text is not None else None
@@ -402,7 +438,7 @@ def register(p: Project, file: Path, forced_kind: str | None) -> Outcome:
             text_path=text_rel,
             text_sha256=proj.sha256_bytes(text.encode("utf-8")),
             suspicious=bool(report.instruction_signs),
-            anonymized=report.anonymized,
+            anonymized=[*report.anonymized, *([NAME_CATEGORY] if name_hit else [])],
             closed_markers=report.closed_markers,
         )
     try:
@@ -485,7 +521,7 @@ def _duplicate(p: Project, twin: Source, file: Path, rel: str) -> Outcome:
 def _warnings(outcome: Outcome) -> None:
     s, rep = outcome.source, outcome.report
     w = outcome.warnings
-    if rep is not None and rep.replacements:
+    if (rep is not None and rep.replacements) or NAME_CATEGORY in s.anonymized:
         w.append(
             "найдены персональные данные: в работу идёт только обезличенная копия, исходник вынесен "
             "из inputs/ "

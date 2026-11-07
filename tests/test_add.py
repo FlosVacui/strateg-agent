@@ -151,6 +151,29 @@ def test_docx_text_has_paragraph_and_table_marks(demo, cli):
     ]
 
 
+def test_docx_headers_and_footers_are_read_and_checked_for_personal_data(demo, cli):
+    def build(doc):
+        doc.add_paragraph("Подписка стоит 199 рублей.")
+        section = doc.sections[0]
+        section.header.paragraphs[0].text = "Контакт: +7 905 111-22-33"
+        section.footer.paragraphs[0].text = "Пишите: footer.person@example.test"
+        section.different_first_page_header_footer = True
+        section.first_page_header.paragraphs[0].text = "Первая страница, Контакт: +7 905 111-22-33"
+        doc.add_section()  # колонтитулы второго раздела связаны с первым: повторов в тексте нет
+
+    put(demo, "d.docx", docx_bytes(build))
+    code, out, err = cli("add", "d.docx")
+    assert code == 0, err
+    s = sources(demo)[0]
+    text = text_of(demo, s)
+    assert "[колонтитул]" in text and "[телефон]" in text and "[почта]" in text
+    assert "111-22-33" not in text and "footer.person" not in text
+    assert text.splitlines().count("Контакт: [телефон]") == 1
+    assert sorted(s["anonymized"]) == ["адреса почты", "телефоны"]
+    assert not (demo / "inputs" / "d.docx").exists()
+    assert "--confirm И-1" in out
+
+
 def test_xlsx_text_has_sheets_and_cell_addresses(demo, cli):
     def build(wb):
         ws = wb.active
@@ -487,6 +510,35 @@ def test_personal_data_in_the_file_name_does_not_reach_the_registry(demo, cli):
     assert s["path"] == "inputs/i-1.txt" and s["text_path"] == "inputs/i-1.txt"
     assert "123 45 67" not in (demo / "sources.yaml").read_text(encoding="utf-8")
     assert "123 45 67" not in (demo / "journal.jsonl").read_text(encoding="utf-8")
+
+
+def test_personal_data_in_the_file_name_makes_the_material_personal_with_clean_text(demo, cli, private):
+    name = "Иванов Иван +7 905 123 45 67.txt"
+    put(demo, name, "Подписка стоит 199 рублей.")
+    code, out, err = cli("add", name)
+    assert code == 0, err
+    s = sources(demo)[0]
+    assert s["path"] == "inputs/i-1.txt" and s["text_path"] == "inputs/i-1.txt"
+    assert "имя файла" in s["anonymized"]
+    assert text_of(demo, s).strip() == "Подписка стоит 199 рублей."
+    assert not (demo / "inputs" / name).exists()
+    assert (demo / ".tmp" / "pending" / "И-1" / name).exists()
+    assert "персональные данные" in out and "--confirm И-1" in out
+    assert "123 45 67" not in out and "Иванов" not in out
+    for file in ("sources.yaml", "journal.jsonl"):
+        body = (demo / file).read_text(encoding="utf-8")
+        assert "123 45 67" not in body and "Иванов" not in body
+    assert cli("check")[0] == 1  # пока человек не подтвердил
+    assert cli("add", "--confirm", "И-1")[0] == 0
+    assert (private / "demo" / "И-1" / name).exists()
+
+
+def test_image_with_personal_data_in_the_file_name_is_refused(demo, cli):
+    put(demo, "резюме petrov@mail.ru.png", bytes([0x89]) + b"PNG")
+    code, out, err = cli("add", "резюме petrov@mail.ru.png")
+    assert code == 1 and "переименуйте файл" in err
+    assert "petrov" not in out + err
+    assert sources(demo) == []
 
 
 def test_same_original_dropped_again_does_not_stay_in_inputs(demo, cli, private):
