@@ -1,0 +1,311 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "Magnitude": {
+      "additionalProperties": false,
+      "description": "Величина изменения диапазоном.",
+      "properties": {
+        "low": {
+          "title": "Low",
+          "type": "number"
+        },
+        "high": {
+          "title": "High",
+          "type": "number"
+        },
+        "unit": {
+          "minLength": 1,
+          "title": "Unit",
+          "type": "string"
+        }
+      },
+      "required": [
+        "low",
+        "high",
+        "unit"
+      ],
+      "title": "Magnitude",
+      "type": "object"
+    },
+    "PremortemCause": {
+      "additionalProperties": false,
+      "description": "Причина провала выбранного варианта: гипотеза, сигнал, порог и строка плана.",
+      "properties": {
+        "claim": {
+          "pattern": "^У-[1-9][0-9]*$",
+          "title": "Claim",
+          "type": "string"
+        },
+        "signal": {
+          "minLength": 1,
+          "title": "Signal",
+          "type": "string"
+        },
+        "threshold": {
+          "minLength": 1,
+          "title": "Threshold",
+          "type": "string"
+        },
+        "row": {
+          "pattern": "^ПП-[1-9][0-9]*$",
+          "title": "Row",
+          "type": "string"
+        },
+        "hits_choice": {
+          "description": "Причина бьёт по главному допущению выбранного варианта",
+          "title": "Hits Choice",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "claim",
+        "signal",
+        "threshold",
+        "row",
+        "hits_choice"
+      ],
+      "title": "PremortemCause",
+      "type": "object"
+    },
+    "Threshold": {
+      "additionalProperties": false,
+      "description": "Порог и действие при его пересечении.",
+      "properties": {
+        "threshold": {
+          "minLength": 1,
+          "title": "Threshold",
+          "type": "string"
+        },
+        "action": {
+          "minLength": 1,
+          "title": "Action",
+          "type": "string"
+        }
+      },
+      "required": [
+        "threshold",
+        "action"
+      ],
+      "title": "Threshold",
+      "type": "object"
+    },
+    "UndesiredEffect": {
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        },
+        "row": {
+          "pattern": "^ПП-[1-9][0-9]*$",
+          "title": "Row",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "row"
+      ],
+      "title": "UndesiredEffect",
+      "type": "object"
+    },
+    "VerificationRow": {
+      "additionalProperties": false,
+      "description": "Строка плана проверки `ПП-n`: показатель, величина, база, срок, владелец и порог отказа.",
+      "properties": {
+        "id": {
+          "pattern": "^ПП-[1-9][0-9]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "hypothesis": {
+          "anyOf": [
+            {
+              "pattern": "^У-[1-9][0-9]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Проверяемая гипотеза; у защитного показателя может быть пусто",
+          "title": "Hypothesis"
+        },
+        "kind": {
+          "enum": [
+            "основной",
+            "защитный"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "metric": {
+          "minLength": 1,
+          "title": "Metric",
+          "type": "string"
+        },
+        "direction": {
+          "minLength": 1,
+          "title": "Direction",
+          "type": "string"
+        },
+        "magnitude": {
+          "$ref": "#/$defs/Magnitude"
+        },
+        "baseline": {
+          "description": "База сравнения; нет базы — номер пробела П-n",
+          "minLength": 1,
+          "title": "Baseline",
+          "type": "string"
+        },
+        "deadline": {
+          "minLength": 1,
+          "title": "Deadline",
+          "type": "string"
+        },
+        "data_source": {
+          "minLength": 1,
+          "title": "Data Source",
+          "type": "string"
+        },
+        "owner": {
+          "minLength": 1,
+          "title": "Owner",
+          "type": "string"
+        },
+        "change_mind": {
+          "$ref": "#/$defs/Threshold"
+        },
+        "from_change_mind": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Номер записи в options.yaml: recommendation.change_mind, откуда взят порог",
+          "title": "From Change Mind"
+        },
+        "needed_n": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Нужный размер выборки",
+          "title": "Needed N"
+        },
+        "method": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Method"
+        },
+        "strength": {
+          "anyOf": [
+            {
+              "enum": [
+                "сильная",
+                "средняя",
+                "слабая"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Strength"
+        },
+        "not_prove": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Что проверка не докажет",
+          "title": "Not Prove"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "metric",
+        "direction",
+        "magnitude",
+        "baseline",
+        "deadline",
+        "data_source",
+        "owner",
+        "change_mind"
+      ],
+      "title": "VerificationRow",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Файл `verification.yaml`: план проверки. Пишет только CLI.",
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "rows": {
+      "items": {
+        "$ref": "#/$defs/VerificationRow"
+      },
+      "minItems": 1,
+      "title": "Rows",
+      "type": "array"
+    },
+    "premortem": {
+      "description": "Ровно три причины",
+      "items": {
+        "$ref": "#/$defs/PremortemCause"
+      },
+      "maxItems": 3,
+      "minItems": 3,
+      "title": "Premortem",
+      "type": "array"
+    },
+    "undesired_effects": {
+      "items": {
+        "$ref": "#/$defs/UndesiredEffect"
+      },
+      "title": "Undesired Effects",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "rows",
+    "premortem"
+  ],
+  "title": "VerificationFile",
+  "type": "object"
+}

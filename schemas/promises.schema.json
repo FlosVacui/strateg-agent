@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "Promise": {
+      "additionalProperties": false,
+      "description": "Обещание `О-n`: что обещаем, чем это обеспечено и на каком факте стоит.",
+      "properties": {
+        "id": {
+          "pattern": "^О-[1-9][0-9]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "text": {
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        },
+        "capability": {
+          "description": "Возможность продукта",
+          "minLength": 1,
+          "title": "Capability",
+          "type": "string"
+        },
+        "claims": {
+          "description": "Факты, на которых стоит обещание",
+          "items": {
+            "pattern": "^У-[1-9][0-9]*$",
+            "type": "string"
+          },
+          "title": "Claims",
+          "type": "array"
+        },
+        "conditions": {
+          "description": "Условия и исключения, регион, период",
+          "minLength": 1,
+          "title": "Conditions",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "подтверждено",
+            "подтверждено частично",
+            "не подтверждено"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "text",
+        "capability",
+        "conditions",
+        "status"
+      ],
+      "title": "Promise",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Файл `promises.yaml`: таблица обещаний. Пишет только CLI.",
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "promises": {
+      "items": {
+        "$ref": "#/$defs/Promise"
+      },
+      "title": "Promises",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "promises"
+  ],
+  "title": "PromisesFile",
+  "type": "object"
+}

@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from strateg.models import (
     SCHEMA_VERSION,
@@ -29,14 +29,18 @@ from strateg.models import (
     CostRecord,
     JournalEvent,
     ProjectState,
+    RelPath,
     SourcesFile,
 )
 from strateg.project_check import (
     CLAIMS_FILE,
     COST_FILE,
+    HISTORY_DIR,
     JOURNAL_FILE,
+    OUTPUT_FILES,
     SOURCES_FILE,
     STATE_FILE,
+    _explain,
     check_project,
 )
 
@@ -48,6 +52,8 @@ SUBFOLDERS = ("inputs", "sources", "outputs", ".tmp")  # .tmp: временны�
 CACHE_DIR = ".cache"
 
 _PROJECT_ID = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+_REL_PATH = TypeAdapter(RelPath)
+_HISTORY_NAME = re.compile(r"^(?P<stem>.+?)\.v(?P<n>[1-9][0-9]*)(?P<ext>\.[^./]+)?$")
 
 
 class CliError(Exception):
@@ -76,6 +82,44 @@ def key_hash(*parts: object) -> str:
     """Ключ идемпотентности: хеш команды и входов."""
     payload = json.dumps(list(parts), ensure_ascii=False, separators=(",", ":"))
     return sha256_bytes(payload.encode("utf-8"))
+
+
+def history_path(rel_path: str, version: int) -> str:
+    """Путь прежней версии файла в `history/`: номер версии перед расширением.
+
+    `frame.yaml`, 1 -> `history/frame.v1.yaml`; `outputs/options.md`, 2 -> `history/outputs/options.v2.md`.
+    Чистая функция: ничего не читает и не пишет, запись версий — дело команд.
+    """
+    if isinstance(version, bool) or not isinstance(version, int) or version < 1:
+        raise ValueError("номер версии — целое число от 1")
+    try:
+        _REL_PATH.validate_python(rel_path)
+    except ValidationError as exc:
+        reasons = "; ".join(m for err in exc.errors() for m in _explain(err))
+        raise ValueError(f"путь «{rel_path}» не подходит: {reasons}") from None
+    parts = rel_path.split("/")
+    if parts[0] == HISTORY_DIR:
+        raise ValueError("файл уже лежит в history/: версия берётся от файла проекта")
+    name = parts[-1]
+    dot = name.rfind(".")
+    stem, ext = (name[:dot], name[dot:]) if dot > 0 else (name, "")
+    return "/".join([HISTORY_DIR, *parts[:-1], f"{stem}.v{version}{ext}"])
+
+
+def history_source(rel_path: str) -> tuple[str, int] | None:
+    """Обратное к `history_path`: (файл проекта, номер версии) или None, если имя не такого вида."""
+    parts = rel_path.split("/")
+    if len(parts) < 2 or parts[0] != HISTORY_DIR:
+        return None
+    m = _HISTORY_NAME.match(parts[-1])
+    if m is None:
+        return None
+    source = "/".join([*parts[1:-1], m["stem"] + (m["ext"] or "")])
+    version = int(m["n"])
+    try:
+        return (source, version) if history_path(source, version) == rel_path else None
+    except ValueError:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -230,8 +274,11 @@ class Project:
         self.costs.append(record)
 
     def _hashes(self) -> dict[str, str]:
-        rels = [SOURCES_FILE, CLAIMS_FILE, JOURNAL_FILE, COST_FILE]
+        rels = [SOURCES_FILE, CLAIMS_FILE, JOURNAL_FILE, COST_FILE, *OUTPUT_FILES]
         rels += [s.text_path for s in self.sources.sources if s.text_path]
+        history = self.root / HISTORY_DIR
+        if history.is_dir():
+            rels += [p.relative_to(self.root).as_posix() for p in history.rglob("*") if p.is_file()]
         out = {}
         for rel in sorted(set(rels)):
             p = self.root / rel
@@ -298,11 +345,14 @@ def create_project(project_id: str, mode: str, region: str | None) -> Project:
 
 
 def _tracked_files(root: Path) -> list[Path]:
-    names = [STATE_FILE, SOURCES_FILE, CLAIMS_FILE, JOURNAL_FILE, COST_FILE]
+    names = [STATE_FILE, SOURCES_FILE, CLAIMS_FILE, JOURNAL_FILE, COST_FILE, *OUTPUT_FILES]
     files = [root / n for n in names]
     sources = root / "sources"
     if sources.is_dir():
         files += [p for p in sorted(sources.iterdir()) if p.is_file()]
+    history = root / HISTORY_DIR
+    if history.is_dir():
+        files += [p for p in sorted(history.rglob("*")) if p.is_file()]
     return files
 
 

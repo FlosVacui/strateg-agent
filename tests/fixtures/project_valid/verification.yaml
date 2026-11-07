@@ -1,0 +1,103 @@
+schema_version: 1
+rows:
+  - id: ПП-1
+    hypothesis: У-3
+    kind: основной
+    metric: доля семей с пожилыми родителями среди подключивших защиту
+    direction: выше половины
+    magnitude:
+      low: 50
+      high: 60
+      unit: "% подключивших"
+    baseline: П-1
+    deadline: через 8 недель после запуска
+    data_source: выгрузка подключений
+    owner: руководитель направления
+    change_mind:
+      threshold: ниже 35 %
+      action: вернуться к общему предложению
+    method: интервью с пятью семьями
+    strength: слабая
+    not_prove: что эта доля сохранится на всей базе
+  - id: ПП-2
+    hypothesis: У-5
+    kind: защитный
+    metric: доля отключений защиты за первый месяц
+    direction: не выше
+    magnitude:
+      low: 8
+      high: 10
+      unit: "% подключивших"
+    baseline: П-1
+    deadline: через 4 недели после подключения
+    data_source: выгрузка отключений
+    owner: аналитик продукта
+    change_mind:
+      threshold: выше 30 %
+      action: остановить продвижение и разобрать причины
+  - id: ПП-3
+    hypothesis: У-6
+    kind: защитный
+    metric: доля абонентов, воспользовавшихся защитой в первую неделю
+    direction: не ниже
+    magnitude:
+      low: 40
+      high: 50
+      unit: "% подключивших"
+    baseline: данных нет, измеряется впервые
+    deadline: через 2 недели после подключения
+    data_source: события использования услуги
+    owner: аналитик продукта
+    change_mind:
+      threshold: ниже 20 %
+      action: добавить объяснение в первую неделю
+  - id: ПП-4
+    kind: защитный
+    metric: число обращений в поддержку о ложных срабатываниях
+    direction: не растёт
+    magnitude:
+      low: 0
+      high: 5
+      unit: "обращений на 1000 подключивших"
+    baseline: данных нет, измеряется впервые
+    deadline: через 4 недели после подключения
+    data_source: журнал обращений в поддержку
+    owner: руководитель поддержки
+    change_mind:
+      threshold: больше 20 обращений на 1000
+      action: пересмотреть настройки блокировки
+  - id: ПП-5
+    kind: защитный
+    metric: доля продлений после пробного периода
+    direction: не ниже
+    magnitude:
+      low: 20
+      high: 30
+      unit: "% начавших пробный период"
+    baseline: П-2
+    deadline: через 6 недель после запуска
+    data_source: выгрузка продлений
+    owner: аналитик продукта
+    change_mind:
+      threshold: ниже 20 %
+      action: перейти к варианту Вар-3
+    from_change_mind: 1
+premortem:
+  - claim: У-5
+    signal: рост отключений в первый месяц
+    threshold: выше 30 % подключивших
+    row: ПП-2
+    hits_choice: false
+  - claim: У-6
+    signal: низкое использование защиты в первую неделю
+    threshold: ниже 20 % подключивших
+    row: ПП-3
+    hits_choice: false
+  - claim: У-3
+    signal: ложные срабатывания раздражают семьи
+    threshold: больше 20 обращений на 1000 подключивших
+    row: ПП-4
+    hits_choice: false
+undesired_effects:
+  - text: Рост обращений в поддержку из-за ложных срабатываний
+    row: ПП-4

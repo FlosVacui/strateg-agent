@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "FrameField": {
+      "additionalProperties": false,
+      "description": "Поле рамки: значение и откуда оно.",
+      "properties": {
+        "value": {
+          "minLength": 1,
+          "title": "Value",
+          "type": "string"
+        },
+        "origin": {
+          "enum": [
+            "из запроса",
+            "из материалов",
+            "ответ человека",
+            "допущение"
+          ],
+          "title": "Origin",
+          "type": "string"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "pattern": "^И-[1-9][0-9]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Источник, если значение взято из материала",
+          "title": "Source"
+        }
+      },
+      "required": [
+        "value",
+        "origin"
+      ],
+      "title": "FrameField",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Файл `frame.yaml`: рамка задачи. Пишет только CLI.",
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "version": {
+      "description": "Версия рамки: растёт при каждой перезаписи, прежние лежат в history/",
+      "maximum": 1000,
+      "minimum": 1,
+      "title": "Version",
+      "type": "integer"
+    },
+    "decision": {
+      "$ref": "#/$defs/FrameField"
+    },
+    "decision_space": {
+      "description": "Варианты решения: не меньше двух",
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "minItems": 2,
+      "title": "Decision Space",
+      "type": "array"
+    },
+    "deadline": {
+      "$ref": "#/$defs/FrameField"
+    },
+    "research_question": {
+      "$ref": "#/$defs/FrameField"
+    },
+    "recipient": {
+      "$ref": "#/$defs/FrameField"
+    },
+    "constraints": {
+      "$ref": "#/$defs/FrameField"
+    },
+    "data": {
+      "$ref": "#/$defs/FrameField"
+    },
+    "region": {
+      "$ref": "#/$defs/FrameField"
+    },
+    "success_criteria": {
+      "$ref": "#/$defs/FrameField"
+    },
+    "out_of_scope": {
+      "$ref": "#/$defs/FrameField"
+    }
+  },
+  "required": [
+    "schema_version",
+    "version",
+    "decision",
+    "decision_space",
+    "deadline",
+    "research_question",
+    "recipient",
+    "constraints",
+    "data",
+    "region",
+    "success_criteria",
+    "out_of_scope"
+  ],
+  "title": "FrameFile",
+  "type": "object"
+}

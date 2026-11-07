@@ -1,0 +1,470 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "Cell": {
+      "additionalProperties": false,
+      "description": "Ячейка сравнения: текст или причина, почему пусто.",
+      "properties": {
+        "text": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Text"
+        },
+        "why_empty": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Why Empty"
+        }
+      },
+      "title": "Cell",
+      "type": "object"
+    },
+    "ChangeMind": {
+      "additionalProperties": false,
+      "description": "«Передумаю, если»: показатель, порог и действие.",
+      "properties": {
+        "metric": {
+          "minLength": 1,
+          "title": "Metric",
+          "type": "string"
+        },
+        "threshold": {
+          "minLength": 1,
+          "title": "Threshold",
+          "type": "string"
+        },
+        "action": {
+          "minLength": 1,
+          "title": "Action",
+          "type": "string"
+        }
+      },
+      "required": [
+        "metric",
+        "threshold",
+        "action"
+      ],
+      "title": "ChangeMind",
+      "type": "object"
+    },
+    "Comparison": {
+      "additionalProperties": false,
+      "description": "Сравнение по пяти критериям, без суммы баллов.",
+      "properties": {
+        "effect": {
+          "$ref": "#/$defs/ForecastCell"
+        },
+        "cost": {
+          "$ref": "#/$defs/Cell"
+        },
+        "risk": {
+          "$ref": "#/$defs/Cell"
+        },
+        "first_signal": {
+          "$ref": "#/$defs/ForecastCell"
+        },
+        "reversibility": {
+          "$ref": "#/$defs/ReversibilityCell"
+        }
+      },
+      "required": [
+        "effect",
+        "cost",
+        "risk",
+        "first_signal",
+        "reversibility"
+      ],
+      "title": "Comparison",
+      "type": "object"
+    },
+    "Differs": {
+      "additionalProperties": false,
+      "description": "Чем вариант отличается от ближайшего: по какой оси, от какого и как.",
+      "properties": {
+        "axis": {
+          "enum": [
+            "аудитория",
+            "ценность",
+            "модель дохода"
+          ],
+          "title": "Axis",
+          "type": "string"
+        },
+        "from": {
+          "pattern": "^Вар-[1-9][0-9]*$",
+          "title": "From",
+          "type": "string"
+        },
+        "how": {
+          "minLength": 1,
+          "title": "How",
+          "type": "string"
+        }
+      },
+      "required": [
+        "axis",
+        "from",
+        "how"
+      ],
+      "title": "Differs",
+      "type": "object"
+    },
+    "ForecastCell": {
+      "additionalProperties": false,
+      "description": "Эффект и первый сигнал — прогнозы: с текстом идёт утверждение типа «прогноз».",
+      "properties": {
+        "text": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Text"
+        },
+        "why_empty": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Why Empty"
+        },
+        "forecast": {
+          "anyOf": [
+            {
+              "pattern": "^У-[1-9][0-9]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Forecast"
+        }
+      },
+      "title": "ForecastCell",
+      "type": "object"
+    },
+    "Objection": {
+      "additionalProperties": false,
+      "description": "Возражение: какое допущение бьёт, что должно оказаться правдой и на чём стоит.",
+      "properties": {
+        "hits_assumption": {
+          "minLength": 1,
+          "title": "Hits Assumption",
+          "type": "string"
+        },
+        "drops_if": {
+          "minLength": 1,
+          "title": "Drops If",
+          "type": "string"
+        },
+        "basis": {
+          "pattern": "^(У-[1-9][0-9]*|гипотеза)$",
+          "title": "Basis",
+          "type": "string"
+        }
+      },
+      "required": [
+        "hits_assumption",
+        "drops_if",
+        "basis"
+      ],
+      "title": "Objection",
+      "type": "object"
+    },
+    "Option": {
+      "additionalProperties": false,
+      "description": "Вариант `Вар-n`.",
+      "properties": {
+        "id": {
+          "pattern": "^Вар-[1-9][0-9]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "оставить как есть",
+            "закрыть направление",
+            "не запускать",
+            "активный"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "differs": {
+          "$ref": "#/$defs/Differs"
+        },
+        "main_assumption": {
+          "minLength": 1,
+          "title": "Main Assumption",
+          "type": "string"
+        },
+        "inaction_cost": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Цена бездействия, у «оставить как есть»",
+          "title": "Inaction Cost"
+        },
+        "return_condition": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Условие возврата, у «закрыть направление» и «не запускать»",
+          "title": "Return Condition"
+        },
+        "objections": {
+          "items": {
+            "$ref": "#/$defs/Objection"
+          },
+          "minItems": 2,
+          "title": "Objections",
+          "type": "array"
+        },
+        "comparison": {
+          "$ref": "#/$defs/Comparison"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "kind",
+        "differs",
+        "main_assumption",
+        "objections",
+        "comparison"
+      ],
+      "title": "Option",
+      "type": "object"
+    },
+    "Recommendation": {
+      "additionalProperties": false,
+      "description": "Рекомендация: вариант, основания, сильнейшее возражение против неё и что заставит передумать.",
+      "properties": {
+        "option": {
+          "pattern": "^Вар-[1-9][0-9]*$",
+          "title": "Option",
+          "type": "string"
+        },
+        "why": {
+          "minLength": 1,
+          "title": "Why",
+          "type": "string"
+        },
+        "claims": {
+          "items": {
+            "pattern": "^У-[1-9][0-9]*$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Claims",
+          "type": "array"
+        },
+        "strongest_objection": {
+          "minLength": 1,
+          "title": "Strongest Objection",
+          "type": "string"
+        },
+        "answer": {
+          "minLength": 1,
+          "title": "Answer",
+          "type": "string"
+        },
+        "change_mind": {
+          "items": {
+            "$ref": "#/$defs/ChangeMind"
+          },
+          "minItems": 1,
+          "title": "Change Mind",
+          "type": "array"
+        },
+        "loses_on": {
+          "description": "Критерий, по которому рекомендованный вариант проигрывает",
+          "enum": [
+            "эффект",
+            "затраты",
+            "риск",
+            "первый сигнал",
+            "обратимость"
+          ],
+          "title": "Loses On",
+          "type": "string"
+        }
+      },
+      "required": [
+        "option",
+        "why",
+        "claims",
+        "strongest_objection",
+        "answer",
+        "change_mind",
+        "loses_on"
+      ],
+      "title": "Recommendation",
+      "type": "object"
+    },
+    "ReversibilityCell": {
+      "additionalProperties": false,
+      "description": "Обратимость: с текстом нужны механизм, срок и цена отката.",
+      "properties": {
+        "text": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Text"
+        },
+        "why_empty": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Why Empty"
+        },
+        "what": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Механизм отката",
+          "title": "What"
+        },
+        "time": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Срок отката",
+          "title": "Time"
+        },
+        "price": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Цена отката",
+          "title": "Price"
+        }
+      },
+      "title": "ReversibilityCell",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Файл `options.yaml`: варианты и рекомендация. Пишет только CLI.",
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "options": {
+      "items": {
+        "$ref": "#/$defs/Option"
+      },
+      "title": "Options",
+      "type": "array"
+    },
+    "recommendation": {
+      "$ref": "#/$defs/Recommendation"
+    },
+    "chosen": {
+      "anyOf": [
+        {
+          "pattern": "^Вар-[1-9][0-9]*$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Выбор человека на В4; до ответа пусто",
+      "title": "Chosen"
+    }
+  },
+  "required": [
+    "schema_version",
+    "options",
+    "recommendation"
+  ],
+  "title": "OptionsFile",
+  "type": "object"
+}

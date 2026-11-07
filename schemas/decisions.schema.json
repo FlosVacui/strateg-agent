@@ -1,0 +1,233 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "Commitment": {
+      "additionalProperties": false,
+      "properties": {
+        "what": {
+          "minLength": 1,
+          "title": "What",
+          "type": "string"
+        },
+        "due": {
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+          "title": "Due",
+          "type": "string"
+        },
+        "owner": {
+          "minLength": 1,
+          "title": "Owner",
+          "type": "string"
+        }
+      },
+      "required": [
+        "what",
+        "due",
+        "owner"
+      ],
+      "title": "Commitment",
+      "type": "object"
+    },
+    "Decision": {
+      "additionalProperties": false,
+      "description": "Решение `Реш-n`.",
+      "properties": {
+        "id": {
+          "pattern": "^Реш-[1-9][0-9]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "option": {
+          "pattern": "^Вар-[1-9][0-9]*$",
+          "title": "Option",
+          "type": "string"
+        },
+        "basis": {
+          "description": "Утверждения-основания",
+          "items": {
+            "pattern": "^У-[1-9][0-9]*$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Basis",
+          "type": "array"
+        },
+        "rejected": {
+          "description": "Отвергнутые варианты",
+          "items": {
+            "pattern": "^Вар-[1-9][0-9]*$",
+            "type": "string"
+          },
+          "title": "Rejected",
+          "type": "array"
+        },
+        "assumptions": {
+          "description": "Принятые допущения",
+          "items": {
+            "pattern": "^У-[1-9][0-9]*$",
+            "type": "string"
+          },
+          "title": "Assumptions",
+          "type": "array"
+        },
+        "expected": {
+          "description": "Ожидаемое изменение",
+          "minLength": 1,
+          "title": "Expected",
+          "type": "string"
+        },
+        "owner": {
+          "minLength": 1,
+          "title": "Owner",
+          "type": "string"
+        },
+        "conditions": {
+          "items": {
+            "$ref": "#/$defs/DecisionCondition"
+          },
+          "minItems": 1,
+          "title": "Conditions",
+          "type": "array"
+        },
+        "review_date": {
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+          "title": "Review Date",
+          "type": "string"
+        },
+        "commitments": {
+          "items": {
+            "$ref": "#/$defs/Commitment"
+          },
+          "title": "Commitments",
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "действует",
+            "заменено",
+            "отменено"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "replaces": {
+          "anyOf": [
+            {
+              "pattern": "^Реш-[1-9][0-9]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Replaces"
+        },
+        "replaced_by": {
+          "anyOf": [
+            {
+              "pattern": "^Реш-[1-9][0-9]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Replaced By"
+        }
+      },
+      "required": [
+        "id",
+        "option",
+        "basis",
+        "expected",
+        "owner",
+        "conditions",
+        "review_date",
+        "status"
+      ],
+      "title": "Decision",
+      "type": "object"
+    },
+    "DecisionCondition": {
+      "additionalProperties": false,
+      "description": "Условие отказа: без порога и даты его не проверить.",
+      "properties": {
+        "metric": {
+          "minLength": 1,
+          "title": "Metric",
+          "type": "string"
+        },
+        "threshold": {
+          "minLength": 1,
+          "title": "Threshold",
+          "type": "string"
+        },
+        "date": {
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+          "title": "Date",
+          "type": "string"
+        },
+        "action": {
+          "minLength": 1,
+          "title": "Action",
+          "type": "string"
+        },
+        "origin": {
+          "enum": [
+            "передумаю, если",
+            "пре-мортем"
+          ],
+          "title": "Origin",
+          "type": "string"
+        },
+        "row": {
+          "anyOf": [
+            {
+              "pattern": "^ПП-[1-9][0-9]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Строка плана проверки, из порога которой взято условие; порог совпадает",
+          "title": "Row"
+        }
+      },
+      "required": [
+        "metric",
+        "threshold",
+        "date",
+        "action",
+        "origin"
+      ],
+      "title": "DecisionCondition",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Файл `decisions.yaml`: решения. Пишет только CLI.",
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "decisions": {
+      "items": {
+        "$ref": "#/$defs/Decision"
+      },
+      "title": "Decisions",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "decisions"
+  ],
+  "title": "DecisionsFile",
+  "type": "object"
+}

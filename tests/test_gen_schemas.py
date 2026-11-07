@@ -16,7 +16,7 @@ def test_committed_schemas_match_models():
     assert gen_schemas.find_problems(ROOT / "schemas") == []
 
 
-def test_one_schema_per_file_of_the_main_part():
+def test_one_schema_per_file_of_the_project():
     names = {p.name for p in (ROOT / "schemas").glob("*.schema.json")}
     assert names == {
         "state.schema.json",
@@ -24,6 +24,13 @@ def test_one_schema_per_file_of_the_main_part():
         "claims.schema.json",
         "journal-event.schema.json",
         "cost-record.schema.json",
+        "frame.schema.json",
+        "plan.schema.json",
+        "gaps.schema.json",
+        "options.schema.json",
+        "promises.schema.json",
+        "verification.schema.json",
+        "decisions.schema.json",
     }
 
 
