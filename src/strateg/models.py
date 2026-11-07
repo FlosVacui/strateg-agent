@@ -280,6 +280,7 @@ ThresholdText = Annotated[Text, AfterValidator(_check_has_digit)]
 WhyEmpty = Annotated[Text, AfterValidator(_check_why_empty)]
 
 Mode = Literal["пилот", "автопилот"]
+Profile = Literal["обычный", "экономнее", "глубже"]
 Step = Literal["1", "2а", "2б", "3", "4", "5", "6", "7", "8"]
 Gate = Literal["В1", "В2", "В3", "В4", "В5"]
 GateStatus = Literal["впереди", "ждут ответа", "отвечено", "пройдены автоматически"]
@@ -817,6 +818,8 @@ class JournalEvent(_Model):
     mode: Mode | None = Field(None, description="Для смены режима")
     role: Text | None = Field(None, description="Для выбора модели")
     model: Text | None = Field(None, description="Для выбора модели")
+    level: Text | None = Field(None, description="Для выбора модели: уровень (сильная, средняя, дешёвая)")
+    effort: Text | None = Field(None, description="Для выбора модели: effort роли")
     source: SourceId | None = Field(None, description="Для найденной инструкции в источнике")
     path: RelPath | None = Field(None, description="Для «изменено вне агента»")
 
@@ -846,6 +849,8 @@ class JournalEvent(_Model):
             p.append("у смены режима нет нового режима (mode)")
         if k == "выбор модели" and (self.role is None or self.model is None):
             p.append("у выбора модели нужны role и model")
+        if k != "выбор модели" and (self.level is not None or self.effort is not None):
+            p.append(f"level и effort бывают только у выбора модели, а не у «{k}»")
         if k == "найдена инструкция в источнике" and self.source is None:
             p.append("у найденной инструкции нет источника (source)")
         if k == "изменено вне агента" and self.path is None:
@@ -919,6 +924,9 @@ class ProjectState(_Model):
     gates: dict[Gate, GateStatus]
     budget: Budget
     region: Text | None = Field(None, description="Регион по умолчанию для fetch, например RU-MOW")
+    profile: Profile | None = Field(
+        None, description="Профиль выбора моделей (`strateg route --profile`); пусто — «обычный»"
+    )
     next_action: Text | None = Field(None, description="Что делать дальше")
     files: dict[RelPath, Sha256] = Field(
         default_factory=dict,
@@ -1508,6 +1516,73 @@ class DecisionsFile(_Model):
     decisions: list[Decision]
 
 
+# ---------------------------------------------------------------------------
+# completeness.yaml — итог проверки полноты (рубрика, ADR-0006)
+# ---------------------------------------------------------------------------
+
+CheckedBy = Literal["критик", "агент"]
+CompletenessResult = Literal["пройдено", "не пройдено"]
+RubricAnswer = Literal["да", "нет"]
+PartAId = Annotated[str, Field(pattern=r"^А-[1-9][0-9]*$")]
+PartBId = Annotated[str, Field(pattern=r"^Б-[1-9][0-9]*$")]
+
+
+class PartAResult(_Model):
+    """Результат признака части А: «да» или «нет» и, при «нет», что дополнить."""
+
+    id: PartAId
+    answer: RubricAnswer
+    message: Text | None = Field(
+        None, description="Что дополнить: файл, запись, раздел; есть только при «нет»"
+    )
+
+    @model_validator(mode="after")
+    def _rules(self) -> Self:
+        if self.answer == "нет" and self.message is None:
+            raise ValueError("у ответа «нет» нет сообщения (message): что дополнить")
+        if self.answer == "да" and self.message is not None:
+            raise ValueError("сообщение (message) бывает только у ответа «нет»")
+        return self
+
+
+class PartBAnswer(_Model):
+    """Ответ критика на вопрос части Б: `{id, answer, where, why}`."""
+
+    id: PartBId
+    answer: RubricAnswer
+    where: Text = Field(description="Файл и место")
+    why: Text = Field(description="Одна строка: почему такой ответ")
+
+
+class CompletenessFile(_Model):
+    """Файл `completeness.yaml`: итог проверки полноты по рубрике. Пишет только CLI."""
+
+    schema_version: SchemaVersion
+    step: Step = Field(description="Шаг, на котором проверяли")
+    checked_at: Time
+    by: CheckedBy = Field(description="«агент» — проверка не независимая")
+    part_a: list[PartAResult] = Field(description="Признаки части А, прогнанные кодом")
+    part_b: list[PartBAnswer] = Field(description="Ответы критика на вопросы части Б")
+    result: CompletenessResult = Field(description="Итог по pass_rule рубрики")
+    failed: list[str] = Field(default_factory=list, description="Номера признаков и вопросов с ответом «нет»")
+
+    @model_validator(mode="after")
+    def _rules(self) -> Self:
+        p: list[str] = []
+        ids = [r.id for r in self.part_a] + [r.id for r in self.part_b]
+        for dup in sorted({i for i in ids if ids.count(i) > 1}):
+            p.append(f"номер {dup} встречается больше одного раза")
+        no = [r.id for r in (*self.part_a, *self.part_b) if r.answer == "нет"]
+        if self.failed != no:
+            p.append(f"failed {self.failed} не совпадает с номерами ответов «нет» {no}")
+        if self.result == "пройдено" and any(r.answer == "нет" for r in self.part_a):
+            p.append("итог «пройдено», а в части А есть «нет»")
+        if self.result == "пройдено" and not self.part_b:
+            p.append("итог «пройдено» без ответов части Б")
+        _raise(p)
+        return self
+
+
 # Схемы, которые генерирует scripts/gen_schemas.py: имя файла без `.schema.json` -> модель.
 SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "state": ProjectState,
@@ -1522,4 +1597,5 @@ SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "promises": PromisesFile,
     "verification": VerificationFile,
     "decisions": DecisionsFile,
+    "completeness": CompletenessFile,
 }

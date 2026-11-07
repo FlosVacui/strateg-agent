@@ -31,6 +31,7 @@ def test_one_schema_per_file_of_the_project():
         "promises.schema.json",
         "verification.schema.json",
         "decisions.schema.json",
+        "completeness.schema.json",
     }
 
 

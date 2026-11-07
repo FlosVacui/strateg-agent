@@ -5,8 +5,8 @@
 ## Файлы
 | Файл | Формат | Кто пишет | Схема |
 |---|---|---|---|
-| `state.yaml` | YAML | только CLI | `state.schema.json` |
-| `journal.jsonl` | JSONL, только добавление | только CLI | `journal-event.schema.json` (строка) |
+| `state.yaml` | YAML; `profile` — профиль выбора моделей (`route --profile`) | только CLI | `state.schema.json` |
+| `journal.jsonl` | JSONL, только добавление; у «выбор модели» — `role`, `model`, `level`, `effort` | только CLI | `journal-event.schema.json` (строка) |
 | `cost.jsonl` | JSONL, только добавление | только CLI | `cost-record.schema.json` (строка) |
 | `sources.yaml` | YAML | только CLI | `sources.schema.json` |
 | `claims.yaml` | YAML | скиллы через CLI | `claims.schema.json` |
@@ -19,9 +19,10 @@
 | `promises.yaml` | YAML: «обещание → возможность → источник», `О-n` | только CLI | `promises.schema.json` |
 | `verification.yaml` | YAML: строки `ПП-n` (в том числе `from_change_mind`), `premortem`, `undesired_effects` | только CLI | `verification.schema.json` |
 | `decisions.yaml` | YAML: решения `Реш-n`; у условия отказа необязательная строка плана `row` | только CLI | `decisions.schema.json` |
-| `history/` | прежние версии: `history/frame.v1.yaml`, `history/outputs/options.v2.md` | CLI (`write`) | — |
+| `completeness.yaml` | YAML: итог проверки полноты — `by` (`критик` или `агент`), часть А, ответы части Б, `result`, `failed` | только CLI (`rubric record`) | `completeness.schema.json` |
+| `history/` | прежние версии: `history/frame.v1.yaml`, `history/outputs/options.v2.md` | CLI (`write`, `rubric record`) | — |
 
-Семь файлов выводов необязательны. Документы для чтения — Markdown в `outputs/`, в YAML — поля для проверок.
+Семь файлов выводов необязательны, `completeness.yaml` появляется на шаге 6. Документы для чтения — Markdown в `outputs/`, в YAML — поля для проверок.
 
 ## Общие правила
 - Ключи английские, snake_case; значения закрытых списков русские. В каждом файле и записи JSONL есть `schema_version` (сейчас 1). Неизвестные поля и повтор ключа YAML — ошибка. Несовместимое изменение поднимает `schema_version` и попадает в `CHANGELOG.md`.
@@ -46,6 +47,7 @@
 - Синтетики нет в показателе, пре-мортеме, `recommendation.claims` (там же хоть один факт), `metric_coverage[].claims`, `closed_by`, `decisions.basis`, `objections[].basis`. Отозванное или заменённое нельзя только в рекомендации и обещании.
 - Причина пре-мортема ведёт в строку «защитный»; условие решения с `row` — в существующую строку с тем же порогом; порог строки с `from_change_mind` равен порогу записи `recommendation.change_mind`.
 - `history/`: имена `<файл>.v<N>.<расширение>` (`.gitkeep` не в счёт); версии рамки 1…N−1, нехватка — одно сообщение, выше N−1 — ошибка; прежняя версия — рамка с тем же номером.
+- `completeness.yaml`: номера частей А и Б есть в рубрике, на все вопросы части Б есть ответ, `failed` — номера «нет», `result` равен выводу по `pass_rule`.
 - Источник с признаками закрытых данных нельзя цитировать без подтверждения человека: ошибка — снимок с `closed_markers` без `closed_confirmed`, материал с ПДн без `anonymization_confirmed`, изображение без `no_personal_data_confirmed`.
 - У отвеченного В1 есть `frame`, если есть `frame.yaml`; рамка последнего ответа на В1 совпадает с одной из версий рамки; метка `[О-n]` в `outputs/comms-strategy.md` ведёт на обещание. Замена: обратная ссылка, те же предмет, период, регион; циклов нет ни в заменах, ни в основаниях; у факта регион источника, источник не синтетика.
 - Журнал и состояние: «найдена инструкция» — у «подозрительного» источника и только у него; `state.step` — шаг последнего действия; статусы ворот — по последнему событию ворот; время событий не убывает.
@@ -69,7 +71,7 @@
 | Признак | Где в файлах |
 |---|---|
 | С-1: тип; у факта проверенная цитата; нет фактов из синтетики; издатель, вид, «о себе»; диапазон у прогноза, способ проверки у гипотезы | `claims[].type`, `quotes[].check`, `publisher`, `publisher_kind`, `self_reported`, `forecast_range`, `check_method` |
-| С-1, С-13: ворота, режим, вопросы, время; стоимость; бюджет; нет «изменено вне агента» | `journal`: `kind`, `gate`, `duration_s`; `cost.jsonl`; `state.yaml: budget`, `files` |
+| С-1, С-13: ворота, режим, вопросы, время; стоимость; бюджет; нет «изменено вне агента»; итог проверки полноты | `journal`: `kind`, `gate`, `duration_s`; `cost.jsonl`; `state.yaml: budget`, `files`; `completeness.yaml` |
 | С-2: действие не повторено; типы и статусы после продолжения те же | `journal`: `idempotency_hash`, `status`; `claims[].step`, `attempt`; `state.yaml`: `step`, `next_action` |
 | С-4, С-5: замена, отзыв, правка человека; прежний документ доступен | `status`, `status_history`, `replaces`, `replaced_by`, `origin: пользователь`, `kind: исправление`; `history/` |
 | С-7, С-8, С-10: синтетика не факт; место цитаты; обезличивание; закрытые данные; инструкция в источнике | `type`/`origin: синтетика`, `locator`, `anonymized`, `closed_markers`, `closed_confirmed`, `suspicious` |
