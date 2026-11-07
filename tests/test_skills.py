@@ -16,8 +16,8 @@ import pytest
 import yaml
 
 from strateg.cli import build_parser
-from strateg.models import Decision, Option, PremortemCause, Promise, Recommendation, VerificationRow
-from strateg.outputs import KINDS, validate
+from strateg.commands import GATES, STEP_NAMES, ClaimIn
+from strateg.outputs import KINDS, parse_input, validate
 from test_no_internal import FORBIDDEN, PATTERNS
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -52,6 +52,44 @@ CASE_STRINGS = (
     "тариф",
 )
 CASE_WORDS = ("Ева",)
+# Структура кейса: развилка, цепочка «пробел → возражение → показатель», формулировки рамки.
+CASE_PHRASES = (
+    "отдельной подпиской",
+    "включить в тарифы",
+    "включить защиту",
+    "после пробного периода",
+    "доля отключений",
+    "рост отключений",
+    "доработка самой услуги",
+    "рекомендация, которую можно защитить",
+    "защитимая рекомендация",
+)
+CASES = ROOT / "evals" / "cases"
+FIXTURE_PROJECT = ROOT / "tests" / "fixtures" / "project_valid"
+
+
+def squeeze(text: str) -> str:
+    """Текст без пробелов в тысячных разрядах: «1 499 ₽» и «1499 ₽» — одно и то же."""
+    return re.sub(r"(?<=\d)[ \u00a0](?=\d{3}(?!\d))", "", text)
+
+
+def case_prices() -> set[str]:
+    """Цены из карточки кейса и ориентиров судьи: числа перед знаком рубля."""
+    prices: set[str] = set()
+    for path in [*CASES.glob("*/card.yaml"), *CASES.glob("*/expected.md")]:
+        for m in re.finditer(r"(\d+)\s*(?:₽|руб)", squeeze(path.read_text(encoding="utf-8"))):
+            prices.add(m.group(1))
+    return prices
+
+
+def case_thresholds() -> set[str]:
+    """Пороги примера проекта, собранного по кейсу: их нельзя копировать в скиллы."""
+    found: set[str] = set()
+    for path in FIXTURE_PROJECT.glob("*.yaml"):
+        for m in re.finditer(r"threshold:\s*(.+)", path.read_text(encoding="utf-8")):
+            found.add(re.sub(r"\s+", "", m.group(1)).casefold())
+    return found
+
 
 # Файлы репозитория, на которые ссылаются тексты; шаблоны пишет другое задание, их пока нет.
 REPO_ROOTS = (".claude", "knowledge", "docs", "schemas", "config", "src", "scripts", "tests", "evals")
@@ -177,6 +215,10 @@ def _placeholder(inner: str) -> str:
         return "1"
     if inner.startswith("В") and "…" in inner:
         return "В1"
+    if inner == "шаг":
+        return "1"
+    if m := re.fullmatch(r"([А-Яа-я]+)-n", inner):
+        return f"{m.group(1)}-1"
     return "x"
 
 
@@ -218,14 +260,30 @@ def run_parser(argv: list[str]) -> tuple[int, str]:
     return 0, ""
 
 
+def bad_values(argv: list[str]) -> list[str]:
+    """Значения, которые argparse пропускает, а CLI отклонит: шаг вне списка, ворота вне В1–В5."""
+    problems = []
+    if argv[:2] in (["step", "start"], ["step", "done"], ["step", "fail"]) and argv[2] not in STEP_NAMES:
+        problems.append(f"шаг «{argv[2]}» не бывает")
+    if argv[:2] in (["gate", "open"], ["gate", "answer"]) and argv[2] not in GATES:
+        problems.append(f"ворота «{argv[2]}» не бывают")
+    if "--step" in argv and argv[argv.index("--step") + 1] not in STEP_NAMES:
+        problems.append(f"шаг «{argv[argv.index('--step') + 1]}» не бывает")
+    if "--plan-question" in argv and not re.fullmatch(r"ВП-\d+", argv[argv.index("--plan-question") + 1]):
+        problems.append("вопрос плана — вида ВП-1, буквы русские")
+    return problems
+
+
 @pytest.mark.parametrize("path", all_texts(), ids=rel)
 def test_commands_are_parsed_by_the_cli(path):
     full, mentions = find_commands(path.read_text(encoding="utf-8"))
     bad = []
     for command in full:
-        code, message = run_parser(normalize(command))
+        argv = normalize(command)
+        code, message = run_parser(argv)
         if code != 0:
             bad.append(f"{command} -> {message}")
+        bad.extend(f"{command} -> {problem}" for problem in bad_values(argv))
     for mention in mentions:
         code, _ = run_parser([*normalize(mention), "--help"])
         if code != 0:
@@ -247,6 +305,11 @@ def test_normalize_catches_a_broken_command():
     assert run_parser(normalize("uv run strateg claim revoke У-1 --by пользователь"))[0] != 0  # нет --reason
     assert run_parser(normalize("uv run strateg gate open <В1…В5> --questions <N>"))[0] == 0
     assert run_parser(normalize("uv run strateg mode <пилот|автопилот>"))[0] == 0
+    assert bad_values(normalize("uv run strateg gate open В7 --questions 1"))
+    assert bad_values(normalize("uv run strateg step start 9"))
+    assert bad_values(normalize("uv run strateg claim list --step zz"))
+    assert not bad_values(normalize("uv run strateg step done 2б --next 'x'"))
+    assert not bad_values(normalize("uv run strateg claim list --step 2б --plan-question ВП-<n>"))
 
 
 # ---------------------------------------------------------------------------
@@ -266,8 +329,6 @@ def test_skill_covers_its_steps_gates_and_files(name):
     for kind in kinds:
         assert re.search(rf"\b{kind}\b", text), f"{name}: не сказано, как записать «{kind}»"
     assert "uv run strateg write --file" in text, f"{name}: нет записи через write"
-    for needed in ("uv run strateg status --brief", "uv run strateg event error", "uv run strateg step fail"):
-        assert needed in text, f"{name}: нет «{needed}»"
 
 
 def test_frame_skill_follows_the_gate_order():
@@ -309,14 +370,7 @@ def test_research_skill_lists_all_five_metrics():
 # Примеры записи проходят проверку моделей
 # ---------------------------------------------------------------------------
 
-FRAGMENTS = {
-    "option": Option,
-    "recommendation": Recommendation,
-    "promise": Promise,
-    "row": VerificationRow,
-    "premortem": PremortemCause,
-    "decision": Decision,
-}
+CLAIM_TYPES = {"факт", "гипотеза", "прогноз", "допущение", "синтетика"}
 
 
 def yaml_examples() -> list[tuple[str, str, str]]:
@@ -330,28 +384,71 @@ def yaml_examples() -> list[tuple[str, str, str]]:
     return found
 
 
-def test_yaml_examples_pass_the_models():
-    checked: set[str] = set()
+def check_example(data) -> tuple[str, list[str]]:
+    """Вид примера и ошибки: вход `write` разбирает код CLI, утверждение — модель входа `claim add`."""
+    if isinstance(data, dict) and data and set(data) <= set(KINDS):
+        problems = []
+        try:
+            parsed = parse_input(data)
+        except Exception as exc:  # noqa: BLE001 - показываем причину целиком
+            return "write", [f"оболочка входа: {exc}"]
+        for kind, content in parsed.items():
+            _, errors = validate(KINDS[kind], content)
+            problems.extend(f"вид {kind}: {e}" for e in errors)
+        return "write", problems
+    items = data if isinstance(data, list) else [data]
+    if items and all(isinstance(i, dict) and "type" in i for i in items):
+        problems = []
+        for item in items:
+            try:
+                ClaimIn.model_validate(item)
+            except Exception as exc:  # noqa: BLE001
+                problems.append(f"утверждение: {exc}")
+        return "claim", problems
+    return "unknown", ["пример не вход write и не утверждение: поставь пометку `yaml fragment` или исправь"]
+
+
+def test_yaml_examples_pass_the_cli_models():
+    kinds: set[str] = set()
+    claim_types: set[str] = set()
     problems: list[str] = []
     for file, tag, body in yaml_examples():
+        if tag == "fragment":
+            continue
         data = yaml.safe_load(body)
-        if tag in FRAGMENTS:
-            items = data if isinstance(data, list) else [data]
-            for item in items:
-                try:
-                    FRAGMENTS[tag].model_validate(item, by_name=False)
-                except Exception as exc:  # noqa: BLE001 - показываем причину целиком
-                    problems.append(f"{file}: пример «{tag}»: {exc}")
-            checked.add(tag)
-        elif isinstance(data, dict) and data and set(data) <= set(KINDS):
-            for kind, content in data.items():
-                _, errors = validate(KINDS[kind], content)
-                problems.extend(f"{file}: вид {kind}: {e}" for e in errors)
-                checked.add(kind)
+        what, errors = check_example(data)
+        problems.extend(f"{file}: {e}" for e in errors)
+        if what == "write":
+            kinds |= set(data)
+        elif what == "claim":
+            claim_types |= {i["type"] for i in (data if isinstance(data, list) else [data])}
     assert not problems, "\n".join(problems)
-    # примеры не потерялись: проверено всё, что должно быть
-    assert {"frame", "plan", "gaps"} <= checked
-    assert set(FRAGMENTS) <= checked
+    # примеры не потерялись: образец полного входа есть у каждого вида, образец утверждения у каждого типа
+    assert kinds == set(KINDS), f"нет образца входа write для видов {sorted(set(KINDS) - kinds)}"
+    assert {"факт", "гипотеза", "прогноз", "допущение"} <= claim_types
+
+
+def test_example_checker_catches_broken_examples():
+    """Контроль самого теста: оболочка, тип и вложенность проверяются."""
+    assert check_example({"promises": [{"id": "О-1"}]})[1]  # список вместо набора полей
+    assert check_example({"frame": {"decision": "x"}})[1]  # поля рамки не по схеме
+    assert check_example([{"text": "x", "type": "fact", "subject": "y"}])[1]  # нет такого типа
+    assert check_example({"a": 1})[0] == "unknown"
+    assert not check_example(
+        {
+            "promises": {
+                "promises": [
+                    {
+                        "id": "О-1",
+                        "text": "x",
+                        "capability": "y",
+                        "conditions": "z",
+                        "status": "не подтверждено",
+                    }
+                ]
+            }
+        }
+    )[1]
 
 
 # ---------------------------------------------------------------------------
@@ -365,7 +462,36 @@ def test_no_case_strings(path):
     low = text.casefold()
     found = [s for s in CASE_STRINGS if s.casefold() in low]
     found += [w for w in CASE_WORDS if re.search(rf"(?<!\w){re.escape(w)}(?!\w)", text)]
-    assert not found, f"{rel(path)}: строки учебного кейса {found}"
+    found += [s for s in CASE_PHRASES if s.casefold() in low]
+    squeezed = squeeze(text)
+    found += [
+        f"{price} ₽" for price in sorted(case_prices()) if re.search(rf"(?<!\d){price}\s*(?:₽|руб)", squeezed)
+    ]
+    flat = re.sub(r"\s+", "", low)
+    found += [f"порог «{s}»" for s in sorted(case_thresholds()) if s in flat]
+    assert not found, f"{rel(path)}: строки, цены и пороги учебного кейса {found}"
+
+
+def test_case_lists_are_not_empty():
+    """Контроль самого теста: карточка кейса и пример проекта читаются, цены и пороги найдены."""
+    assert case_prices(), "в карточке кейса не нашлось цен: проверка чисел ничего не проверяет"
+    assert case_thresholds(), "в примере проекта не нашлось порогов"
+
+
+def test_phrase_table_lives_only_in_agents_md():
+    """Таблица фраз управления — только в AGENTS.md; скиллы ссылаются на неё."""
+    assert "| Фраза |" in AGENTS.read_text(encoding="utf-8")
+    for path in skill_files():
+        assert "| Фраза |" not in path.read_text(encoding="utf-8"), rel(path)
+
+
+def test_first_turn_summary_is_described_in_one_place():
+    """`status --brief` — первый ход нового чата: он в AGENTS.md и strateg, другие скиллы его не вызывают."""
+    for path in skill_files():
+        if path.parts[-2] == "strateg":
+            continue
+        assert "status --brief" not in path.read_text(encoding="utf-8"), rel(path)
+    assert "Второй вызов запрещён" in AGENTS.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("path", all_texts(), ids=rel)
