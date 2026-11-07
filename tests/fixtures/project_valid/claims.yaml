@@ -41,6 +41,17 @@ claims:
           similarity: 100
           snapshot_sha256: deb6df4405ae41f9142e96d68fd96b66a8ecab5c638f4d3d18ba03ef22e55a19
           checked_at: "2026-11-06T10:13:00+03:00"
+      - source: И-2
+        text: подписка «Защита» в Москве стоит 199 рублей в месяц
+        locator: стр. 1
+        publisher: компания «Пример-Аналитика»
+        publisher_kind: отраслевое исследование
+        self_reported: false
+        check:
+          method: точное вхождение
+          similarity: 100
+          snapshot_sha256: 46972da3ff07a4a3ed231c4e211af8fe100b43ce7e917ee463635aaf77152f56
+          checked_at: "2026-11-06T10:13:00+03:00"
     status: действует
     status_history:
       - status: действует
@@ -87,7 +98,7 @@ claims:
         check:
           method: без пробелов и дефисов
           similarity: 100
-          snapshot_sha256: 34326b0d65529a0332f93a344458e25ced1cda4c1f39cd96c4b9487068d088d4
+          snapshot_sha256: 46972da3ff07a4a3ed231c4e211af8fe100b43ce7e917ee463635aaf77152f56
           checked_at: "2026-11-06T10:18:00+03:00"
     status: действует
     status_history:

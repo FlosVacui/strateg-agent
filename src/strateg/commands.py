@@ -19,8 +19,10 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from strateg import __version__, outputs, safety
+from strateg import __version__, materials, outputs, safety
+from strateg import budget as budgetlib
 from strateg import fetch as fetchlib
+from strateg import pack as packlib
 from strateg import project as proj
 from strateg import quote as quotelib
 from strateg.models import (
@@ -935,11 +937,11 @@ def _pdf_quote(
     """Цитата PDF: страница всегда определяется по снимку; указанное место должно с ней совпасть."""
     hits = quotelib.pages_with_quote(q.text, text)
     if not hits:
-        spans = quotelib.check_quote(q.text, text)
+        spans = quotelib.check_quote(q.text, text, soft_wrap=True)
         reason = (
             "цитата идёт через границу страниц: цитируйте текст одной страницы"
             if spans
-            else quotelib.explain_miss(q.text, text)
+            else quotelib.explain_miss(q.text, text, soft_wrap=True)
         )
         errors.append(f"{where}: цитата не найдена целиком ни на одной странице PDF: {reason}")
         return None
@@ -975,6 +977,12 @@ def _build_quotes(p: Project, c: ClaimIn, label: str, errors: list[str]) -> list
             errors.append(
                 f"{where}: в источнике {src.id} найдены признаки закрытых данных, человек не подтвердил, "
                 f"что материал общедоступный (`strateg source confirm {src.id}`)"
+            )
+            continue
+        if src.anonymized and not src.anonymization_confirmed and src.path is not None:
+            errors.append(
+                f"{where}: в материале {src.id} найдены персональные данные, человек не подтвердил замены "
+                f"(`strateg add --confirm {src.id}`)"
             )
             continue
         if src.text_path is None or src.text_sha256 is None:
@@ -1614,6 +1622,237 @@ def cmd_event_error(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# add: материалы человека
+# ---------------------------------------------------------------------------
+
+
+def _source_ref(text: str) -> str:
+    value = text.strip()
+    if not re.fullmatch(r"И-[1-9][0-9]*", value):
+        raise UsageError(
+            f"номер источника «{value}» не подходит: нужен вид И-1 (буква русская){latin_hint(value)}"
+        )
+    return value
+
+
+def _add_data(p: Project, o: materials.Outcome) -> dict[str, Any]:
+    s, rep = o.source, o.report
+    return {
+        "source": s.id,
+        "kind": s.kind,
+        "duplicate": o.duplicate,
+        "path": s.path,
+        "text_path": s.text_path,
+        "snapshot_path": _snapshot_path(p, s),
+        "sha256": s.text_sha256,
+        "material_sha256": s.material_sha256,
+        "anonymized": list(s.anonymized),
+        "replacements": [{"label": r.label, "line": r.line} for r in (rep.replacements if rep else [])],
+        "names": [{"name": n, "line": line} for n, line in (rep.names if rep else [])],
+        "closed_markers": list(s.closed_markers),
+        "suspicious": s.suspicious,
+        "needs_confirmation": o.needs_confirm,
+        "moved": o.moved,
+        "warnings": o.warnings,
+    }
+
+
+def cmd_add(args: argparse.Namespace) -> int:
+    p = _open(args)
+    if args.confirm:
+        if args.path or args.kind:
+            raise UsageError("--confirm задаётся отдельно: `strateg add --confirm И-n`")
+        res = materials.confirm(p, _source_ref(args.confirm))
+        sid = res["source"]
+        if not res["changed"]:
+            return emit(args, res, [str(res["note"])])
+        lines = [
+            f"{sid}: подтверждено человеком."
+            if res.get("image")
+            else f"{sid}: замены подтверждены, в inputs/ остаётся обезличенная копия."
+        ]
+        if res["moved"]:
+            lines.append(f"Исходник перенесён в {res['moved']} — вне проекта и вне архива.")
+        if res["note"]:
+            lines.append(str(res["note"]))
+        return emit(args, res, lines)
+    if not args.path:
+        raise UsageError("укажите файл: `strateg add <путь>` или `strateg add --confirm И-n`")
+    outcome = materials.register(p, materials.resolve_material(p, args.path), args.kind)
+    s, rep = outcome.source, outcome.report
+    data = _add_data(p, outcome)
+    if outcome.duplicate:
+        lines = [f"{s.id}: этот файл уже зарегистрирован, повтор отдаёт прежний номер."]
+        lines += [f"Внимание: {w}" for w in outcome.warnings]
+        return emit(args, data, lines)
+    lines = [f"{s.id}: материал зарегистрирован ({s.kind})."]
+    if s.text_path:
+        lines.append(f"Текст: {data['snapshot_path']}")
+    elif s.kind == "изображение":
+        lines.append("Текста нет: изображение модель видит напрямую.")
+    if rep is not None and rep.replacements:
+        lines.append(
+            f"Заменено в обезличенной копии: {len(rep.replacements)} ({', '.join(s.anonymized)}). "
+            "Исходник убран из inputs/ в .tmp/ проекта и в работу не идёт."
+        )
+        for r in rep.replacements[:30]:
+            lines.append(f"  строка {r.line}: {r.label} — «{materials.line_context(rep.text, r.line)}»")
+        if len(rep.replacements) > 30:
+            lines.append(f"  … и ещё {len(rep.replacements) - 30}")
+    elif materials.NAME_CATEGORY in s.anonymized:
+        lines.append(
+            "В имени файла найдены персональные данные: текст записан под нейтральным именем. "
+            "Исходник убран из inputs/ в .tmp/ проекта и в работу не идёт."
+        )
+    lines += [f"Внимание: {w}" for w in outcome.warnings]
+    return emit(args, data, lines)
+
+
+# ---------------------------------------------------------------------------
+# budget set, budget check
+# ---------------------------------------------------------------------------
+
+
+def _warn_share() -> float:
+    """Доля бюджета для предупреждения; нет файла настроек — 0,8, статус не должен из-за этого падать."""
+    try:
+        return budgetlib.load_defaults().budget.warn_share
+    except CliError:
+        return 0.8
+
+
+def _positive(name: str, value: float | None) -> float | None:
+    if value is None:
+        return None
+    if not (math.isfinite(value) and value > 0):
+        raise UsageError(f"{name} должно быть конечным числом больше нуля")
+    return value
+
+
+def cmd_budget_set(args: argparse.Namespace) -> int:
+    p = _open(args)
+    usd = _positive("--usd", args.usd)
+    minutes = _positive("--minutes", args.minutes)
+    if usd is None and minutes is None:
+        raise UsageError("укажите --usd и/или --minutes: новый лимит денег и времени работы агента")
+    b = p.state.budget
+    changes: list[str] = []
+    if usd is not None and usd != b.limit_usd:
+        was = "без лимита" if b.limit_usd is None else _usd(b.limit_usd)
+        changes.append(f"деньги {was} -> {_usd(usd)}")
+    if minutes is not None and minutes != b.limit_minutes:
+        changes.append(f"время {b.limit_minutes:g} -> {minutes:g} мин")
+    if not changes:
+        return emit(
+            args,
+            {"changed": False, "budget": budgetlib.as_dict(budgetlib.measure(p), _warn_share())},
+            ["Бюджет уже такой, ничего не изменено."],
+        )
+    message = "бюджет изменён: " + "; ".join(changes)
+    with proj.transaction(p.root):
+        if usd is not None:
+            b.limit_usd = usd
+        if minutes is not None:
+            b.limit_minutes = minutes
+        p.add_event(p.event(kind="бюджет", message=message))
+        if (p.state.next_action or "").startswith("Внеплановая остановка"):
+            p.state.next_action = (
+                "Бюджет изменён человеком; продолжить работу с шага, на котором остановились"
+            )
+        _refresh_budget(p)
+        p.save_state()
+    view = budgetlib.as_dict(budgetlib.measure(p), _warn_share())
+    return emit(
+        args,
+        {"changed": True, "message": message, "budget": view},
+        [message[0].upper() + message[1:] + ".", "Бюджет: " + view["text"]],
+    )
+
+
+def cmd_budget_check(args: argparse.Namespace) -> int:
+    """Код 0 — действие можно, код 1 — бюджет исчерпан (деньги или время); отказ — событие «бюджет»."""
+    p = _open(args)
+    action = (args.action or "").strip() or None
+    release = budgetlib.is_release(action)
+    defaults = budgetlib.load_defaults().budget if release else None
+    m = budgetlib.measure(p)
+    reasons = budgetlib.exhausted_reasons(m, reserve=defaults.release_reserve if defaults else None)
+    view = budgetlib.as_dict(m, _warn_share())
+    what = f"«{action}»" if action else "действие"
+    if not reasons:
+        data = {"allowed": True, "action": action, "reserve": release, "budget": view}
+        lines = [f"Бюджет позволяет {what}: " + view["text"] + "."]
+        if view["warning"]:
+            lines.append("Внимание: " + view["warning"] + ".")
+        return emit(args, data, lines)
+
+    reason = " и ".join(reasons)
+    spent_usd = "неизвестно" if m.spent_usd is None else _usd(m.spent_usd)
+    limit_usd = "без лимита" if m.limit_usd is None else _usd(m.limit_usd)
+    summary = (
+        f"деньги: потрачено {spent_usd} из {limit_usd}; "
+        f"время: {_num(m.spent_minutes)} из {m.limit_minutes:g} мин"
+    )
+    head = f"бюджет исчерпан ({reason}), отказ в действии {what}:"
+    message = f"{head} {summary}"
+    # Один отказ по одной причине, пока лимит не менялся: числа в тексте растут и не сравниваются,
+    # а событие «бюджет изменён» (и любое другое событие вида «бюджет») начинает счёт заново.
+    last = next((e for e in reversed(p.journal) if e.kind == "бюджет"), None)
+    if not (last is not None and (last.message or "").startswith(head)):
+        with proj.transaction(p.root):
+            p.add_event(p.event(kind="бюджет", message=message))
+            p.save_state()
+    options = (
+        "Варианты: добавить бюджет (`strateg budget set --usd <число> --minutes <число>`), сузить задачу или "
+        "выпустить то, что есть, с пометкой о неполноте (`strateg budget check --action выпуск`)."
+    )
+    if getattr(args, "json", False):
+        data = {
+            "ok": False,
+            "allowed": False,
+            "action": action,
+            "reason": reason,
+            "budget": view,
+            "error": message,
+        }
+        print(json.dumps(data, ensure_ascii=False))
+        return 1
+    return fail(
+        args, CliError(f"бюджет исчерпан ({reason}): действие {what} не выполнять", [summary, options])
+    )
+
+
+# ---------------------------------------------------------------------------
+# pack
+# ---------------------------------------------------------------------------
+
+
+def cmd_pack(args: argparse.Namespace) -> int:
+    root = proj.resolve_project(getattr(args, "project", None))
+    packed = packlib.pack(root, Path(args.out) if args.out else None)
+    scanner = {
+        packlib.GITLEAKS_USED: "gitleaks использован",
+        packlib.GITLEAKS_MISSING: "gitleaks не найден: только встроенные шаблоны",
+        packlib.GITLEAKS_FAILED: "gitleaks не отработал: только встроенные шаблоны",
+    }[packed.gitleaks]
+    return emit(
+        args,
+        {
+            "archive": str(packed.archive),
+            "files": packed.files,
+            "bytes": packed.bytes,
+            "gitleaks": packed.gitleaks,
+        },
+        [
+            f"Проект {root.name} упакован: {packed.archive}",
+            f"Файлов: {packed.files}, размер: {max(packed.bytes // 1024, 1)} КБ.",
+            "В архиве нет .tmp/, кэша fetch и исходников с персональными данными.",
+            f"Секретов не найдено: встроенные шаблоны, {scanner}.",
+        ],
+    )
+
+
+# ---------------------------------------------------------------------------
 # check, cost, status
 # ---------------------------------------------------------------------------
 
@@ -1747,6 +1986,16 @@ def _status_data(p: Project) -> dict[str, Any]:
         "cost_precision": precision,
         "cost_complete": complete,
         "limit_usd": p.state.budget.limit_usd,
+        "budget": budgetlib.as_dict(budgetlib.measure(p), _warn_share()),
+        "pending_confirmation": [
+            s.id
+            for s in p.sources.sources
+            if s.path is not None
+            and (
+                (s.anonymized and not s.anonymization_confirmed)
+                or (s.kind == "изображение" and not s.no_personal_data_confirmed)
+            )
+        ],
         "next_action": nxt,
     }
 
@@ -1765,6 +2014,8 @@ def status_line(d: dict[str, Any]) -> str:
     elif limit is not None:
         parts.append("стоимость: нет данных")
     parts.append(f"{round(d['work_minutes'])} из {d['limit_minutes']:g} мин")
+    if d["budget"]["warning"]:
+        parts.append(d["budget"]["warning"])
     return " · ".join(parts)
 
 
@@ -1838,6 +2089,9 @@ def _brief(args: argparse.Namespace, p: Project, *, peek: bool) -> int:
     if peek and changed:
         lines.append("Сводка без записи (--peek): событие «изменено вне агента» запишет следующая команда.")
     lines.append(
+        "Бюджет: " + d["budget"]["text"] + (f" ({d['budget']['warning']})" if d["budget"]["warning"] else "")
+    )
+    lines.append(
         "Файлы выхода: " + (", ".join(f"{k}{frame_note if k == 'frame' else ''}" for k in present) or "нет")
     )
     data = {
@@ -1854,6 +2108,7 @@ def _brief(args: argparse.Namespace, p: Project, *, peek: bool) -> int:
         "outputs": present,
         "frame_version": frame_version,
         "frame_draft": "frame" in present and not outputs.b1_answered(p.journal),
+        "budget": d["budget"],
     }
     return emit(args, data, lines)
 
@@ -1889,7 +2144,15 @@ def cmd_status(args: argparse.Namespace) -> int:
         + (f", недоступны: {d['sources']['unavailable']}" if d["sources"]["unavailable"] else ""),
         f"Утверждения: {d['claims']['active']} действуют" + (f" ({types})" if types else ""),
         f"Время работы: {_num(d['work_minutes'])} из {d['limit_minutes']:g} мин{running} · стоимость: {cost}",
+        "Бюджет: " + d["budget"]["text"],
     ]
+    if d["budget"]["warning"]:
+        lines.append("Внимание: " + d["budget"]["warning"])
+    if d["pending_confirmation"]:
+        lines.append(
+            "Внимание: материалы ждут подтверждения человека (`strateg add --confirm`): "
+            + ", ".join(d["pending_confirmation"])
+        )
     if d["sources"]["suspicious"]:
         lines.append(
             "Внимание: источники с пометкой «подозрительный»: " + ", ".join(d["sources"]["suspicious"])

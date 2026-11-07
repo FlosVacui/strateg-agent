@@ -328,7 +328,7 @@ def test_retry_with_other_claim_field_is_refused_not_dropped(started, cli, tmp_p
     ("quote_change", "field"),
     [
         ({"publisher_kind": "СМИ"}, "publisher_kind"),
-        ({"self_reported": False}, "self_reported"),
+        ({"self_reported": True}, "self_reported"),
         ({"publisher": "другая компания"}, "publisher"),
         ({"locator": "раздел 2"}, "locator"),
     ],

@@ -17,7 +17,7 @@ def test_doc_fits_two_screens():
 
 def test_doc_says_what_is_left_for_the_next_package():
     assert "сверка чисел и отрицаний" in DOC
-    assert "пересчёт нечёткого сходства" in DOC
+    assert "нечётк" not in DOC  # нечёткого пути проверки цитаты больше нет
     assert "команды CLI" in DOC
     assert "09.11" not in DOC
 
@@ -51,3 +51,8 @@ def test_doc_describes_the_rules_the_main_part_lacked():
         assert f"`{field}`" in DOC, field
     for number in ("ВП-n", "П-n", "Вар-n", "О-n", "ПП-n", "Реш-n"):
         assert number in DOC, number
+
+
+def test_doc_keeps_the_rule_that_an_incompatible_change_goes_to_the_changelog():
+    rule = next(line for line in DOC.splitlines() if "schema_version" in line and "Несовместимое" in line)
+    assert "поднимает `schema_version`" in rule and "`CHANGELOG.md`" in rule

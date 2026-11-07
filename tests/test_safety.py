@@ -59,3 +59,135 @@ def test_normal_text_is_not_marked_as_instruction():
 
 def test_clean_text_has_lf_and_no_control_chars():
     assert safety.clean_text("a\r\nb\x00\r\n\r\n\r\n\r\nc  \n") == "a\nb\n\nc\n"
+
+
+def test_capitalized_closed_marker_is_found_but_dsp_only_in_capitals():
+    assert (
+        "для служебного пользования"
+        in safety.inspect_text("Для служебного пользования. Цена 249.").closed_markers
+    )
+    assert "для служебного пользования" in safety.inspect_text("Документ ДСП, экз. 1").closed_markers
+    assert safety.inspect_text("Пишем дсп в нижнем регистре").closed_markers == []
+
+
+# --- материалы человека: номера с контрольными суммами, имена -------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("digits", "ok"),
+    [("500100732259", True), ("500100732258", False), ("7707083893", True), ("7707083894", False)],
+)
+def test_inn_check_sums(digits, ok):
+    assert safety.inn_ok(digits) is ok
+
+
+@pytest.mark.parametrize(
+    ("digits", "ok"), [("11223344595", True), ("11223344596", False), ("112233445", False)]
+)
+def test_snils_check_sums(digits, ok):
+    assert safety.snils_ok(digits) is ok
+
+
+@pytest.mark.parametrize(
+    ("digits", "ok"),
+    [
+        ("4111111111111111", True),
+        ("5555555555554444", True),
+        ("4111111111111112", False),
+        ("1234567890123456", False),
+    ],
+)
+def test_luhn_check_sums(digits, ok):
+    assert safety.luhn_ok(digits) is ok
+
+
+def test_mask_personal_replaces_only_valid_numbers_and_reports_lines():
+    text = (
+        "ИНН 500100732259\nСНИЛС 112-233-445 95, карта 4111 1111 1111 1111\n"
+        "ИНН орг. 7707083893, тел. 8-800-555-35-35"
+    )
+    masked, replacements, categories = safety.mask_personal(text)
+    assert masked.splitlines() == [
+        "ИНН [ИНН]",
+        "СНИЛС [СНИЛС], карта [карта]",
+        "ИНН орг. 7707083893, тел. 8-800-555-35-35",
+    ]
+    assert [(r.label, r.line) for r in replacements] == [("[ИНН]", 1), ("[СНИЛС]", 2), ("[карта]", 2)]
+    assert categories == ["номера документов и карт"]
+
+
+def test_org_inn_and_hotline_are_not_taken_for_another_number():
+    # 8-800 без разделителей — тоже 11 цифр, которые могли бы пройти как СНИЛС
+    masked, replacements, _ = safety.mask_personal("звоните 88005553535, ИНН 7707083893")
+    assert masked == "звоните 88005553535, ИНН 7707083893" and replacements == []
+
+
+def test_find_names_uses_the_dictionary_and_only_warns():
+    names = dict(
+        safety.find_names("Иванов Иван Петрович живёт в Москве.\nПодписка Базовый тариф. Роза ветров.")
+    )
+    assert {"Иванов", "Иван", "Петрович", "Роза"} <= set(names) and "Москве" not in names
+    assert names["Роза"] == 2
+    assert safety.find_names("подписка стоит 199 рублей") == []
+
+
+_EN = "\N{EN DASH}"
+_NBH = "\N{NON-BREAKING HYPHEN}"
+
+
+@pytest.mark.parametrize(
+    "number",
+    [
+        "79051234567",
+        "7 905 123 45 67",
+        "7-905-123-45-67",
+        f"8 (905) 123{_EN}45{_EN}67",
+        f"8 (905) 123{_NBH}45{_NBH}67",
+        f"+7 905 123{_EN}45{_EN}67",
+        f"(495) 123{_EN}45{_EN}67",
+    ],
+)
+def test_raw_phone_records_are_replaced(number):
+    rep = safety.inspect_material(f"Клиент {number}, ждём звонка")
+    assert rep.text.strip() == "Клиент [телефон], ждём звонка"
+    assert rep.anonymized == ["телефоны"]
+
+
+@pytest.mark.parametrize("text", ["сумма 7 100 000 00 00", "79 000 000 рублей", "71234567890 шт"])
+def test_long_numbers_that_are_not_phones_stay(text):
+    assert safety.inspect_material(text).replacements == []
+
+
+def _with_luhn(prefix: str) -> str:
+    """Число с верной суммой Луна: к началу дописывается контрольная цифра."""
+    for check in "0123456789":
+        if safety.luhn_ok(prefix + check):
+            return prefix + check
+    raise AssertionError(prefix)
+
+
+@pytest.mark.parametrize("prefix", ["1234567890123", "7000000012345678", "9876543210123456"])
+def test_plain_digits_with_luhn_sum_but_not_a_payment_card_are_not_replaced(prefix):
+    number = _with_luhn(prefix)  # штрихкод, номер отправления: первая цифра не 2–6
+    assert safety.mask_personal(f"Отправление {number} в пути")[1] == []
+
+
+@pytest.mark.parametrize("prefix", ["411111111111111", "5555555555554", "2200123456789012"])
+def test_plain_payment_card_numbers_are_still_replaced(prefix):
+    number = _with_luhn(prefix)
+    masked, replacements, _ = safety.mask_personal(f"Карта {number}")
+    assert masked == "Карта [карта]" and len(replacements) == 1
+
+
+def test_grouped_card_number_is_replaced_whatever_the_first_digit():
+    number = _with_luhn("100000000000000")
+    grouped = " ".join(number[i : i + 4] for i in range(0, 16, 4))
+    assert safety.mask_personal(f"Карта {grouped}")[0] == "Карта [карта]"
+
+
+def test_what_the_detector_does_not_find_is_written_in_the_readme_and_is_true():
+    from pathlib import Path
+
+    readme = (Path(__file__).resolve().parent.parent / "README.md").read_text(encoding="utf-8")
+    assert "ИНН, записанный с пробелами по группам" in readme and "телефон из десяти цифр без" in readme
+    assert safety.mask_personal("ИНН 500 100 732 259 и 9161234567")[1] == []

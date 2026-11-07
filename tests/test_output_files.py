@@ -653,7 +653,7 @@ def test_other_references_may_use_replaced_claim(project):
 
 
 def test_confirmed_promise_without_facts_is_rejected(project):
-    edit_yaml(project, "promises.yaml", lambda d: d["promises"][0].update(claims=[]))
+    edit_yaml(project, "promises.yaml", lambda d: d["promises"][0].update(claims=[], status="подтверждено"))
     assert_error(project, "promises.yaml", "запись О-1 (№1)", "«подтверждено» без фактов")
     edit_yaml(project, "promises.yaml", lambda d: d["promises"][0].update(status="подтверждено частично"))
     assert_error(project, "promises.yaml", "О-1", "«подтверждено частично» без фактов")

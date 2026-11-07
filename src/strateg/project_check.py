@@ -340,6 +340,16 @@ def _check_sources_files(root: Path, sources: SourcesFile, errors: list[str]) ->
                 f"{label}: найдены признаки закрытых данных, но человек не подтвердил, "
                 "что материал общедоступный"
             )
+        if s.anonymized and not s.anonymization_confirmed and s.path is not None:
+            errors.append(
+                f"{label}: в материале найдены персональные данные ({', '.join(s.anonymized)}), "
+                "человек не подтвердил замены: `strateg add --confirm " + s.id + "`"
+            )
+        if s.kind == "изображение" and not s.no_personal_data_confirmed:
+            errors.append(
+                f"{label}: человек не подтвердил, что на изображении нет персональных данных: "
+                "`strateg add --confirm " + s.id + "`"
+            )
         if s.path is not None and not (root / s.path).is_file():
             errors.append(f"{label}, поле path: файл {s.path} не найден")
         if s.text_path is None:
@@ -460,15 +470,10 @@ def _check_claims(root: Path, sources: SourcesFile, claims: ClaimsFile, errors: 
                 )
             if src.kind in LOCATOR_KINDS and q.locator is None:
                 err(f"{where}: у цитаты из источника вида «{src.kind}» нет места (locator)")
-            # Запись проверки перепроверяется по тексту снимка. «Нечёткое» сходство пересчитывает
-            # `claim add` при записи цитаты: здесь только порог из модели.
+            # Запись проверки перепроверяется по тексту снимка.
             if q.check is not None and q.check.snapshot_sha256 == src.text_sha256:
                 text = _snapshot_text(root, src, snapshots)
-                if (
-                    text is not None
-                    and q.check.method != "нечёткое"
-                    and not quote_in_snapshot(q.check.method, q.text, text)
-                ):
+                if text is not None and not quote_in_snapshot(q.check.method, q.text, text):
                     err(
                         f"{where}: цитата не найдена в снимке {src.id} ({src.text_path}) способом "
                         f"«{q.check.method}»; запись проверки текстом снимка не подтверждается"
@@ -591,6 +596,22 @@ class _Claims:
         c = self.by_id.get(ref) if self.by_id is not None else None
         return c.type if c else None
 
+    def only_self_reported(self, refs: list[str]) -> list[str] | None:
+        """Факты среди `refs`, если они все — заявления издателя о себе; иначе (есть независимый или
+        вовсе нет фактов) None.
+
+        Независимый факт — тот, у которого хотя бы одна проверенная цитата из источника не «о себе»
+        (`self_reported: false`).
+        """
+        if self.by_id is None:
+            return None
+        facts = [self.by_id[r] for r in refs if r in self.by_id and self.by_id[r].type == "факт"]
+        if not facts:
+            return None
+        if any(q.self_reported is False for c in facts for q in c.quotes if q.check is not None):
+            return None
+        return [c.id for c in facts]
+
     def ref(
         self,
         where: str,
@@ -691,9 +712,76 @@ def _check_outputs(
         _check_decisions(dec, cl, opt_reg, ver_reg, ver, errors)
     if plan is not None and claims is not None:
         _check_plan_questions(claims, plan_reg, errors)
+    _check_text_refs(
+        (
+            (FRAME_FILE, (), frame),
+            (PLAN_FILE, ("questions",), plan),
+            (GAPS_FILE, ("gaps", "metric_coverage"), gaps),
+            (OPTIONS_FILE, ("options",), opts),
+            (PROMISES_FILE, ("promises",), prom),
+            (VERIFICATION_FILE, ("rows", "premortem", "undesired_effects"), ver),
+            (DECISIONS_FILE, ("decisions",), dec),
+        ),
+        cl,
+        gap_reg,
+        opt_reg,
+        errors,
+    )
     _check_promise_marks(root, prom_ok, prom, errors)
     _check_history(root, frame, errors)
     return frame_ok, frame
+
+
+# Номера в свободном тексте: «закроем П-9», «как в Вар-2», «см. У-14». Не путать с «ВП-2» и «ПП-3»:
+# перед буквой не должно быть слова или дефиса.
+_TEXT_REF = re.compile(r"(?<![\w-])(Вар|П|У)-([1-9][0-9]*)(?!\d)")
+_ONLY_REF = re.compile(r"(?:Вар|ВП|ПП|Реш|[ПУО])-[1-9][0-9]*")
+
+
+def _strings(value: Any, path: tuple[Any, ...]) -> Iterable[tuple[tuple[Any, ...], str]]:
+    if isinstance(value, str):
+        yield path, value
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield from _strings(item, (*path, key))
+    elif isinstance(value, list):
+        for i, item in enumerate(value):
+            yield from _strings(item, (*path, i))
+
+
+def _check_text_refs(
+    files: Iterable[tuple[str, tuple[str, ...], BaseModel | None]],
+    cl: _Claims,
+    gap_reg: _Registry,
+    opt_reg: _Registry,
+    errors: list[str],
+) -> None:
+    """Номера `П-n`, `У-n` и `Вар-n` в текстовых полях файлов выхода сверяются с реестрами, как ссылки
+    в полях-ссылках. Поле, в котором стоит только номер, — ссылка: её сверяют правила своего поля."""
+    for file, sections, model in files:
+        if model is None:
+            continue
+        raw = model.model_dump(mode="json", by_alias=True, exclude_none=True)
+        for path, text in _strings(raw, ()):
+            if _ONLY_REF.fullmatch(text.strip()):
+                continue
+            if len(path) >= 2 and path[0] in sections and isinstance(path[1], int):
+                where = _record_label(file, sections, str(path[0]), raw, path[1])
+                field = _where(path[2:])
+            else:
+                where, field = file, _where(path)
+            for letter, number in dict.fromkeys(_TEXT_REF.findall(text)):
+                ref = f"{letter}-{number}"
+                head = f"{where}, поле {field}: в тексте названо {ref}"
+                if letter == "У":
+                    if cl.by_id is not None and ref not in cl.by_id:
+                        errors.append(f"{head}, такого утверждения нет в реестре")
+                    continue
+                reg = gap_reg if letter == "П" else opt_reg
+                if not reg.exists:
+                    errors.append(f"{head}, но файла {reg.file} нет")
+                elif reg.ids is not None and ref not in reg.ids:
+                    errors.append(f"{head}, такого номера нет в {reg.file}")
 
 
 def _check_plan(plan: PlanFile, gap_reg: _Registry, errors: list[str]) -> None:
@@ -763,6 +851,14 @@ def _check_options(opts: OptionsFile, cl: _Claims, errors: list[str]) -> None:
             f"{where}, поле claims: среди оснований нет ни одного факта; рекомендация не держится "
             "только на прогнозах, гипотезах и допущениях"
         )
+    only_self = cl.only_self_reported(rec.claims)
+    if only_self:
+        errors.append(
+            f"{where}, поле claims: рекомендация держится только на заявлении компании о себе: факты "
+            f"{', '.join(only_self)} взяты из источников, где издатель пишет о себе или своём продукте "
+            "(self_reported: true); добавьте факт из независимого источника (отчёт регулятора, "
+            "исследование, отзывы пользователей) или честно назовите это пробелом"
+        )
     if opts.chosen:
         own.check(errors, OPTIONS_FILE, "chosen", opts.chosen)
 
@@ -773,6 +869,14 @@ def _check_promises(prom: PromisesFile, cl: _Claims, errors: list[str]) -> None:
         where = f"{PROMISES_FILE}, запись {p.id} (№{n})"
         for ref in p.claims:
             cl.ref(where, "claims", ref, type_="факт", live_for="обещание")
+        only_self = cl.only_self_reported(p.claims) if p.status == "подтверждено" else None
+        if only_self:
+            errors.append(
+                f"{where}, поле claims: обещание {p.id} со статусом «подтверждено» держится только на "
+                f"заявлении компании о себе: факты {', '.join(only_self)} взяты из источников, где издатель "
+                "пишет о себе или своём продукте (self_reported: true); добавьте факт из независимого "
+                "источника или понизьте статус до «подтверждено частично» или «не подтверждено»"
+            )
 
 
 def _threshold_key(text: str) -> str:

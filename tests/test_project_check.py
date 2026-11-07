@@ -107,11 +107,16 @@ def test_project_without_folder():
 
 
 def test_fact_without_quote(project):
-    edit_yaml(project, "claims.yaml", lambda d: claim(d, "У-2")["quotes"][0].pop("check"))
+    def change(d):
+        for q in claim(d, "У-2")["quotes"]:  # у У-2 две цитаты: страница компании и отчёт
+            q.pop("check")
+
+    edit_yaml(project, "claims.yaml", change)
     assert_error(project, "claims.yaml", "У-2", "факт без проверенной цитаты")
 
 
 def test_fact_from_synthetic(project):
+    edit_yaml(project, "claims.yaml", lambda d: claim(d, "У-2")["quotes"].pop())  # остаётся цитата И-1
     edit_yaml(project, "sources.yaml", lambda d: d["sources"][0].update(kind="синтетика"))
     assert_error(project, "claims.yaml", "У-2", "факт из синтетики")
 
@@ -144,27 +149,6 @@ def test_replacement_with_other_region(project):
 def test_replacement_needs_back_reference(project):
     edit_yaml(project, "claims.yaml", lambda d: claim(d, "У-2").pop("replaces"))
     assert_error(project, "claims.yaml", "У-1", "обратной ссылки")
-
-
-def test_fuzzy_check_on_short_quote(project):
-    def change(d):
-        q = claim(d, "У-4")["quotes"][0]
-        q["text"] = "вырастет с 12 до 15–17"
-        q["check"]["method"] = "нечёткое"
-        q["check"]["similarity"] = 96.0
-
-    edit_yaml(project, "claims.yaml", change)
-    assert_error(project, "claims.yaml", "У-4", "quotes[0]", "короче 40 знаков")
-
-
-def test_fuzzy_check_on_long_quote_is_fine(project):
-    def change(d):
-        q = claim(d, "У-4")["quotes"][0]
-        q["check"]["method"] = "нечёткое"
-        q["check"]["similarity"] = 96.0
-
-    edit_yaml(project, "claims.yaml", change)
-    assert errors_of(project) == []
 
 
 def test_quote_from_missing_source(project):
@@ -344,7 +328,7 @@ def test_original_material_missing(project):
 
 def test_anonymized_material_needs_confirmation(project):
     edit_yaml(project, "sources.yaml", lambda d: d["sources"][1].update(anonymized=["телефоны"]))
-    assert_error(project, "И-2", "не подтвердил обезличенную копию")
+    assert_error(project, "И-2", "найдены персональные данные", "не подтвердил замены", "add --confirm И-2")
 
 
 def test_closed_markers_need_confirmation(project):
@@ -361,7 +345,7 @@ def test_image_needs_no_personal_data_confirmation(project):
         d["sources"].append(image)
 
     edit_yaml(project, "sources.yaml", change)
-    assert_error(project, "И-3", "персональных данных на нём нет")
+    assert_error(project, "И-3", "на изображении нет персональных данных", "add --confirm И-3")
     edit_yaml(project, "sources.yaml", lambda d: d["sources"][2].update(no_personal_data_confirmed=True))
     assert errors_of(project) == []
 
@@ -378,6 +362,8 @@ def test_independent_primary_sources_counts_publishers(project):
     from strateg.models import ClaimsFile
 
     data = yaml.safe_load((FIXTURE / "claims.yaml").read_text(encoding="utf-8"))
+    assert independent_primary_sources(ClaimsFile.model_validate(data).claims[1]) == 2  # компания и отчёт
+    data["claims"][1]["quotes"].pop()
     cl = ClaimsFile.model_validate(data).claims[1]
     assert independent_primary_sources(cl) == 1
     second = dict(data["claims"][1]["quotes"][0], publisher="  Компания «ПРИМЕР» ")
@@ -397,7 +383,7 @@ def _set_quote(d: dict[str, Any], cid: str = "У-2", **fields: Any) -> None:
     quote["check"].update(check)
 
 
-@pytest.mark.parametrize("method", ["без пробелов и дефисов", "нечёткое"])
+@pytest.mark.parametrize("method", ["без пробелов и дефисов"])
 def test_short_quote_passes_only_by_exact_match(project, method):
     edit_yaml(
         project,
@@ -417,28 +403,17 @@ def test_quote_absent_from_snapshot_is_rejected(project):
     assert_error(project, "claims.yaml", "У-2", "quotes[0]", "не найдена в снимке И-1", "точное вхождение")
 
 
-def test_exact_method_requires_similarity_100(project):
-    edit_yaml(project, "claims.yaml", lambda d: _set_quote(d, check={"similarity": 3}))
-    assert_error(project, "claims.yaml", "У-2", "quotes[0].check", "требует сходства 100")
-
-
-def test_fuzzy_method_requires_threshold(project):
+def test_fuzzy_method_is_gone(project):
     def change(d):
-        _set_quote(d, "У-4", check={"method": "нечёткое", "similarity": 40})
-
-    edit_yaml(project, "claims.yaml", change)
-    assert_error(project, "claims.yaml", "У-4", "ниже порога 93")
-
-
-def test_fuzzy_similarity_is_not_recomputed_here(project):
-    """Пересчёт нечёткого сходства — в `quote check`: проект проверяет только порог в записи."""
-
-    def change(d):
-        _set_quote(d, "У-4", text="в течение года вырастет с 12 до 15–17 процентов, это опечатка!")
         _set_quote(d, "У-4", check={"method": "нечёткое", "similarity": 95})
 
     edit_yaml(project, "claims.yaml", change)
-    assert errors_of(project) == []
+    assert_error(project, "claims.yaml", "У-4", "quotes[0].check.method", "нечёткое")
+
+
+def test_exact_method_requires_similarity_100(project):
+    edit_yaml(project, "claims.yaml", lambda d: _set_quote(d, check={"similarity": 3}))
+    assert_error(project, "claims.yaml", "У-2", "quotes[0].check", "требует сходства 100")
 
 
 def test_exact_method_does_not_accept_text_found_only_without_spaces(project):

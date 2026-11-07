@@ -47,7 +47,6 @@ from strateg.project_check import (
 ACTIVE_FILE = ".active"
 PROJECTS_ENV = "STRATEG_PROJECTS_DIR"  # где лежат проекты (по умолчанию — projects/ репозитория)
 PROJECT_ENV = "STRATEG_PROJECT"  # активный проект: номер или путь к папке
-DEFAULT_LIMIT_MINUTES = 60
 SUBFOLDERS = ("inputs", "sources", "outputs", ".tmp")  # .tmp: временные файлы агента, вне проверки
 CACHE_DIR = ".cache"
 
@@ -334,9 +333,12 @@ class Project:
 
 
 def create_project(project_id: str, mode: str, region: str | None) -> Project:
+    from strateg.budget import load_defaults  # импорт здесь: budget импортирует этот модуль
+
     root = projects_root() / check_project_id(project_id)
     if root.exists():
         raise CliError(f"проект {project_id} уже существует: {root.name}")
+    defaults = load_defaults().budget
     root.mkdir(parents=True)
     for name in SUBFOLDERS:
         (root / name).mkdir()
@@ -346,7 +348,7 @@ def create_project(project_id: str, mode: str, region: str | None) -> Project:
         mode=mode,  # type: ignore[arg-type]
         step="1",
         gates={"В1": "впереди", "В2": "впереди", "В3": "впереди", "В4": "впереди", "В5": "впереди"},
-        budget=Budget(limit_minutes=DEFAULT_LIMIT_MINUTES, spent_minutes=0),
+        budget=Budget(limit_usd=defaults.usd, limit_minutes=defaults.minutes, spent_minutes=0),
         region=region,
         next_action="Принять запрос и начать шаг 1: `strateg step start 1`",
     )

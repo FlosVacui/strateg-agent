@@ -1,10 +1,10 @@
-"""Проверка цитаты: способы по порядку, граница чисел, числа и отрицания в нечётком окне."""
+"""Проверка цитаты: способы по порядку, граница слов, чисел и блоков, отрицания рядом с цитатой."""
+
+from pathlib import Path
 
 import pytest
-from rapidfuzz import fuzz
 
 from strateg import quote
-from strateg.models import FUZZY_THRESHOLD, normalize_quote
 
 SNAPSHOT = (
     "Стоимость подписки в Москве — 199 рублей в месяц. Первые семь дней после подключения услуга "
@@ -25,35 +25,29 @@ def test_without_spaces_and_hyphens():
     assert found == quote.QuoteMatch("без пробелов и дефисов", 100.0)
 
 
-def test_fuzzy_accepts_typo_in_long_quote():
+def test_there_is_no_fuzzy_path():
+    """Нечёткого совпадения нет: на пробе в 52 цитатах живых PDF оно не понадобилось ни разу."""
     q = "после подключения услуга предостовляется бесплатно, затем списывается абонентская плата"
-    found = quote.check_quote(q, SNAPSHOT)
-    assert found is not None and found.method == "нечёткое"
-    assert found.similarity >= FUZZY_THRESHOLD
+    assert quote.check_quote(q, SNAPSHOT) is None  # опечатка в слове
+    assert "такого текста в снимке нет" in quote.explain_miss(q, SNAPSHOT)
+    changed = "Стоимость подписки в Москве — 149 рублей в месяц. Первые семь дней после подключения услуга"
+    assert quote.check_quote(changed, SNAPSHOT) is None  # подменённая цифра
+    inserted = "Услуга не работает на всех тарифах оператора и подключается в личном кабинете за минуту"
+    assert quote.check_quote(inserted, SNAPSHOT) is None  # вставленное «не»
+    assert not hasattr(quote, "fuzz")
+    pyproject = (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text(encoding="utf-8")
+    assert "rapidfuzz" not in pyproject
 
 
-def test_fuzzy_rejects_changed_number():
-    q = "Стоимость подписки в Москве — 149 рублей в месяц. Первые семь дней после подключения услуга"
-    score = fuzz.partial_ratio_alignment(normalize_quote(q), normalize_quote(SNAPSHOT)).score
-    assert score >= FUZZY_THRESHOLD, "один порог подмену цифры не ловит"
-    assert quote.check_quote(q, SNAPSHOT) is None
-    assert "числа, отрицания или слова" in quote.explain_miss(q, SNAPSHOT)
+def test_short_quote_is_checked_only_by_exact_match():
+    snapshot = "Услуга предоставляется бесплатно."
+    assert quote.check_quote("предоставляется бесплатно", snapshot) is not None
+    # перенос слова с дефисом допустим только для цитаты от 40 знаков
+    assert quote.check_quote("предостав-ляется бес-платно", snapshot) is None
+    assert "короче 40" in quote.explain_miss("предостав-ляется бес-платно", snapshot)
 
 
-@pytest.mark.parametrize(
-    "q",
-    [
-        "Услуга не работает на всех тарифах оператора и подключается в личном кабинете за минуту",
-        "Подписка включает страхование от финансовых потерь, а только предупреждает абонента",
-    ],
-)
-def test_fuzzy_rejects_inserted_and_dropped_negation(q):
-    score = fuzz.partial_ratio_alignment(normalize_quote(q), normalize_quote(SNAPSHOT)).score
-    assert score >= FUZZY_THRESHOLD, "один порог отрицание не ловит"
-    assert quote.check_quote(q, SNAPSHOT) is None
-
-
-def test_short_quote_with_typo_is_not_checked_fuzzily():
+def test_short_quote_with_typo_is_not_found():
     text = "Подписка помогает отсеивать звонки"
     assert quote.check_quote("Подписка помогвет отсеивать", text) is None
     assert "короче 40" in quote.explain_miss("Подписка помогвет отсеивать", text)
@@ -74,7 +68,7 @@ def test_number_must_not_be_part_of_another_number(q, text):
     assert quote.check_quote(q, text) is None
 
 
-def test_number_boundary_holds_for_long_quote_in_fuzzy_stage():
+def test_number_boundary_holds_for_long_quote():
     text = "Цена 199 рублей в месяц. Первые семь дней после подключения услуга бесплатна для всех."
     q = "99 рублей в месяц. Первые семь дней после подключения услуга бесплатна для всех."
     assert quote.check_quote(q, text) is None
@@ -179,43 +173,53 @@ def test_quote_at_word_boundaries_is_accepted():
 
 
 def test_compact_view_keeps_words_and_digits_apart():
-    assert quote.check_quote("предостав-ляется бес-платно", "услуга предоставляется бесплатно") is not None
-    assert quote.check_quote("ляется бес-платно", "услуга предоставляется бесплатно") is None
-    assert quote.check_quote("5 10 минут", "разговоров на 5-10 минут") is not None
+    text = "Первые семь дней услуга предоставляется бесплатно, затем списывается абонентская плата."
+    assert quote.check_quote("услуга предостав-ляется бес-платно, затем списывается", text) is not None
+    assert quote.check_quote("ляется бес-платно, затем списывается абонентская плата", text) is None
+    long = "Разговоров на 5-10 минут в день хватает большинству абонентов оператора"
+    assert (
+        quote.check_quote("Разговоров на 5 10 минут в день хватает большинству абонентов", long) is not None
+    )
+    assert quote.check_quote("Разговоров на 510 минут в день хватает большинству абонентов", long) is None
 
 
-@pytest.mark.parametrize(
-    ("a", "b", "ok"),
-    [
-        ("предостовляется", "предоставляется", True),
-        ("предоставляеться", "предоставляется", False),  # лишний знак: иначе «включена» и «выключена»
-        ("платно", "бесплатно", False),
-        ("возможно", "невозможно", False),
-        ("доступна", "недоступна", False),
-        ("антивирус", "вирус", False),
-        ("нет", "net", False),
-        ("199", "149", False),
-        ("тариф", "тарив", False),  # опечатка на краю слова не допускается
-    ],
+# --- границы блоков: отрицание не переходит через строку ---
+
+HEADED = (
+    "Тарифы\nНет скрытых платежей и комиссий при подключении услуги\nНе рекомендуется\nПодписка бесплатна"
 )
-def test_fuzzy_allows_only_typos_inside_a_word(a, b, ok):
-    assert quote._typo(a, b) is ok
 
 
-def test_fuzzy_allows_typo_but_not_added_or_dropped_word():
-    text = "после подключения услуга предоставляется бесплатно, затем списывается абонентская плата."
-    ok = "после подключения услуга предостовляется бесплатно, затем списывается абонентская плата"
-    assert quote.check_quote(ok, text) is not None
-    bad = "после подключения услуга не предоставляется бесплатно, затем списывается абонентская плата"
-    assert quote.check_quote(bad, text) is None
-    dropped = "после подключения услуга предостовляется бесплатно, затем списывается плата"
-    assert quote.check_quote(dropped, text) is None  # пропущено слово «абонентская»
+def test_heading_is_not_refused_for_negation_in_the_next_block():
+    # «Нет…» в начале следующей строки — другой блок, а не отрицание заголовка
+    assert quote.check_quote("Тарифы", HEADED) is not None
+    assert (
+        quote.check_quote("Подписка бесплатна", HEADED) is not None
+    )  # «Не рекомендуется» выше — другой блок
 
 
-def test_fuzzy_allows_extra_text_at_the_edges():
-    text = "Внимание. " + SNAPSHOT.splitlines()[0] + " Подробности на сайте."
-    q = "после подключения услуга предостовляется бесплатно, затем списывается абонентская плата"
-    assert quote.check_quote(q, text) is not None
+def test_negation_in_the_same_line_is_still_refused():
+    line = "Тарифы нет скрытых платежей\nДругая строка"
+    assert quote.check_quote("Тарифы", line) is None
+    assert "отрицание" in quote.explain_miss("Тарифы", line)
+    assert quote.check_quote("скрытых платежей", line) is None  # «нет» слева в той же строке
+    assert quote.check_quote("нет скрытых платежей", line) is not None
+
+
+def test_block_boundary_also_cuts_the_left_side_and_numbers_keep_their_rules():
+    text = "Не включено\nПодписка 199 рублей"
+    assert quote.check_quote("Подписка 199 рублей", text) is not None
+    assert quote.check_quote("99 рублей", text) is None
+
+
+def test_pdf_lines_are_soft_wraps_so_negation_on_the_next_line_still_counts():
+    page = "[стр. 1]\nУслуга доступна всем абонентам\nне только корпоративным"
+    assert quote.pages_with_quote("Услуга доступна всем абонентам", page) == []
+    # в тексте не из PDF та же пара строк — два блока
+    assert quote.check_quote("Услуга доступна всем абонентам", "Услуга доступна всем абонентам\nне только")
+    # пустая строка в PDF — граница блока
+    spaced = "[стр. 1]\nЗаголовок раздела\n\nНет скрытых платежей"
+    assert quote.pages_with_quote("Заголовок раздела", spaced)
 
 
 CHANGED_MEANING = [
@@ -257,7 +261,7 @@ CHANGED_MEANING = [
 
 
 @pytest.mark.parametrize(("snapshot", "q"), CHANGED_MEANING)
-def test_fuzzy_rejects_lost_unit_or_added_qualifier(snapshot, q):
+def test_lost_unit_or_added_qualifier_is_not_found(snapshot, q):
     assert quote.check_quote(q, snapshot) is None
 
 
@@ -388,34 +392,10 @@ def test_quote_may_stop_on_number_at_end_of_sentence():
     assert quote.check_quote("Цена на тариф составляет 249", snapshot) is not None
 
 
-def test_fuzzy_compares_sign_of_number():
+def test_sign_of_number_is_compared():
     snapshot = "Изменение абонентской платы за год составило -5 % для всех действующих абонентов"
     q = "Изменение абонентской плвты за год составило 5 % для всех действующих абонентов"
     assert quote.check_quote(q, snapshot) is None
-
-
-def test_fuzzy_checks_negation_at_the_edges_of_the_place():
-    q = "абонентская плвта списывается ежемесячно со счёта абонента"
-    assert quote.check_quote(q, "Абонентская плата списывается ежемесячно со счёта абонента.") is not None
-    assert quote.check_quote(q, "Не абонентская плата списывается ежемесячно со счёта абонента.") is None
-    assert (
-        quote.check_quote(q, "Абонентская плата списывается ежемесячно со счёта абонента не будет.") is None
-    )
-
-
-@pytest.mark.parametrize(
-    ("a", "b", "ok"),
-    [
-        ("тарифа", "тарфиа", False),  # перестановка — две замены, для короткого слова это много
-        ("предоставляется", "предостовляется", True),
-        ("предоставляется", "предостовлеется", True),  # две замены в длинном слове
-        ("предоставляется", "предостовлеотся", False),  # три замены
-        ("плата", "плвта", True),  # пять знаков — ещё слово
-        ("план", "плен", False),  # четыре знака — уже нет
-    ],
-)
-def test_typo_limits(a, b, ok):
-    assert quote._typo(a, b) is ok
 
 
 @pytest.mark.parametrize(
@@ -455,3 +435,13 @@ def test_turn_of_phrase_is_not_a_negation(text):
         else "ущерб за год превысил 600 млрд руб"
     )
     assert quote.check_quote(q, text) is not None
+
+
+def test_hard_wrapped_note_hides_the_negation_on_the_next_line_and_this_is_documented():
+    # Ограничение блока «строка» для заметок: оборванную перед «не» цитату проверка принимает.
+    snapshot = "Услуга предоставляется бесплатно\nне для всех клиентов, а только для новых."
+    assert quote.check_quote("Услуга предоставляется бесплатно", snapshot) is not None
+    assert quote.check_quote("Услуга предоставляется бесплатно", snapshot, soft_wrap=True) is None
+    assert "жёстким переносом" in (quote.norm_blocks.__doc__ or "")
+    readme = (Path(__file__).resolve().parent.parent / "README.md").read_text(encoding="utf-8")
+    assert "жёстко переносит строки" in readme and "отрицание на следующей строке не видно" in readme
