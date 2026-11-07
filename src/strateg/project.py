@@ -14,7 +14,7 @@ import hashlib
 import json
 import os
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -227,6 +227,10 @@ class Project:
     claims: ClaimsFile
     journal: list[JournalEvent] = field(default_factory=list)
     costs: list[CostRecord] = field(default_factory=list)
+    # Расхождения файлов с `state.files` на момент открытия проекта: (файл, что не так).
+    # Событие «изменено вне агента» по ним пишет первое `save_state` команды.
+    outside: list[tuple[str, str]] = field(default_factory=list)
+    _outside_written: bool = False
 
     @property
     def id(self) -> str:
@@ -239,7 +243,7 @@ class Project:
     @classmethod
     def load(cls, root: Path) -> Project:
         try:
-            return cls(
+            project = cls(
                 root=root,
                 state=ProjectState.model_validate(read_yaml(root / STATE_FILE)),
                 sources=SourcesFile.model_validate(read_yaml(root / SOURCES_FILE)),
@@ -253,9 +257,39 @@ class Project:
                 "файлы проекта не читаются, исправьте ошибки и повторите",
                 errors or [str(type(exc).__name__)],
             ) from exc
+        project.outside = project.find_outside_changes()
+        return project
 
     # --- запись ---
+    def find_outside_changes(self) -> list[tuple[str, str]]:
+        """Файлы, изменённые не командой CLI: хеш не совпал с `state.files`, файл удалён или файл выхода
+        лежит в папке, а в `state.files` его нет."""
+        found: list[tuple[str, str]] = []
+        for rel, recorded in sorted(self.state.files.items()):
+            path = self.root / rel
+            if not path.is_file():
+                found.append((rel, "файл удалён"))
+            elif sha256_bytes(path.read_bytes()) != recorded:
+                found.append((rel, "хеш файла не совпал с записанным"))
+        found += [
+            (rel, "файл есть, а его хеша в state.yaml нет")
+            for rel in OUTPUT_FILES
+            if rel not in self.state.files and (self.root / rel).is_file()
+        ]
+        return found
+
+    def record_outside_changes(self) -> None:
+        """Пишет «изменено вне агента» по одному событию на файл, один раз за команду."""
+        if self._outside_written:
+            return
+        self._outside_written = True
+        for rel, why in self.outside:
+            self.add_event(self.event(kind="изменено вне агента", path=rel, message=f"{rel}: {why}"))
+
     def save_state(self) -> None:
+        # Хеши пересчитываются целиком, поэтому правку человека сначала записываем в журнал:
+        # иначе любая команда молча приняла бы её за свою.
+        self.record_outside_changes()
         self.state.files = self._hashes()
         write_text(self.root / STATE_FILE, dump_yaml(self.state))
 
@@ -356,13 +390,36 @@ def _tracked_files(root: Path) -> list[Path]:
     return files
 
 
+def _drop_empty_history(root: Path, *, keep_root: bool) -> None:
+    """Убирает пустые папки в `history/`, которые остались после отката (саму папку — если её не было)."""
+    history = root / HISTORY_DIR
+    if not history.is_dir():
+        return
+    for folder in sorted((p for p in history.rglob("*") if p.is_dir()), reverse=True):
+        with contextlib.suppress(OSError):
+            folder.rmdir()  # непустая папка не удаляется
+    if not keep_root:
+        with contextlib.suppress(OSError):
+            history.rmdir()
+
+
 @contextlib.contextmanager
-def transaction(root: Path, *, rollback: bool = True) -> Iterator[None]:
+def transaction(
+    root: Path,
+    *,
+    rollback: bool = True,
+    tolerate: Callable[[str], bool] | None = None,
+    block: Callable[[str], bool] | None = None,
+) -> Iterator[None]:
     """Изменения внутри блока откатываются при исключении и при новых ошибках проверки проекта.
 
     С `rollback=False` откатывается только исключение; новые ошибки проверки сообщает сам вызывающий код.
+    `tolerate` называет новые ошибки, которые откат не вызывают (команда сама поправит их следующей записью);
+    `block` называет ошибки, которые вызывают откат, даже если были до записи.
+    После отката папка такая же, как до блока: новые файлы и пустые папки в `history/` убраны.
     """
     before = {p: (p.read_bytes() if p.is_file() else None) for p in _tracked_files(root)}
+    history_existed = (root / HISTORY_DIR).is_dir()
     baseline = set(check_project(root))
 
     def restore() -> None:
@@ -376,6 +433,7 @@ def transaction(root: Path, *, rollback: bool = True) -> Iterator[None]:
                 tmp = p.with_name(p.name + ".tmp")
                 tmp.write_bytes(data)
                 os.replace(tmp, p)
+        _drop_empty_history(root, keep_root=history_existed)
 
     try:
         yield
@@ -383,7 +441,11 @@ def transaction(root: Path, *, rollback: bool = True) -> Iterator[None]:
         restore()
         raise
     if rollback:
-        new = [e for e in check_project(root) if e not in baseline]
+        new = [
+            e
+            for e in check_project(root)
+            if (e not in baseline or (block and block(e))) and not (tolerate and tolerate(e))
+        ]
         if new:
             restore()
             raise CliError("проверка проекта нашла ошибки, изменения не записаны", new)

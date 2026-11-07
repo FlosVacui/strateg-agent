@@ -8,7 +8,7 @@ import httpx
 import pytest
 import yaml
 
-from helpers import PUBLISHER, URL, claims_of, fact, open_fixture, write_claims
+from helpers import PUBLISHER, URL, claims_of, fact, open_fixture, put_frame, write_claims
 from pdf_builder import make_pdf
 from strateg import fetch, safety
 from strateg import project as proj
@@ -412,6 +412,7 @@ def test_status_line_counts_the_running_step(cli, clock):
     clock.advance(5 * 60)
     assert cli("status", "--line")[1].strip().endswith("5 из 60 мин")
     cli("gate", "open", "В1", "--questions", "1")
+    put_frame(cli)
     clock.advance(20 * 60)  # ожидание ответа не в счёт
     assert cli("status", "--line")[1].strip().endswith("5 из 60 мин")
     cli("gate", "answer", "В1", "--answer", "ок")

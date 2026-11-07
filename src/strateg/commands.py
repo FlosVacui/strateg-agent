@@ -19,7 +19,7 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from strateg import __version__, safety
+from strateg import __version__, outputs, safety
 from strateg import fetch as fetchlib
 from strateg import project as proj
 from strateg import quote as quotelib
@@ -33,6 +33,8 @@ from strateg.models import (
     Dispute,
     FetchInfo,
     ForecastRange,
+    FrameBody,
+    FrameFile,
     GateEvent,
     JournalEvent,
     Origin,
@@ -43,11 +45,21 @@ from strateg.models import (
     StatusChange,
     Step,
     Text,
+    latin_hint,
     norm,
 )
 from strateg.models import Source as SourceModel
 from strateg.project import CliError, Project, UsageError
-from strateg.project_check import _explain, _where, check_project
+from strateg.project_check import (
+    _PLAN_LIKE,
+    _PLAN_REF,
+    FRAME_FILE,
+    STALE_REF_NOTE,
+    _explain,
+    _where,
+    check_project,
+    frame_key,
+)
 
 STEP_NAMES = {
     "1": "Постановка",
@@ -320,6 +332,7 @@ def cmd_gate_answer(args: argparse.Namespace) -> int:
             f"ворота {gate} не ждут ответа (статус: {status}): "
             f"откройте их командой `strateg gate open {gate} --questions N`"
         )
+    frame = _current_frame(p) if gate == "В1" else None  # рамка, на которую отвечает человек
     with proj.transaction(p.root):
         answered = proj.now()
         p.add_event(
@@ -333,12 +346,28 @@ def cmd_gate_answer(args: argparse.Namespace) -> int:
                     opened_at=opened.opened_at,
                     answered_at=max(answered, opened.opened_at),
                     answer=answer,
+                    frame=frame,
                 ),
             )
         )
         p.state.gates[gate] = "отвечено"  # type: ignore[index]
         p.save_state()
     return emit(args, {"gate": gate, "status": "отвечено"}, [f"Ответ на ворота {gate} записан."])
+
+
+def _current_frame(p: Project) -> FrameBody:
+    """Рамка из `frame.yaml` для события ответа на В1; рамки нет или она не по схеме — отказ."""
+    path = p.root / FRAME_FILE
+    if not path.is_file():
+        raise CliError(
+            f"рамки нет: ответ на В1 хранит рамку, а {FRAME_FILE} не записан; "
+            "запишите черновик рамки командой `strateg write --file <файл>` (вид frame) и повторите"
+        )
+    try:
+        frame = FrameFile.model_validate(proj.read_yaml(path), by_name=False)
+    except ValidationError as exc:
+        raise CliError(f"{FRAME_FILE} не по схеме, ответ на В1 не записан", _format(FRAME_FILE, exc)) from exc
+    return FrameBody.model_validate(frame_key(frame))
 
 
 def cmd_mode(args: argparse.Namespace) -> int:
@@ -807,11 +836,11 @@ def _read_input(path: str) -> Any:
     try:
         return yaml.safe_load(raw.decode("utf-8-sig"))
     except UnicodeDecodeError as exc:
-        raise CliError("файл с утверждениями не в кодировке UTF-8") from exc
+        raise CliError("входной файл не в кодировке UTF-8") from exc
     except yaml.YAMLError as exc:
         mark = getattr(exc, "problem_mark", None)
         where = f" (строка {mark.line + 1})" if mark else ""
-        raise CliError(f"файл с утверждениями не читается как YAML или JSON{where}") from exc
+        raise CliError(f"входной файл не читается как YAML или JSON{where}") from exc
 
 
 def claim_key(
@@ -1030,6 +1059,60 @@ def _build_quotes(p: Project, c: ClaimIn, label: str, errors: list[str]) -> list
     return out
 
 
+def _make_claim(
+    p: Project,
+    c: ClaimIn,
+    label: str,
+    cid: str,
+    known_ids: set[str],
+    errors: list[str],
+    *,
+    attempt: int,
+    by: str = "агент",
+    replaces: str | None = None,
+) -> Claim | None:
+    """Новое утверждение из входа с теми же проверками для `claim add` и `claim replace`.
+
+    Ошибки дописываются в `errors`; при ошибке возвращается None.
+    """
+    before = len(errors)
+    for ref in c.basis:
+        if ref not in known_ids:
+            errors.append(f"{label}, поле basis: утверждения {ref} нет в реестре")
+    if c.dispute is not None and c.dispute.claim not in known_ids:
+        errors.append(f"{label}, поле dispute: утверждения {c.dispute.claim} нет в реестре")
+    quotes = _build_quotes(p, c, label, errors)
+    if len(errors) > before:
+        return None
+    suspicious_sources = {s.id for s in p.sources.sources if s.suspicious}
+    try:
+        return Claim(
+            id=cid,
+            text=c.text,
+            type=c.type,
+            origin=_default_origin(c),  # type: ignore[arg-type]
+            subject=c.subject,
+            period=c.period,
+            region=c.region,
+            basis=c.basis,
+            check_method=c.check_method,
+            forecast_range=c.forecast_range,
+            taken_from=c.taken_from,
+            quotes=quotes,
+            suspicious=any(q.source in suspicious_sources for q in quotes),
+            status="действует",
+            status_history=[StatusChange(status="действует", at=proj.now(), by=by)],  # type: ignore[arg-type]
+            replaces=replaces,
+            plan_question=c.plan_question,
+            dispute=Dispute(claim=c.dispute.claim, reason=c.dispute.reason) if c.dispute else None,
+            step=c.step or p.state.step,
+            attempt=attempt,
+        )
+    except ValidationError as exc:
+        errors.extend(_format(label, exc))
+        return None
+
+
 def cmd_claim_add(args: argparse.Namespace) -> int:
     p = _open(args)
     raw = _read_input(args.file)
@@ -1056,7 +1139,6 @@ def cmd_claim_add(args: argparse.Namespace) -> int:
     new_claims: list[tuple[Claim, str]] = []
     batch_keys: dict[str, str] = {}
     next_no = max((int(c.id.split("-")[1]) for c in p.claims.claims), default=0) + 1
-    suspicious_sources = {s.id for s in p.sources.sources if s.suspicious}
     attempt = max(_attempts(p, p.state.step), 1)
     for c, label in prepared:
         key = _key_of_input(c)
@@ -1072,41 +1154,10 @@ def cmd_claim_add(args: argparse.Namespace) -> int:
             else:
                 results.append({"id": cid, "duplicate": True, "type": c.type})
             continue
-        before = len(errors)
-        known_ids = {x.id for x in p.claims.claims} | set(batch_keys.values())
-        for ref in c.basis:
-            if ref not in known_ids:
-                errors.append(f"{label}, поле basis: утверждения {ref} нет в реестре")
-        if c.dispute is not None and c.dispute.claim not in known_ids:
-            errors.append(f"{label}, поле dispute: утверждения {c.dispute.claim} нет в реестре")
-        quotes = _build_quotes(p, c, label, errors)
-        if len(errors) > before:
-            continue
         cid = f"У-{next_no}"
-        try:
-            claim = Claim(
-                id=cid,
-                text=c.text,
-                type=c.type,
-                origin=_default_origin(c),  # type: ignore[arg-type]
-                subject=c.subject,
-                period=c.period,
-                region=c.region,
-                basis=c.basis,
-                check_method=c.check_method,
-                forecast_range=c.forecast_range,
-                taken_from=c.taken_from,
-                quotes=quotes,
-                suspicious=any(q.source in suspicious_sources for q in quotes),
-                status="действует",
-                status_history=[StatusChange(status="действует", at=proj.now(), by="агент")],
-                plan_question=c.plan_question,
-                dispute=Dispute(claim=c.dispute.claim, reason=c.dispute.reason) if c.dispute else None,
-                step=c.step or p.state.step,
-                attempt=attempt,
-            )
-        except ValidationError as exc:
-            errors.extend(_format(label, exc))
+        known_ids = {x.id for x in p.claims.claims} | set(batch_keys.values())
+        claim = _make_claim(p, c, label, cid, known_ids, errors, attempt=attempt)
+        if claim is None:
             continue
         next_no += 1
         batch_keys[key] = cid
@@ -1145,9 +1196,32 @@ def cmd_claim_add(args: argparse.Namespace) -> int:
     return emit(args, {"claims": results}, lines)
 
 
+# «VP-2»: латинская V вместо русской В (общий разбор «почти номеров» её не знает)
+_LATIN_PLAN_NUMBER = re.compile(r"[VВB][PП]\s*[-–—]\s*[0-9]+", re.IGNORECASE)
+
+
 def cmd_claim_list(args: argparse.Namespace) -> int:
     p = _open(args)
-    claims = [c for c in p.claims.claims if not args.type or c.type == args.type]
+    step = _norm_step(args.step) if args.step else None
+    question = None
+    if args.plan_question:
+        value = args.plan_question.strip()
+        if (_PLAN_LIKE.fullmatch(value) or _LATIN_PLAN_NUMBER.fullmatch(value)) and not _PLAN_REF.fullmatch(
+            value
+        ):
+            raise UsageError(
+                f"номер вопроса плана «{value}» не подходит: нужен вид ВП-1 (буквы русские заглавные, "
+                f"без нуля впереди){latin_hint(value)}"
+            )
+        question = norm(value)
+    claims = [
+        c
+        for c in p.claims.claims
+        if (not args.type or c.type == args.type)
+        and (step is None or c.step == step)
+        and (question is None or norm(c.plan_question or "") == question)
+        and (not args.status or c.status == args.status)
+    ]
     data = [
         {
             "id": c.id,
@@ -1161,6 +1235,11 @@ def cmd_claim_list(args: argparse.Namespace) -> int:
             "sources": sorted({q.source for q in c.quotes}),
             "suspicious": c.suspicious,
             "step": c.step,
+            "attempt": c.attempt,
+            "plan_question": c.plan_question,
+            "basis": c.basis,
+            "replaces": c.replaces,
+            "replaced_by": c.replaced_by,
             "dispute": c.dispute.model_dump() if c.dispute else None,
         }
         for c in claims
@@ -1171,6 +1250,367 @@ def cmd_claim_list(args: argparse.Namespace) -> int:
         for d in data
     ] or ["Утверждений нет."]
     return emit(args, {"claims": data}, lines)
+
+
+def _claim_ref(text: str) -> str:
+    """Номер утверждения из аргумента: `У-3`; латинская буква вместо русской — ошибка с подсказкой."""
+    value = text.strip()
+    if not re.fullmatch(r"У-[1-9][0-9]*", value):
+        raise UsageError(
+            f"номер утверждения «{value}» не подходит: нужен вид У-1 (буква русская){latin_hint(value)}"
+        )
+    return value
+
+
+def _find_claim(p: Project, cid: str) -> Claim:
+    claim = next((c for c in p.claims.claims if c.id == cid), None)
+    if claim is None:
+        raise CliError(f"утверждения {cid} нет в реестре: список — `strateg claim list`")
+    return claim
+
+
+def _load_output(p: Project, kind: str) -> Any:
+    """Разобранный файл выхода или None, если его нет или он не разбирается."""
+    spec = outputs.KINDS[kind]
+    path = p.root / spec.file
+    if not path.is_file():
+        return None
+    try:
+        return spec.model.model_validate(proj.read_yaml(path), by_name=False)
+    except (CliError, ValidationError):
+        return None
+
+
+def claim_usages(p: Project, cid: str) -> list[str]:
+    """Где в файлах выхода и реестре стоит ссылка на утверждение: варианты, обещания, строки плана."""
+    out: list[str] = []
+    opts = _load_output(p, "options")
+    if opts is not None:
+        for o in opts.options:
+            if any(obj.basis == cid for obj in o.objections):
+                out.append(f"вариант {o.id}: основание возражения")
+            if cid in (o.comparison.effect.forecast, o.comparison.first_signal.forecast):
+                out.append(f"вариант {o.id}: прогноз в сравнении")
+        if cid in opts.recommendation.claims:
+            out.append(f"рекомендация (вариант {opts.recommendation.option}): основание")
+    prom = _load_output(p, "promises")
+    if prom is not None:
+        out += [f"обещание {x.id}: опора на факт" for x in prom.promises if cid in x.claims]
+    ver = _load_output(p, "verification")
+    if ver is not None:
+        out += [f"строка плана проверки {r.id}: гипотеза" for r in ver.rows if r.hypothesis == cid]
+        out += [
+            f"пре-мортем, строка плана проверки {m.row}: причина" for m in ver.premortem if m.claim == cid
+        ]
+    gaps = _load_output(p, "gaps")
+    if gaps is not None:
+        for g in gaps.gaps:
+            if cid in (g.assumption, g.hypothesis) or cid in g.closed_by:
+                out.append(f"пробел {g.id}")
+        out += [f"перечень показателей: «{m.kind}»" for m in gaps.metric_coverage if cid in (m.claims or [])]
+    dec = _load_output(p, "decisions")
+    if dec is not None:
+        out += [f"решение {d.id}" for d in dec.decisions if cid in d.basis or cid in d.assumptions]
+    for c in p.claims.claims:
+        if cid in c.basis or (c.dispute is not None and c.dispute.claim == cid):
+            out.append(f"утверждение {c.id}: основание или спор")
+    return out
+
+
+def _usage_lines(places: list[str]) -> list[str]:
+    if not places:
+        return []
+    return [
+        "Утверждение используется: " + "; ".join(places) + ".",
+        "Перепишите эти места на действующее утверждение и запишите файлы командой `strateg write`: "
+        "рекомендация и обещание с отозванным или заменённым утверждением не проходят `strateg check`.",
+    ]
+
+
+def _stale_only(error: str) -> bool:
+    """Ошибка «отозванное или заменённое утверждение у рекомендации или обещания»: её чинит `write`."""
+    return STALE_REF_NOTE in error
+
+
+def _by(args: argparse.Namespace) -> str:
+    return getattr(args, "by", None) or "агент"
+
+
+def _correction_event(p: Project, by: str, message: str) -> None:
+    """Правка человека (С-4, С-5) — событие «исправление»."""
+    if by == "пользователь":
+        p.add_event(p.event(kind="исправление", actor="пользователь", message=f"правка человека: {message}"))
+
+
+def cmd_claim_replace(args: argparse.Namespace) -> int:
+    p = _open(args)
+    old = _find_claim(p, _claim_ref(args.id))
+    by = _by(args)
+    raw = _read_input(args.file)
+    if isinstance(raw, list) and len(raw) == 1:
+        raw = raw[0]
+    if not isinstance(raw, dict):
+        raise CliError("для замены нужно одно утверждение: набор полей «ключ: значение»")
+    label = "новое утверждение"
+    try:
+        c = ClaimIn.model_validate(raw)
+    except ValidationError as exc:
+        raise CliError("замена не записана: файл не по схеме", _format(label, exc)) from exc
+
+    key = _key_of_input(c)
+    if old.status == "заменено":
+        new = next((x for x in p.claims.claims if x.id == old.replaced_by), None)
+        if new is not None and _key_of_claim(new) == key:
+            field = _differs(_extras(new), _extras(c))
+            if field:
+                raise CliError(
+                    f"{old.id} уже заменено на {new.id}, но поле {field} отличается; записанное не "
+                    "исправляется: запишите новое утверждение с другим текстом или цитатой"
+                )
+            return emit(
+                args,
+                {"id": new.id, "replaced": old.id, "already_replaced": True},
+                [f"{old.id} уже заменено на {new.id}, повтор ничего не меняет."],
+            )
+        raise CliError(
+            f"{old.id} уже заменено на {old.replaced_by}: заменить можно только действующее утверждение"
+        )
+    if old.status != "действует":
+        raise CliError(f"{old.id} имеет статус «{old.status}»: заменить можно только действующее утверждение")
+    twin = next((x for x in p.claims.claims if _key_of_claim(x) == key), None)
+    if twin is not None and _differs(_extras(twin), _extras(c)) is None:
+        # полностью то же утверждение: нового номера не будет
+        if twin.id == old.id:
+            return emit(
+                args,
+                {"id": old.id, "replaced": old.id, "already_replaced": False, "unchanged": True},
+                [f"{old.id}: такое утверждение уже записано, замена не нужна."],
+            )
+        raise CliError(
+            f"такое утверждение уже записано как {twin.id}: замена не создаёт дубль; "
+            "перепишите текст, предмет, период, цитату или другое поле"
+        )
+
+    started = time.monotonic()
+    errors: list[str] = []
+    cid = f"У-{max(int(x.id.split('-')[1]) for x in p.claims.claims) + 1}"
+    claim = _make_claim(
+        p,
+        c,
+        label,
+        cid,
+        {x.id for x in p.claims.claims},
+        errors,
+        attempt=max(_attempts(p, p.state.step), 1),
+        by=by,
+        replaces=old.id,
+    )
+    if claim is None:
+        raise CliError("замена не записана", errors)
+
+    with proj.transaction(p.root, tolerate=_stale_only):
+        at = proj.now()
+        old.status = "заменено"
+        old.replaced_by = cid
+        old.status_history.append(
+            StatusChange(status="заменено", at=at, by=by, reason=f"заменено на {cid}")  # type: ignore[arg-type]
+        )
+        p.claims.claims.append(claim)
+        message = f"{old.id} заменено на {cid}"
+        p.add_event(
+            p.event(
+                step=claim.step,
+                kind="действие",
+                name="strateg claim replace",
+                idempotency_hash=proj.key_hash("claim replace", old.id, key),
+                status="выполнено",
+                duration_s=round(time.monotonic() - started, 2),
+                message=message,
+            )
+        )
+        _correction_event(p, by, message)
+        p.save_claims()
+        p.save_state()
+    places = claim_usages(p, old.id)
+    return emit(
+        args,
+        {"id": cid, "replaced": old.id, "already_replaced": False, "used_in": places, "by": by},
+        [f"{cid}: записано ({c.type}), заменяет {old.id}.", *_usage_lines(places)],
+    )
+
+
+def cmd_claim_revoke(args: argparse.Namespace) -> int:
+    p = _open(args)
+    claim = _find_claim(p, _claim_ref(args.id))
+    by = _by(args)
+    reason = args.reason.strip()
+    if not reason:
+        raise UsageError('причина отзыва пустая: укажите --reason "<текст>"')
+    if claim.status == "отозвано":
+        return emit(
+            args,
+            {"id": claim.id, "already_revoked": True},
+            [f"{claim.id} уже отозвано, повтор ничего не меняет."],
+        )
+    if claim.status == "заменено":
+        raise CliError(
+            f"{claim.id} уже заменено на {claim.replaced_by}: отозвать можно только действующее утверждение"
+        )
+    with proj.transaction(p.root, tolerate=_stale_only):
+        claim.status = "отозвано"
+        claim.status_history.append(
+            StatusChange(status="отозвано", at=proj.now(), by=by, reason=reason)  # type: ignore[arg-type]
+        )
+        message = f"{claim.id} отозвано: {reason}"
+        p.add_event(
+            p.event(
+                kind="действие",
+                name="strateg claim revoke",
+                idempotency_hash=proj.key_hash("claim revoke", claim.id),
+                status="выполнено",
+                duration_s=0,
+                message=message,
+            )
+        )
+        _correction_event(p, by, message)
+        p.save_claims()
+        p.save_state()
+    places = claim_usages(p, claim.id)
+    return emit(
+        args,
+        {"id": claim.id, "already_revoked": False, "used_in": places, "by": by},
+        [f"{claim.id} отозвано.", *_usage_lines(places)],
+    )
+
+
+# ---------------------------------------------------------------------------
+# write: файлы выхода
+# ---------------------------------------------------------------------------
+
+
+def cmd_write(args: argparse.Namespace) -> int:
+    p = _open(args)
+    by = _by(args)
+    contents = outputs.parse_input(_read_input(args.file))
+    models: dict[str, Any] = {}
+    errors: list[str] = []
+    for name, content in contents.items():
+        model, errs = outputs.validate(outputs.KINDS[name], content)
+        errors += errs
+        if model is not None:
+            models[name] = model
+    if errors:
+        raise CliError("файлы выхода не записаны: вход не по схеме", errors)
+
+    changes, same = outputs.plan_changes(p, models)
+    report = [
+        {
+            "kind": ch.kind.name,
+            "file": ch.kind.file,
+            "changed": True,
+            "version": ch.version,
+            "history": ch.history,
+        }
+        for ch in changes
+    ] + [{"kind": k.name, "file": k.file, "changed": False, "version": None, "history": None} for k in same]
+    if not changes:
+        return emit(
+            args,
+            {"changed": False, "files": report, "warnings": []},
+            [f"{k.file}: без изменений" for k in same] + ["Ничего не записано: содержимое то же."],
+        )
+
+    started = time.monotonic()
+    written = [ch.kind.file for ch in changes] + [k.file for k in same]
+    mine = re.compile("^(?:" + "|".join(re.escape(f) for f in written) + ")[,:]")
+    try:
+        # ошибки в самих записываемых файлах мешают записи, даже если были до неё
+        with proj.transaction(p.root, block=lambda e: mine.match(e) is not None):
+            for ch in changes:
+                outputs.apply_change(p, ch, started, by)
+            p.save_state()
+    except CliError as err:
+        raise CliError(err.message, outputs.add_hints(err.details, written)) from err
+
+    warnings: list[str] = []
+    old_errors = check_project(p.root)  # новых ошибок нет: иначе запись откатилась бы
+    if old_errors:
+        warnings.append(
+            f"в проекте остались прежние ошибки проверки: {len(old_errors)}; запись их не добавила "
+            "(список — `strateg check`)"
+        )
+    lines = [f"{ch.kind.file}: {ch.note}" for ch in changes] + [f"{k.file}: без изменений" for k in same]
+    lines += [f"Внимание: {w}" for w in warnings]
+    return emit(args, {"changed": True, "files": report, "warnings": warnings, "by": by}, lines)
+
+
+# ---------------------------------------------------------------------------
+# step fail, event error
+# ---------------------------------------------------------------------------
+
+
+def cmd_step_fail(args: argparse.Namespace) -> int:
+    p = _open(args)
+    step = _norm_step(args.step)
+    reason = args.reason.strip()
+    if not reason:
+        raise UsageError('причина пустая: укажите --reason "<текст>"')
+    name = proj.step_action_name(step)
+    mine = [e for e in p.journal if e.kind == "действие" and e.name == name and e.idempotency_hash]
+    if not mine:
+        raise CliError(f"шаг {step} не начат: выполните `strateg step start {step}`")
+    last = mine[-1]
+    if last.status == "ошибка":
+        return emit(
+            args,
+            {"step": step, "already_failed": True},
+            [f"Шаг {step} уже отмечен ошибкой, повтор ничего не меняет."],
+        )
+    if last.status != "начато":
+        raise CliError(
+            f"шаг {step} не идёт (последняя отметка: «{last.status}»): ошибку отмечают у начатого шага"
+        )
+    with proj.transaction(p.root):
+        p.add_event(
+            p.event(
+                step=step,
+                kind="действие",
+                name=name,
+                idempotency_hash=last.idempotency_hash,
+                status="ошибка",
+                message=reason,
+            )
+        )
+        p.state.next_action = (
+            f"Шаг {step} закончился ошибкой: {reason}. "
+            f"Повторить `strateg step start {step}` или остановить работу"
+        )
+        p.save_state()
+    return emit(args, {"step": step, "reason": reason}, [f"Шаг {step} отмечен ошибкой: {reason}"])
+
+
+def cmd_event_error(args: argparse.Namespace) -> int:
+    p = _open(args)
+    message = args.message.strip()
+    if not message:
+        raise UsageError('текст ошибки пустой: укажите --message "<текст>"')
+    step = _norm_step(args.step) if args.step else p.state.step
+    tool = args.tool.strip() if args.tool else None
+    with proj.transaction(p.root):
+        p.add_event(
+            p.event(
+                step=step,
+                actor="хук" if tool else "агент",
+                kind="ошибка",
+                name=tool or None,
+                message=message,
+            )
+        )
+        p.save_state()
+    where = f"шаг {step}" + (f", {tool}" if tool else "")
+    return emit(
+        args, {"step": step, "tool": tool, "message": message}, [f"Ошибка записана ({where}): {message}"]
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1297,7 +1737,9 @@ def _status_data(p: Project) -> dict[str, Any]:
             "by_type": by_type,
             "without_quote": without_quote,
         },
-        "failures": sum(1 for e in p.journal if e.kind == "действие" and e.status == "ошибка"),
+        "failures": sum(
+            1 for e in p.journal if e.kind == "ошибка" or (e.kind == "действие" and e.status == "ошибка")
+        ),
         "work_minutes": round(proj.work_seconds(p.journal, at=proj.now()) / 60, 2),
         "running_minutes": running,
         "limit_minutes": p.state.budget.limit_minutes,
@@ -1326,8 +1768,102 @@ def status_line(d: dict[str, Any]) -> str:
     return " · ".join(parts)
 
 
+def _resume(p: Project) -> list[JournalEvent]:
+    """Возобновление работы: «прервано» для начатых и не завершённых действий.
+
+    Событие пишется один раз: после него последняя отметка действия уже не «начато». «Изменено вне агента»
+    пишет `save_state` (так же, как у любой команды). Возвращает прерванные действия.
+    """
+    last: dict[str, JournalEvent] = {}
+    for e in p.journal:
+        if e.kind == "действие" and e.idempotency_hash:
+            last[e.idempotency_hash] = e
+    interrupted = [(h, e) for h, e in last.items() if e.status == "начато"]
+    if not interrupted and not p.outside:
+        return []
+    with proj.transaction(p.root, rollback=False):
+        for h, e in interrupted:
+            p.add_event(
+                p.event(
+                    step=e.step,
+                    kind="действие",
+                    name=e.name,
+                    idempotency_hash=h,
+                    status="прервано",
+                    message="начато и не завершено до перерыва; обнаружено при возобновлении работы",
+                )
+            )
+        p.save_state()  # пишет «изменено вне агента» и принимает хеши: повторный `status` ничего не запишет
+    return [e for _, e in interrupted]
+
+
+def _brief(args: argparse.Namespace, p: Project, *, peek: bool) -> int:
+    """Сводка «где остановились»: не больше 10 строк. Её вызывает хук начала сеанса и правило AGENTS.md.
+
+    С `peek` ничего не пишется: ни «прервано», ни «изменено вне агента». Так сводку берут посреди работы
+    (например, после сжатия контекста): идущий шаг прерванным не становится.
+    """
+    changed = list(p.outside)
+    interrupted = [] if peek else _resume(p)
+    d = _status_data(p)
+    present = [k.name for k in outputs.KINDS.values() if (p.root / k.file).is_file()]
+    frame_note = ""
+    frame_version = None
+    if "frame" in present:
+        try:
+            frame_version = FrameFile.model_validate(
+                proj.read_yaml(p.root / FRAME_FILE), by_name=False
+            ).version
+        except (CliError, ValidationError):
+            frame_version = None
+        draft = not outputs.b1_answered(p.journal)
+        frame_note = " (черновик)" if draft else (f" (версия {frame_version})" if frame_version else "")
+    nxt = d["next_action"]
+    resume = [f"strateg step start {e.step}" for e in interrupted if (e.name or "").startswith("шаг ")]
+    if resume and not d["waiting_gates"]:
+        nxt = f"начать прерванный шаг заново: `{resume[-1]}`; записанное — в `strateg claim list --step …`"
+    lines = [
+        f"Проект: {d['project']} · режим: {d['mode']}",
+        f"Шаг: {d['step']} ({d['step_name']})" + (" · в работе" if d["step_in_progress"] else ""),
+        "Ворота ждут ответа: " + ", ".join(d["waiting_gates"])
+        if d["waiting_gates"]
+        else "Ворота: ответов не ждут",
+        f"Дальше: {nxt or 'не задано'}",
+    ]
+    if interrupted:
+        names = ", ".join(sorted({e.name or "действие" for e in interrupted}))
+        lines.append(f"Прервано (записано «прервано»): {names}")
+    if changed:
+        lines.append("Изменено вне агента: " + ", ".join(rel for rel, _ in changed))
+    if peek and changed:
+        lines.append("Сводка без записи (--peek): событие «изменено вне агента» запишет следующая команда.")
+    lines.append(
+        "Файлы выхода: " + (", ".join(f"{k}{frame_note if k == 'frame' else ''}" for k in present) or "нет")
+    )
+    data = {
+        "project": d["project"],
+        "mode": d["mode"],
+        "step": d["step"],
+        "step_name": d["step_name"],
+        "step_in_progress": d["step_in_progress"],
+        "waiting_gates": d["waiting_gates"],
+        "next_action": nxt,
+        "interrupted": [{"name": e.name, "step": e.step} for e in interrupted],
+        "changed_outside": [{"path": rel, "why": why} for rel, why in changed],
+        "peek": peek,
+        "outputs": present,
+        "frame_version": frame_version,
+        "frame_draft": "frame" in present and not outputs.b1_answered(p.journal),
+    }
+    return emit(args, data, lines)
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     p = _open(args)
+    if getattr(args, "peek", False) and not getattr(args, "brief", False):
+        raise UsageError("--peek задаётся вместе с --brief")
+    if getattr(args, "brief", False):
+        return _brief(args, p, peek=getattr(args, "peek", False))
     d = _status_data(p)
     d["line"] = status_line(d)
     if args.line:

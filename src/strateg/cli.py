@@ -1,5 +1,5 @@
 """Точка входа CLI `strateg`: `doctor` и команды проекта (`new`, `use`, `status`, `step`, `gate`, `fetch`,
-`claim`, `check`, `cost`). Сами команды проекта — в `strateg.commands`.
+`claim`, `write`, `event`, `check`, `cost`). Сами команды проекта — в `strateg.commands`.
 
 Коды возврата: 0 — успех, 1 — ошибка данных или правил, 2 — ошибка использования.
 """
@@ -146,6 +146,15 @@ def _common(*, json_out: bool = True) -> argparse.ArgumentParser:
     return common
 
 
+def _by_flag(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--by",
+        choices=["агент", "пользователь"],
+        default="агент",
+        help="кто правит: «пользователь» — правка человека (событие «исправление»)",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = _Parser(prog="strateg", description="CLI агента «Стратег»")
     parser.add_argument("--version", action="version", version=f"strateg {__version__}")
@@ -169,7 +178,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("id")
 
     p = add("status", commands.cmd_status, "статус проекта")
-    p.add_argument("--line", action="store_true", help="одна строка статуса для вставки в ответ")
+    shape = p.add_mutually_exclusive_group()
+    shape.add_argument("--line", action="store_true", help="одна строка статуса для вставки в ответ")
+    shape.add_argument(
+        "--brief",
+        action="store_true",
+        help="сводка «где остановились» (до 10 строк); при продолжении работы записывает "
+        "«прервано» и «изменено вне агента»",
+    )
+    p.add_argument(
+        "--peek",
+        action="store_true",
+        help="с --brief: та же сводка без записи событий (середина сеанса, например после сжатия контекста)",
+    )
 
     step = add("step", commands.cmd_step_start, "начало и конец шага")
     step_sub = step.add_subparsers(dest="step_command", required=True, parser_class=_Parser)
@@ -180,6 +201,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=commands.run, handler=commands.cmd_step_done)
     p.add_argument("step")
     p.add_argument("--next", help="что делать дальше (одна фраза)")
+    p = step_sub.add_parser("fail", parents=[common], help="отметить шаг ошибкой")
+    p.set_defaults(func=commands.run, handler=commands.cmd_step_fail)
+    p.add_argument("step")
+    p.add_argument("--reason", required=True, help="что пошло не так")
 
     gate = add("gate", commands.cmd_gate_open, "ворота: открыть и ответить")
     gate_sub = gate.add_subparsers(dest="gate_command", required=True, parser_class=_Parser)
@@ -215,9 +240,41 @@ def build_parser() -> argparse.ArgumentParser:
     p = claim_sub.add_parser("add", parents=[common], help="записать утверждение или список из YAML или JSON")
     p.set_defaults(func=commands.run, handler=commands.cmd_claim_add)
     p.add_argument("--file", required=True, help="файл YAML или JSON; «-» — читать со стандартного ввода")
+    p = claim_sub.add_parser("replace", parents=[common], help="записать утверждение вместо прежнего")
+    p.set_defaults(func=commands.run, handler=commands.cmd_claim_replace)
+    p.add_argument("id", help="заменяемое утверждение, например У-3")
+    p.add_argument(
+        "--file", required=True, help="файл YAML или JSON с новым утверждением; «-» — стандартный ввод"
+    )
+    _by_flag(p)
+    p = claim_sub.add_parser("revoke", parents=[common], help="отозвать утверждение")
+    p.set_defaults(func=commands.run, handler=commands.cmd_claim_revoke)
+    p.add_argument("id", help="отзываемое утверждение, например У-3")
+    p.add_argument("--reason", required=True, help="почему утверждение неверно")
+    _by_flag(p)
     p = claim_sub.add_parser("list", parents=[common], help="список утверждений")
     p.set_defaults(func=commands.run, handler=commands.cmd_claim_list)
     p.add_argument("--type", choices=["факт", "гипотеза", "прогноз", "допущение", "синтетика"])
+    p.add_argument("--step", help="только утверждения этого шага: 1, 2а, 2б, 3 … 8")
+    p.add_argument("--plan-question", help="только утверждения этого вопроса плана, например ВП-2")
+    p.add_argument("--status", choices=["действует", "заменено", "отозвано"])
+
+    p = add("write", commands.cmd_write, "записать файлы выхода (рамка, план, пробелы, варианты …)")
+    p.add_argument(
+        "--file",
+        required=True,
+        help="файл YAML или JSON: ключи — frame, plan, gaps, options, promises, verification, decisions; "
+        "«-» — стандартный ввод",
+    )
+    _by_flag(p)
+
+    event = add("event", commands.cmd_event_error, "события журнала")
+    event_sub = event.add_subparsers(dest="event_command", required=True, parser_class=_Parser)
+    p = event_sub.add_parser("error", parents=[common], help="записать ошибку из скилла или хука")
+    p.set_defaults(func=commands.run, handler=commands.cmd_event_error)
+    p.add_argument("--message", required=True, help="что произошло")
+    p.add_argument("--step", help="шаг; по умолчанию текущий")
+    p.add_argument("--tool", help="инструмент, который дал ошибку")
 
     add("check", commands.cmd_check, "проверить активный проект")
 
