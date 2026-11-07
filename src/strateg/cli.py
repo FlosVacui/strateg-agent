@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import locale
+import os
 import platform
 import re
 import shutil
@@ -18,6 +19,7 @@ from pathlib import Path
 from typing import NoReturn
 
 from strateg import __version__, commands, routing, rubric
+from strateg.hooks import flags as hookflags
 
 OK, WARN, ERR = "OK", "WARN", "ERR"
 _MARKS = {OK: "OK  ", WARN: "ПРЕД", ERR: "НЕТ "}
@@ -116,6 +118,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         levels.append(_report("Запись в projects/", ERR, f"нет папки {root / 'projects'}"))
     else:
         levels.append(_report("Запись в projects/", *_check_writable(root / "projects")))
+    for note in hookflags.notes(os.environ):  # заданные STRATEG_HOOKS и STRATEG_DEV видны сразу
+        levels.append(_report("Хуки", WARN, note))
     return 1 if ERR in levels else 0
 
 

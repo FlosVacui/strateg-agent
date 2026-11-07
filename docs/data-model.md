@@ -6,7 +6,7 @@
 | Файл | Формат | Кто пишет | Схема |
 |---|---|---|---|
 | `state.yaml` | YAML; `profile` — профиль выбора моделей (`route --profile`) | только CLI | `state.schema.json` |
-| `journal.jsonl` | JSONL, только добавление; у «выбор модели» — `role`, `model`, `level`, `effort` | только CLI | `journal-event.schema.json` (строка) |
+| `journal.jsonl` | JSONL, только добавление; у «выбор модели» — `role`, `model`, `level`, `effort`; хук пишет «отказ хука», «граница прав не активна», «задание исследователю» (`actor: хук`, `message` обязателен) | CLI и хук | `journal-event.schema.json` (строка) |
 | `cost.jsonl` | JSONL, только добавление | только CLI | `cost-record.schema.json` (строка) |
 | `sources.yaml` | YAML | только CLI | `sources.schema.json` |
 | `claims.yaml` | YAML | скиллы через CLI | `claims.schema.json` |

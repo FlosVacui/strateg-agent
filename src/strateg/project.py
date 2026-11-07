@@ -68,6 +68,10 @@ class UsageError(CliError):
     """Ошибка использования (код возврата 2)."""
 
 
+class NoActiveProject(CliError):
+    """Активный проект не выбран (нет `projects/.active`): строка статуса и хуки отвечают без ошибки."""
+
+
 def now() -> dt.datetime:
     """Текущее время с поясом. Отдельная функция, чтобы тесты подменяли часы."""
     return dt.datetime.now().astimezone().replace(microsecond=0)
@@ -158,7 +162,9 @@ def resolve_project(explicit: str | None = None) -> Path:
     else:
         active = projects_root() / ACTIVE_FILE
         if not active.is_file():
-            raise CliError("активный проект не выбран: выполните `strateg use <id>` или `strateg new <id>`")
+            raise NoActiveProject(
+                "активный проект не выбран: выполните `strateg use <id>` или `strateg new <id>`"
+            )
         name = active.read_text(encoding="utf-8").strip()
         root = projects_root() / check_project_id(name)
     if not (root / STATE_FILE).is_file():
