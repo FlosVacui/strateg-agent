@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "PartAResult": {
+      "additionalProperties": false,
+      "description": "Результат признака части А: «да» или «нет» и, при «нет», что дополнить.",
+      "properties": {
+        "id": {
+          "pattern": "^А-[1-9][0-9]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "answer": {
+          "enum": [
+            "да",
+            "нет"
+          ],
+          "title": "Answer",
+          "type": "string"
+        },
+        "message": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Что дополнить: файл, запись, раздел; есть только при «нет»",
+          "title": "Message"
+        }
+      },
+      "required": [
+        "id",
+        "answer"
+      ],
+      "title": "PartAResult",
+      "type": "object"
+    },
+    "PartBAnswer": {
+      "additionalProperties": false,
+      "description": "Ответ критика на вопрос части Б: `{id, answer, where, why}`.",
+      "properties": {
+        "id": {
+          "pattern": "^Б-[1-9][0-9]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "answer": {
+          "enum": [
+            "да",
+            "нет"
+          ],
+          "title": "Answer",
+          "type": "string"
+        },
+        "where": {
+          "description": "Файл и место",
+          "minLength": 1,
+          "title": "Where",
+          "type": "string"
+        },
+        "why": {
+          "description": "Одна строка: почему такой ответ",
+          "minLength": 1,
+          "title": "Why",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "answer",
+        "where",
+        "why"
+      ],
+      "title": "PartBAnswer",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Файл `completeness.yaml`: итог проверки полноты по рубрике. Пишет только CLI.",
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "step": {
+      "description": "Шаг, на котором проверяли",
+      "enum": [
+        "1",
+        "2а",
+        "2б",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8"
+      ],
+      "title": "Step",
+      "type": "string"
+    },
+    "checked_at": {
+      "format": "date-time",
+      "title": "Checked At",
+      "type": "string"
+    },
+    "by": {
+      "description": "«агент» — проверка не независимая",
+      "enum": [
+        "критик",
+        "агент"
+      ],
+      "title": "By",
+      "type": "string"
+    },
+    "part_a": {
+      "description": "Признаки части А, прогнанные кодом",
+      "items": {
+        "$ref": "#/$defs/PartAResult"
+      },
+      "title": "Part A",
+      "type": "array"
+    },
+    "part_b": {
+      "description": "Ответы критика на вопросы части Б",
+      "items": {
+        "$ref": "#/$defs/PartBAnswer"
+      },
+      "title": "Part B",
+      "type": "array"
+    },
+    "result": {
+      "description": "Итог по pass_rule рубрики",
+      "enum": [
+        "пройдено",
+        "не пройдено"
+      ],
+      "title": "Result",
+      "type": "string"
+    },
+    "failed": {
+      "description": "Номера признаков и вопросов с ответом «нет»",
+      "items": {
+        "type": "string"
+      },
+      "title": "Failed",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "step",
+    "checked_at",
+    "by",
+    "part_a",
+    "part_b",
+    "result"
+  ],
+  "title": "CompletenessFile",
+  "type": "object"
+}

@@ -28,6 +28,7 @@ from strateg.models import (
     LOCATOR_KINDS,
     Claim,
     ClaimsFile,
+    CompletenessFile,
     CostRecord,
     DecisionsFile,
     FrameBody,
@@ -61,6 +62,7 @@ OPTIONS_FILE = "options.yaml"
 PROMISES_FILE = "promises.yaml"
 VERIFICATION_FILE = "verification.yaml"
 DECISIONS_FILE = "decisions.yaml"
+COMPLETENESS_FILE = "completeness.yaml"  # итог проверки полноты: пишет `strateg rubric record`
 # Необязательные файлы выводов: пишет только CLI, у проекта на шаге 1 их ещё нет.
 OUTPUT_FILES = (
     FRAME_FILE,
@@ -71,6 +73,8 @@ OUTPUT_FILES = (
     VERIFICATION_FILE,
     DECISIONS_FILE,
 )
+# Файлы, которые пишет CLI и хеши которых хранит state.yaml: файлы выводов и итог проверки полноты.
+TRACKED_OUTPUTS = (*OUTPUT_FILES, COMPLETENESS_FILE)
 PROJECT_FILES = (STATE_FILE, SOURCES_FILE, CLAIMS_FILE, JOURNAL_FILE, COST_FILE)
 HISTORY_DIR = "history"
 # Часть сообщения об утверждении, которое отозвано или заменено, но стоит у рекомендации или обещания:
@@ -690,6 +694,9 @@ def _check_outputs(
         root, VERIFICATION_FILE, VerificationFile, ("rows", "premortem", "undesired_effects"), errors
     )
     _, dec = _load_optional(root, DECISIONS_FILE, DecisionsFile, ("decisions",), errors)
+    _, comp = _load_optional(root, COMPLETENESS_FILE, CompletenessFile, ("part_a", "part_b"), errors)
+    if comp is not None:
+        _check_completeness(comp, errors)
 
     gap_reg = _Registry(GAPS_FILE, {g.id for g in gaps.gaps} if gaps else None, gaps_ok)
     opt_reg = _Registry(OPTIONS_FILE, {o.id for o in opts.options} if opts else None, opts_ok)
@@ -730,6 +737,34 @@ def _check_outputs(
     _check_promise_marks(root, prom_ok, prom, errors)
     _check_history(root, frame, errors)
     return frame_ok, frame
+
+
+def _check_completeness(comp: CompletenessFile, errors: list[str]) -> None:
+    """Номера частей А и Б есть в рубрике, ответы на все вопросы части Б есть, итог равен выводу по
+    `pass_rule`. Рубрика не читается (нет файла) — сверять не с чем, ошибок нет."""
+    from strateg import rubric  # импорт здесь: rubric импортирует этот модуль
+
+    try:
+        rb = rubric.load_rubric()
+    except rubric.CliError:
+        return
+    known_a = {a.id for a in rb.part_a}
+    known_b = {b.id for b in rb.part_b}
+    for r in comp.part_a:
+        if r.id not in known_a:
+            errors.append(f"{COMPLETENESS_FILE}, поле part_a: признака {r.id} нет в рубрике")
+    for r in comp.part_b:
+        if r.id not in known_b:
+            errors.append(f"{COMPLETENESS_FILE}, поле part_b: вопроса {r.id} нет в рубрике")
+    given = {r.id for r in comp.part_b}
+    for q in rb.part_b:
+        if q.id not in given:
+            errors.append(f"{COMPLETENESS_FILE}, поле part_b: нет ответа на вопрос {q.id}")
+    if given != known_b or any(r.id not in known_a for r in comp.part_a):
+        return  # лишние и недостающие номера названы выше
+    want = rubric.verdict(rb, comp.part_a, comp.part_b)
+    if comp.result != want:
+        errors.append(f"{COMPLETENESS_FILE}, поле result: «{comp.result}», а по pass_rule рубрики — «{want}»")
 
 
 # Номера в свободном тексте: «закроем П-9», «как в Вар-2», «см. У-14». Не путать с «ВП-2» и «ПП-3»:

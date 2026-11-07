@@ -126,6 +126,24 @@
       "description": "Регион по умолчанию для fetch, например RU-MOW",
       "title": "Region"
     },
+    "profile": {
+      "anyOf": [
+        {
+          "enum": [
+            "обычный",
+            "экономнее",
+            "глубже"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Профиль выбора моделей (`strateg route --profile`); пусто — «обычный»",
+      "title": "Profile"
+    },
     "next_action": {
       "anyOf": [
         {

@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import argparse
 import contextlib
 import io
 import re
@@ -40,9 +39,6 @@ ROLE_TOOLS = {
     "critic": ["Read", "Grep", "Glob"],
 }
 ROUTING_ROLES = ("researcher", "critic", "classifier", "respondent")
-# Команды интерфейса, который делает ветка с командами `rubric` и `route`. Пока их нет в разборе CLI,
-# их использование в текстах не разбирается. Убрать после слияния той ветки: тогда тест разберёт их сам.
-PENDING_COMMANDS = ("rubric", "route")
 
 # Пять скиллов шагов; маршрутизатор `strateg` и остальные добавляются отдельно и в список не входят.
 STEP_SKILLS = {
@@ -68,6 +64,8 @@ CASE_STRINGS = (
     "тариф",
 )
 CASE_WORDS = ("Ева",)
+DOMAIN_WORDS = ("абонент", "тариф")  # слова области по умолчанию; в `domain-words.yaml` допустимы
+DOMAIN_WORDS_FILE = "knowledge/rubrics/domain-words.yaml"  # исключение — только для этого пути
 # Структура кейса: развилка, цепочка «пробел → возражение → показатель», формулировки рамки.
 CASE_PHRASES = (
     "отдельной подпиской",
@@ -136,6 +134,11 @@ def role_files() -> list[Path]:
 
 def wrapper_files() -> list[Path]:
     return sorted(AGENT_WRAPPERS.glob("*.md")) if AGENT_WRAPPERS.is_dir() else []
+
+
+def domain_exceptions(path: Path) -> tuple[str, ...]:
+    """Слова области, допустимые в файле: только в списке `knowledge/rubrics/domain-words.yaml`, по пути."""
+    return DOMAIN_WORDS if rel(path) == DOMAIN_WORDS_FILE else ()
 
 
 def all_texts() -> list[Path]:
@@ -302,36 +305,17 @@ def bad_values(argv: list[str]) -> list[str]:
     return problems
 
 
-def cli_commands() -> set[str]:
-    """Имена команд верхнего уровня, которые знает разбор CLI."""
-    return {
-        name
-        for action in build_parser()._actions
-        if isinstance(action, argparse._SubParsersAction)
-        for name in action.choices
-    }
-
-
-def is_pending(argv: list[str]) -> bool:
-    """Команда ожидаемая, но её ещё нет в CLI этой ветки."""
-    return argv[0] in PENDING_COMMANDS and argv[0] not in cli_commands()
-
-
 @pytest.mark.parametrize("path", all_texts(), ids=rel)
 def test_commands_are_parsed_by_the_cli(path):
     full, mentions = find_commands(path.read_text(encoding="utf-8"))
     bad = []
     for command in full:
         argv = normalize(command)
-        if is_pending(argv):
-            continue
         code, message = run_parser(argv)
         if code != 0:
             bad.append(f"{command} -> {message}")
         bad.extend(f"{command} -> {problem}" for problem in bad_values(argv))
     for mention in mentions:
-        if is_pending(normalize(mention)):
-            continue
         code, _ = run_parser([*normalize(mention), "--help"])
         if code != 0:
             bad.append(f"{mention} -> такой команды нет")
@@ -507,7 +491,9 @@ def test_example_checker_catches_broken_examples():
 def test_no_case_strings(path):
     text = path.read_text(encoding="utf-8")
     low = text.casefold()
-    found = [s for s in CASE_STRINGS if s.casefold() in low]
+    # Список слов области — единственное место, где «абонент» и «тариф» уместны: ради них он и нужен.
+    domain = domain_exceptions(path)
+    found = [s for s in CASE_STRINGS if s.casefold() in low and s not in domain]
     found += [w for w in CASE_WORDS if re.search(rf"(?<!\w){re.escape(w)}(?!\w)", text)]
     found += [s for s in CASE_PHRASES if s.casefold() in low]
     squeezed = squeeze(text)
@@ -517,6 +503,13 @@ def test_no_case_strings(path):
     flat = re.sub(r"\s+", "", low)
     found += [f"порог «{s}»" for s in sorted(case_thresholds()) if s in flat]
     assert not found, f"{rel(path)}: строки, цены и пороги учебного кейса {found}"
+
+
+def test_domain_words_exception_is_tied_to_the_path_not_the_name():
+    assert domain_exceptions(KNOWLEDGE / "rubrics" / "domain-words.yaml") == DOMAIN_WORDS
+    for other in (ROOT / "src" / "domain-words.yaml", ROOT / "config" / "domain-words.yaml"):
+        assert domain_exceptions(other) == ()
+    assert domain_exceptions(KNOWLEDGE / "rubrics" / "completeness.yaml") == ()
 
 
 def test_case_lists_are_not_empty():

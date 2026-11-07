@@ -368,6 +368,34 @@
       "description": "Для выбора модели",
       "title": "Model"
     },
+    "level": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Для выбора модели: уровень (сильная, средняя, дешёвая)",
+      "title": "Level"
+    },
+    "effort": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Для выбора модели: effort роли",
+      "title": "Effort"
+    },
     "source": {
       "anyOf": [
         {
