@@ -8,7 +8,7 @@ import re
 import pytest
 import yaml
 
-from helpers import PUBLISHER, QUOTE, URL, claims_of, fact, write_claims  # noqa: F401
+from helpers import PUBLISHER, QUOTE, URL, claims_of, fact, put_frame, write_claims  # noqa: F401
 from strateg import project as proj
 from strateg.project_check import check_project
 
@@ -59,6 +59,7 @@ def test_end_to_end_case(cli, net, page_html, home, tmp_path, clock):
     assert code == 0, err
     assert "У-2" in out and "У-3" in out
 
+    put_frame(cli)
     assert cli("gate", "open", "В1", "--questions", "2")[0] == 0
     clock.advance(600)  # человек отвечает десять минут: в рабочее время не входит
     assert cli("gate", "answer", "В1", "--answer", "1а, ок")[0] == 0
@@ -220,6 +221,7 @@ def test_work_time_excludes_gate_waiting(cli, clock):
     cli("new", "demo")
     cli("step", "start", "1")
     clock.advance(120)
+    put_frame(cli)
     cli("gate", "open", "В1", "--questions", "2")
     clock.advance(3000)
     cli("gate", "answer", "В1", "--answer", "ок")
@@ -251,6 +253,7 @@ def test_gate_rules(cli):
     code, _, err = cli("gate", "answer", "В1", "--answer", "ок")
     assert code == 1 and "не ждут ответа" in err
     cli("gate", "open", "В1", "--questions", "1")
+    put_frame(cli)
     assert json.loads(cli("gate", "open", "В1", "--questions", "1", "--json")[1])["already_open"] is True
     assert cli("gate", "answer", "В1", "--answer", "ок")[0] == 0
     assert json.loads(cli("gate", "answer", "В1", "--answer", "ок", "--json")[1])["already_answered"] is True

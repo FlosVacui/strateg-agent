@@ -9,7 +9,7 @@ from pathlib import Path
 
 import yaml
 
-from helpers import URL, claims_of, fact, write_claims
+from helpers import URL, claims_of, fact, put_frame, write_claims
 from strateg import cli as cli_module
 from strateg.project_check import check_project
 
@@ -81,6 +81,7 @@ def test_status_says_when_waiting_for_an_answer(cli):
     assert out.splitlines()[0] == "Ждём ответа на В1: следующее сообщение человека — ответ"
     data = json.loads(cli("status", "--json")[1])
     assert data["waiting_gates"] == ["В1"] and "ждём ответа на В1" in data["next_action"]
+    put_frame(cli)
     cli("gate", "answer", "В1", "--answer", "ок")
     assert "Ждём ответа" not in cli("status")[1]
 

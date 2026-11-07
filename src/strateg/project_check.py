@@ -30,6 +30,7 @@ from strateg.models import (
     ClaimsFile,
     CostRecord,
     DecisionsFile,
+    FrameBody,
     FrameFile,
     GapsFile,
     JournalEvent,
@@ -72,6 +73,9 @@ OUTPUT_FILES = (
 )
 PROJECT_FILES = (STATE_FILE, SOURCES_FILE, CLAIMS_FILE, JOURNAL_FILE, COST_FILE)
 HISTORY_DIR = "history"
+# Часть сообщения об утверждении, которое отозвано или заменено, но стоит у рекомендации или обещания:
+# команды замены и отзыва принимают такие ошибки, потому что места использования переписывает `write`.
+STALE_REF_NOTE = "нельзя держать на отозванном или заменённом утверждении"
 COMMS_STRATEGY = "outputs/comms-strategy.md"
 
 
@@ -610,8 +614,8 @@ class _Claims:
             self.errors.append(f"{where}, поле {field}: {ref} имеет тип «{c.type}», а здесь нужен «{wanted}»")
         if live_for and c.status != "действует":
             self.errors.append(
-                f"{where}, поле {field}: {ref} имеет статус «{c.status}»; {live_for} нельзя держать "
-                "на отозванном или заменённом утверждении, возьмите действующее"
+                f"{where}, поле {field}: {ref} имеет статус «{c.status}»; {live_for} {STALE_REF_NOTE}, "
+                "возьмите действующее"
             )
 
 
@@ -649,8 +653,11 @@ def _own(file: str, ids: list[str]) -> _Registry:
 
 def _check_outputs(
     root: Path, sources: SourcesFile | None, claims: ClaimsFile | None, errors: list[str]
-) -> bool:
-    """Читает необязательные файлы выводов и сверяет их ссылки. Возвращает: есть ли `frame.yaml`."""
+) -> tuple[bool, FrameFile | None]:
+    """Читает необязательные файлы выводов и сверяет их ссылки.
+
+    Возвращает: есть ли `frame.yaml` и его разобранная модель (None, если файл не разобран).
+    """
     cl = _Claims(claims, errors)
     source_ids = {s.id for s in sources.sources} if sources else None
     frame_ok, frame = _load_optional(root, FRAME_FILE, FrameFile, (), errors)
@@ -686,7 +693,7 @@ def _check_outputs(
         _check_plan_questions(claims, plan_reg, errors)
     _check_promise_marks(root, prom_ok, prom, errors)
     _check_history(root, frame, errors)
-    return frame_ok
+    return frame_ok, frame
 
 
 def _check_plan(plan: PlanFile, gap_reg: _Registry, errors: list[str]) -> None:
@@ -974,6 +981,127 @@ def _check_history(root: Path, frame: FrameFile | None, errors: list[str]) -> No
             )
 
 
+# ---------------------------------------------------------------------------
+# Журнал и состояние
+# ---------------------------------------------------------------------------
+
+
+def _dump_field(value: Any) -> Any:
+    return value.model_dump(mode="json", exclude_none=True) if isinstance(value, BaseModel) else value
+
+
+def frame_key(body: FrameBody) -> dict[str, Any]:
+    """Поля рамки без служебных (`schema_version`, `version`): по ним рамка файла сравнивается с рамкой В1.
+
+    Сравнивается содержимое: в событии В1 номера версии рамки нет.
+    """
+    return {name: _dump_field(getattr(body, name)) for name in FrameBody.model_fields}
+
+
+def _frame_versions(root: Path, frame: FrameFile | None) -> list[FrameFile]:
+    """Версии рамки, которые удалось разобрать: файл `frame.yaml` и файлы `history/frame.v<N>.yaml`."""
+    from strateg.project import history_source  # импорт здесь: project импортирует этот модуль
+
+    out: list[FrameFile] = [frame] if frame is not None else []
+    folder = root / HISTORY_DIR
+    if folder.is_dir():
+        for p in sorted(folder.glob("*")):
+            rel = p.relative_to(root).as_posix()
+            source = history_source(rel)
+            if source is None or source[0] != FRAME_FILE or not p.is_file():
+                continue
+            raw = _load_yaml(root, rel, [])
+            old = _validate(rel, (), FrameFile, raw, []) if raw is not None else None
+            if isinstance(old, FrameFile):
+                out.append(old)
+    return out
+
+
+def _check_gate_frame(
+    root: Path, frame: FrameFile | None, frame_present: bool, events: list[JournalEvent], errors: list[str]
+) -> None:
+    """Рамка последнего ответа на В1 совпадает с одной из версий рамки: файлом или `history/`."""
+    answered = [
+        (n, e.gate.frame)
+        for n, e in enumerate(events, start=1)
+        if e.gate is not None and e.gate.gate == "В1" and e.gate.answered_at is not None
+    ]
+    if not answered or answered[-1][1] is None or (frame_present and frame is None):
+        return  # рамки в ответе нет или файл рамки не разобран: его ошибки уже названы
+    n, body = answered[-1]
+    versions = _frame_versions(root, frame)
+    if not versions:
+        return  # сравнивать не с чем: наличие файла рамки сверяет другое правило
+    wanted = frame_key(body)
+    if not any(frame_key(v) == wanted for v in versions):
+        errors.append(
+            f"{JOURNAL_FILE}, строка {n}: рамка в ответе на В1 не совпадает ни с {FRAME_FILE}, "
+            f"ни с одной версией в {HISTORY_DIR}/; рамку после ответа правят новой версией, "
+            "а прежняя остаётся в history/"
+        )
+
+
+def _check_journal_rules(
+    state: ProjectState | None,
+    sources: SourcesFile | None,
+    events: list[JournalEvent],
+    errors: list[str],
+) -> None:
+    """Связи журнала с реестром источников и состоянием."""
+    for n, (prev, cur) in enumerate(zip(events, events[1:], strict=False), start=2):
+        if cur.time < prev.time:
+            errors.append(
+                f"{JOURNAL_FILE}, строка {n}: время события раньше предыдущей строки; "
+                "журнал только дописывается, время не убывает"
+            )
+
+    if sources is not None:
+        known = {s.id for s in sources.sources}
+        suspicious = {s.id for s in sources.sources if s.suspicious}
+        flagged: set[str] = set()
+        for n, e in enumerate(events, start=1):
+            if e.kind != "найдена инструкция в источнике" or e.source is None:
+                continue
+            flagged.add(e.source)
+            if e.source in known and e.source not in suspicious:
+                errors.append(
+                    f"{JOURNAL_FILE}, строка {n}: найдена инструкция в источнике {e.source}, "
+                    f"а он не помечен «подозрительный» в {SOURCES_FILE}"
+                )
+        for sid in sorted(suspicious - flagged, key=lambda x: int(x.split("-")[1])):
+            errors.append(
+                f"{SOURCES_FILE}, запись {sid}: помечен «подозрительный», а события «найдена инструкция "
+                "в источнике» в журнале нет"
+            )
+
+    if state is None:
+        return
+    last: tuple[int, JournalEvent] | None = None
+    for n, e in enumerate(events, start=1):
+        if e.kind == "действие" and (e.name or "").startswith("шаг ") and e.status in ("начато", "выполнено"):
+            last = (n, e)
+    if last is not None and last[1].step != state.step:
+        errors.append(
+            f"{STATE_FILE}, поле step: «{state.step}», а последний начатый или выполненный шаг в журнале — "
+            f"«{last[1].step}» (строка {last[0]})"
+        )
+    for gate in ("В1", "В2", "В3", "В4", "В5"):
+        mine = [e.gate for e in events if e.gate is not None and e.gate.gate == gate]
+        if not mine:
+            want = "впереди"
+        elif mine[-1].answered_at is not None:
+            want = "отвечено"
+        elif mine[-1].questions == 0:
+            want = "пройдены автоматически"
+        else:
+            want = "ждут ответа"
+        have = state.gates.get(gate)  # type: ignore[call-overload]
+        if have != want:
+            errors.append(
+                f"{STATE_FILE}, поле gates.{gate}: «{have}», а по событиям журнала ворота {gate} — «{want}»"
+            )
+
+
 def check_project(root: Path | str) -> list[str]:
     """Проверяет папку проекта и возвращает список ошибок по-русски; пустой список — всё в порядке."""
     root = Path(root)
@@ -985,8 +1113,7 @@ def check_project(root: Path | str) -> list[str]:
     sources_raw = _load_yaml(root, SOURCES_FILE, errors)
     claims_raw = _load_yaml(root, CLAIMS_FILE, errors)
 
-    if state_raw is not None:
-        _validate(STATE_FILE, None, ProjectState, state_raw, errors)
+    state = _validate(STATE_FILE, None, ProjectState, state_raw, errors) if state_raw is not None else None
     sources = _validate(SOURCES_FILE, "sources", SourcesFile, sources_raw, errors) if sources_raw else None
     claims = _validate(CLAIMS_FILE, "claims", ClaimsFile, claims_raw, errors) if claims_raw else None
 
@@ -997,7 +1124,7 @@ def check_project(root: Path | str) -> list[str]:
     if isinstance(sources, SourcesFile) and isinstance(claims, ClaimsFile):
         _check_claims(root, sources, claims, errors)
 
-    frame_present = _check_outputs(
+    frame_present, frame = _check_outputs(
         root,
         sources if isinstance(sources, SourcesFile) else None,
         claims if isinstance(claims, ClaimsFile) else None,
@@ -1012,9 +1139,12 @@ def check_project(root: Path | str) -> list[str]:
         if records is None:
             continue
         if check == "events":
-            _check_events(
-                records, sources if isinstance(sources, SourcesFile) else None, errors, frame_present
+            known_sources = sources if isinstance(sources, SourcesFile) else None
+            _check_events(records, known_sources, errors, frame_present)
+            _check_journal_rules(
+                state if isinstance(state, ProjectState) else None, known_sources, records, errors
             )
+            _check_gate_frame(root, frame, frame_present, records, errors)
         else:
             _check_costs(records, errors)
     return errors
