@@ -147,3 +147,5 @@ def test_output_files_from_new_to_replaced_claim(cli, home, net, page_html, tmp_
     # а сводка после всего этого не находит ни «прервано», ни правок вне агента
     code, out, _ = cli("status", "--brief")
     assert code == 0 and "Прервано" not in out and "Изменено вне агента" not in out
+    # ни одного «изменено вне агента»: правок руками не было, собственные записи CLI ложных событий не дают
+    assert [e for e in journal_of(root) if e["kind"] == "изменено вне агента"] == []

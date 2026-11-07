@@ -546,3 +546,101 @@ def test_rollback_removes_history_folder_created_by_the_refused_write(cli, home)
     assert code == 1 and "У-1" in err
     assert tree_hashes(root) == before
     assert not (root / "history").exists()
+
+
+# --- ошибки в записываемых файлах мешают записи, даже если были до неё ---
+
+
+def test_old_error_in_a_written_file_blocks_the_write(cli, example):
+    """Агент «поправил» варианты, но оставил ссылку на отозванное утверждение: запись отклоняется."""
+    assert cli("claim", "revoke", "У-2", "--reason", "неверно", "--project", "example")[0] == 0
+    assert any("options.yaml" in e for e in check_project(example))  # ошибка появилась до записи
+    options = fixture_outputs()["options"]
+    options["recommendation"]["why"] = "Цена подтверждена, рост ожидается у аудитории, которая видит ценность"
+    before = tree_hashes(example)
+    code, _, err = write_in(cli, "example", {"options": options})
+    assert code == 1
+    assert "options.yaml, recommendation" in err and "У-2" in err
+    assert tree_hashes(example) == before  # ни записи, ни события, ни history/
+
+
+def test_old_error_in_another_file_is_only_a_warning(cli, example):
+    assert cli("claim", "revoke", "У-2", "--reason", "неверно", "--project", "example")[0] == 0
+    plan = fixture_outputs()["plan"]
+    plan["estimate"]["minutes"] = 41
+    code, out, err = write_in(cli, "example", {"plan": plan})
+    assert code == 0, err
+    assert "прежние ошибки проверки" in out
+    # а запись, которая чинит файл, проходит: promises и options переписаны на живое утверждение
+    new = fixture_outputs()
+    new["options"]["recommendation"]["claims"] = ["У-4", "У-7"]
+    new["promises"]["promises"][0]["claims"] = ["У-7"]
+    second = {
+        "text": "Подписка «Защита» в Москве стоит 199 рублей в месяц, первая неделя бесплатно",
+        "type": "факт",
+        "subject": "цена подписки «Защита»",
+        "period": "2026",
+        "region": "RU-MOW",
+        "quotes": [
+            {
+                "source": "И-1",
+                "text": "Стоимость подписки в Москве — 199 рублей в месяц. Первые семь дней бесплатно",
+                "publisher": "компания «Пример»",
+                "publisher_kind": "официальный первоисточник",
+                "self_reported": True,
+            }
+        ],
+    }
+    path = example / ".tmp"
+    path.mkdir(exist_ok=True)
+    (path / "c.json").write_bytes(json.dumps(second, ensure_ascii=False).encode("utf-8"))
+    assert cli("claim", "add", "--file", str(path / "c.json"), "--project", "example")[0] == 0
+    code, _, err = write_in(cli, "example", {"options": new["options"], "promises": new["promises"]})
+    assert code == 0, err
+    assert check_project(example) == []
+
+
+# --- сверка рамки В1 берёт последний ответ ---
+
+
+def _reopen_b1(example, frame_body: dict) -> None:
+    """Дописывает в журнал примера второе открытие В1 и ответ на него с заданной рамкой."""
+    rows = [json.loads(line) for line in (example / "journal.jsonl").read_text(encoding="utf-8").splitlines()]
+    opened = "2026-11-06T10:20:00+03:00"
+    answered = "2026-11-06T10:21:00+03:00"
+    base = {"schema_version": 1, "actor": "CLI", "kind": "ворота", "step": "2б"}
+    gate = {"gate": "В1", "mode": "автопилот", "questions": 1, "opened_at": opened}
+    rows.append({**base, "time": opened, "gate": gate})
+    done = {**gate, "answered_at": answered, "answer": "иначе", "frame": frame_body}
+    rows.append({**base, "time": answered, "gate": done})
+    text = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows)
+    (example / "journal.jsonl").write_bytes(text.encode("utf-8"))
+
+
+def test_frame_check_uses_the_last_b1_answer_not_the_first(example):
+    """Первый ответ на В1 совпадает с рамкой, последний — нет: ошибка."""
+    other = fixture_outputs()["frame"]
+    other["deadline"] = {"value": "никогда не записанная рамка", "origin": "допущение"}
+    _reopen_b1(example, other)
+    found = [e for e in check_project(example) if "рамка в ответе на В1 не совпадает" in e]
+    assert found and "строка 11" in found[0]  # строка последнего ответа, а не первого (строка 2)
+
+
+def test_frame_check_accepts_a_last_answer_that_matches(example):
+    _reopen_b1(example, fixture_outputs()["frame"])
+    assert not [e for e in check_project(example) if "рамка в ответе на В1" in e]
+
+
+# --- версия рамки в history/ уже занята ---
+
+
+def test_taken_frame_version_in_history_is_not_overwritten(cli, example):
+    taken = example / "history" / "frame.v2.yaml"
+    taken.write_bytes("schema_version: 1\n# занято\n".encode())
+    frame = fixture_outputs()["frame"]
+    frame["deadline"] = {"value": "к пятнице", "origin": "ответ человека"}
+    before = tree_hashes(example)
+    code, _, err = write_in(cli, "example", {"frame": frame})
+    assert code == 1
+    assert "frame.v2.yaml" in err and "разошлись" in err
+    assert tree_hashes(example) == before

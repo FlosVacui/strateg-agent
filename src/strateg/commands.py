@@ -51,6 +51,8 @@ from strateg.models import (
 from strateg.models import Source as SourceModel
 from strateg.project import CliError, Project, UsageError
 from strateg.project_check import (
+    _PLAN_LIKE,
+    _PLAN_REF,
     FRAME_FILE,
     STALE_REF_NOTE,
     _explain,
@@ -1194,10 +1196,24 @@ def cmd_claim_add(args: argparse.Namespace) -> int:
     return emit(args, {"claims": results}, lines)
 
 
+# «VP-2»: латинская V вместо русской В (общий разбор «почти номеров» её не знает)
+_LATIN_PLAN_NUMBER = re.compile(r"[VВB][PП]\s*[-–—]\s*[0-9]+", re.IGNORECASE)
+
+
 def cmd_claim_list(args: argparse.Namespace) -> int:
     p = _open(args)
     step = _norm_step(args.step) if args.step else None
-    question = norm(args.plan_question) if args.plan_question else None
+    question = None
+    if args.plan_question:
+        value = args.plan_question.strip()
+        if (_PLAN_LIKE.fullmatch(value) or _LATIN_PLAN_NUMBER.fullmatch(value)) and not _PLAN_REF.fullmatch(
+            value
+        ):
+            raise UsageError(
+                f"номер вопроса плана «{value}» не подходит: нужен вид ВП-1 (буквы русские заглавные, "
+                f"без нуля впереди){latin_hint(value)}"
+            )
+        question = norm(value)
     claims = [
         c
         for c in p.claims.claims
@@ -1362,10 +1378,17 @@ def cmd_claim_replace(args: argparse.Namespace) -> int:
     if old.status != "действует":
         raise CliError(f"{old.id} имеет статус «{old.status}»: заменить можно только действующее утверждение")
     twin = next((x for x in p.claims.claims if _key_of_claim(x) == key), None)
-    if twin is not None:
+    if twin is not None and _differs(_extras(twin), _extras(c)) is None:
+        # полностью то же утверждение: нового номера не будет
+        if twin.id == old.id:
+            return emit(
+                args,
+                {"id": old.id, "replaced": old.id, "already_replaced": False, "unchanged": True},
+                [f"{old.id}: такое утверждение уже записано, замена не нужна."],
+            )
         raise CliError(
             f"такое утверждение уже записано как {twin.id}: замена не создаёт дубль; "
-            "перепишите текст, предмет, период или цитату"
+            "перепишите текст, предмет, период, цитату или другое поле"
         )
 
     started = time.monotonic()
@@ -1499,8 +1522,10 @@ def cmd_write(args: argparse.Namespace) -> int:
 
     started = time.monotonic()
     written = [ch.kind.file for ch in changes] + [k.file for k in same]
+    mine = re.compile("^(?:" + "|".join(re.escape(f) for f in written) + ")[,:]")
     try:
-        with proj.transaction(p.root):
+        # ошибки в самих записываемых файлах мешают записи, даже если были до неё
+        with proj.transaction(p.root, block=lambda e: mine.match(e) is not None):
             for ch in changes:
                 outputs.apply_change(p, ch, started, by)
             p.save_state()
@@ -1743,26 +1768,19 @@ def status_line(d: dict[str, Any]) -> str:
     return " · ".join(parts)
 
 
-def _resume(p: Project) -> tuple[list[JournalEvent], list[tuple[str, str]]]:
-    """Возобновление работы: «прервано» для начатых и не завершённых действий и «изменено вне агента».
+def _resume(p: Project) -> list[JournalEvent]:
+    """Возобновление работы: «прервано» для начатых и не завершённых действий.
 
-    Каждое событие пишется один раз: после «прервано» последняя отметка действия уже не «начато», а после
-    записи события хеш файла принимается как текущий. Возвращает прерванные действия и изменённые файлы.
+    Событие пишется один раз: после него последняя отметка действия уже не «начато». «Изменено вне агента»
+    пишет `save_state` (так же, как у любой команды). Возвращает прерванные действия.
     """
     last: dict[str, JournalEvent] = {}
     for e in p.journal:
         if e.kind == "действие" and e.idempotency_hash:
             last[e.idempotency_hash] = e
     interrupted = [(h, e) for h, e in last.items() if e.status == "начато"]
-    changed: list[tuple[str, str]] = []
-    for rel, recorded in sorted(p.state.files.items()):
-        path = p.root / rel
-        if not path.is_file():
-            changed.append((rel, "файл удалён"))
-        elif proj.sha256_bytes(path.read_bytes()) != recorded:
-            changed.append((rel, "хеш файла не совпал с записанным"))
-    if not interrupted and not changed:
-        return [], []
+    if not interrupted and not p.outside:
+        return []
     with proj.transaction(p.root, rollback=False):
         for h, e in interrupted:
             p.add_event(
@@ -1775,15 +1793,18 @@ def _resume(p: Project) -> tuple[list[JournalEvent], list[tuple[str, str]]]:
                     message="начато и не завершено до перерыва; обнаружено при возобновлении работы",
                 )
             )
-        for rel, why in changed:
-            p.add_event(p.event(kind="изменено вне агента", path=rel, message=f"{rel}: {why}"))
-        p.save_state()  # хеши принимаются: повторный `status` тех же изменений не запишет
-    return [e for _, e in interrupted], changed
+        p.save_state()  # пишет «изменено вне агента» и принимает хеши: повторный `status` ничего не запишет
+    return [e for _, e in interrupted]
 
 
-def _brief(args: argparse.Namespace, p: Project) -> int:
-    """Сводка «где остановились»: не больше 10 строк. Её вызывает хук начала сеанса и правило AGENTS.md."""
-    interrupted, changed = _resume(p)
+def _brief(args: argparse.Namespace, p: Project, *, peek: bool) -> int:
+    """Сводка «где остановились»: не больше 10 строк. Её вызывает хук начала сеанса и правило AGENTS.md.
+
+    С `peek` ничего не пишется: ни «прервано», ни «изменено вне агента». Так сводку берут посреди работы
+    (например, после сжатия контекста): идущий шаг прерванным не становится.
+    """
+    changed = list(p.outside)
+    interrupted = [] if peek else _resume(p)
     d = _status_data(p)
     present = [k.name for k in outputs.KINDS.values() if (p.root / k.file).is_file()]
     frame_note = ""
@@ -1814,6 +1835,8 @@ def _brief(args: argparse.Namespace, p: Project) -> int:
         lines.append(f"Прервано (записано «прервано»): {names}")
     if changed:
         lines.append("Изменено вне агента: " + ", ".join(rel for rel, _ in changed))
+    if peek and changed:
+        lines.append("Сводка без записи (--peek): событие «изменено вне агента» запишет следующая команда.")
     lines.append(
         "Файлы выхода: " + (", ".join(f"{k}{frame_note if k == 'frame' else ''}" for k in present) or "нет")
     )
@@ -1827,6 +1850,7 @@ def _brief(args: argparse.Namespace, p: Project) -> int:
         "next_action": nxt,
         "interrupted": [{"name": e.name, "step": e.step} for e in interrupted],
         "changed_outside": [{"path": rel, "why": why} for rel, why in changed],
+        "peek": peek,
         "outputs": present,
         "frame_version": frame_version,
         "frame_draft": "frame" in present and not outputs.b1_answered(p.journal),
@@ -1836,8 +1860,10 @@ def _brief(args: argparse.Namespace, p: Project) -> int:
 
 def cmd_status(args: argparse.Namespace) -> int:
     p = _open(args)
+    if getattr(args, "peek", False) and not getattr(args, "brief", False):
+        raise UsageError("--peek задаётся вместе с --brief")
     if getattr(args, "brief", False):
-        return _brief(args, p)
+        return _brief(args, p, peek=getattr(args, "peek", False))
     d = _status_data(p)
     d["line"] = status_line(d)
     if args.line:

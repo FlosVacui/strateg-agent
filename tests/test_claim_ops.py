@@ -132,9 +132,47 @@ def test_replace_checks_the_new_claim_like_claim_add(one, cli, tmp_path):
     assert code == 1 and "новое утверждение" in err and "поле" in err
 
 
-def test_replace_does_not_duplicate_an_existing_claim(one, cli, tmp_path):
-    code, _, err = replace(cli, tmp_path, "У-1", fact())  # то же утверждение, что У-1
+def test_replace_with_the_same_claim_returns_the_recorded_number(one, cli, tmp_path):
+    """Полностью то же утверждение: нового номера нет, прежний не меняется."""
+    before = tree_hashes(one)
+    code, out, err = replace(cli, tmp_path, "У-1", fact())
+    assert code == 0, err
+    assert "У-1" in out and "замена не нужна" in out
+    assert json.loads(replace(cli, tmp_path, "У-1", fact(), "--json")[1])["id"] == "У-1"
+    assert tree_hashes(one) == before
+    assert claims(one)["У-1"]["status"] == "действует"
+
+
+def test_replace_does_not_duplicate_another_claim(one, cli, tmp_path):
+    assert replace(cli, tmp_path, "У-1", second())[0] == 0  # У-2 действует
+    # У-1 заменено, поэтому заменяем У-2 утверждением, которое уже есть как У-1: дубль под новым номером
+    code, _, err = replace(cli, tmp_path, "У-2", fact())
     assert code == 1 and "уже записано как У-1" in err
+
+
+def test_replace_may_differ_only_in_a_field_outside_the_key(started, cli, tmp_path):
+    """Гипотеза с другим способом проверки при том же тексте: `claim add` такое не принимает, замена — да."""
+    items = [
+        fact(),
+        {
+            "text": "Подключают чаще семьи с пожилыми родителями",
+            "type": "гипотеза",
+            "subject": "кто подключает защиту",
+            "basis": ["У-1"],
+            "check_method": "спросить в интервью с пятью семьями",
+        },
+    ]
+    assert cli("claim", "add", "--file", write_claims(tmp_path, items))[0] == 0
+    better = {**items[1], "check_method": "опрос 200 абонентов и выгрузка подключений"}
+    code, out, err = replace(cli, tmp_path, "У-2", better)
+    assert code == 0, err
+    cs = claims(started)
+    assert cs["У-2"]["status"] == "заменено" and cs["У-2"]["replaced_by"] == "У-3"
+    assert cs["У-3"]["check_method"] == "опрос 200 абонентов и выгрузка подключений"
+    assert cs["У-3"]["replaces"] == "У-2"
+    assert check_project(started) == []
+    # повтор той же замены — прежний номер
+    assert json.loads(replace(cli, tmp_path, "У-2", better, "--json")[1])["id"] == "У-3"
 
 
 def test_replace_by_user_is_a_correction(one, cli, tmp_path):
@@ -350,3 +388,41 @@ def test_event_error(cli, home):
     assert cli("event", "error", "--message", " ")[0] == 2
     assert cli("event", "error")[0] == 2
     assert cli("check")[0] == 0
+
+
+# --- claim list: номер вопроса плана ---
+
+
+def test_claim_list_plan_question_rejects_latin_look_alikes(started, cli, tmp_path):
+    items = [fact(plan_question="ВП-2")]
+    assert cli("claim", "add", "--file", write_claims(tmp_path, items))[0] == 0
+    for bad in ("VP-2", "ВП-02", "вп-2", "BП-2"):
+        code, _, err = cli("claim", "list", "--plan-question", bad)
+        assert code == 2, bad
+        assert "ВП-1" in err and "номер вопроса плана" in err
+    code, _, err = cli("claim", "list", "--plan-question", "VP-2")
+    assert "латинские буквы" in err  # подсказка называет латиницу
+    # правильный номер и свободный текст допустимы
+    assert "У-1" in cli("claim", "list", "--plan-question", "ВП-2")[1]
+    assert cli("claim", "list", "--plan-question", "Сколько стоит подписка?")[0] == 0
+
+
+# --- места использования: решения, пробелы, строки плана проверки ---
+
+
+def test_usage_places_name_decisions_gaps_and_verification_rows(example, cli):
+    code, out, err = cli("claim", "revoke", "У-3", "--reason", "неверно", "--project", "example")
+    assert code == 0, err
+    used = json.loads(cli("claim", "revoke", "У-3", "--reason", "x", "--json", "--project", "example")[1])
+    assert used["already_revoked"] is True
+    assert "решение Реш-1" in out  # У-3 — допущение решения
+    assert "строка плана проверки ПП-1" in out  # гипотеза строки плана
+    assert "пре-мортем, строка плана проверки ПП-4" in out
+    code, out, err = cli("claim", "revoke", "У-5", "--reason", "неверно", "--project", "example")
+    assert code == 0, err
+    assert "пробел П-1" in out  # гипотеза пробела
+    assert "строка плана проверки ПП-2" in out
+    code, out, err = cli("claim", "revoke", "У-4", "--reason", "неверно", "--project", "example")
+    assert code == 0, err
+    assert "решение Реш-1" in out  # У-4 — основание решения
+    assert "перечень показателей: «охват»" in out

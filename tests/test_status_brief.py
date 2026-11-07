@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import shutil
 
-from helpers import FIXTURE, fact, journal_of, put_frame, tree_hashes, write_claims
+from helpers import FIXTURE, fact, journal_of, load_yaml, put_frame, tree_hashes, write_claims
 from strateg.project_check import check_project
 
 
@@ -210,3 +210,190 @@ def test_deleted_file_is_reported(started, cli, tmp_path):
     text = "\n".join(brief(cli))
     assert "sources/i-1.txt" in text
     assert "файл удалён" in journal_of(started)[-1]["message"]
+
+
+# --- --peek: сводка без записи ---
+
+
+def test_peek_in_the_middle_of_a_step_writes_nothing_and_step_done_passes(cli, home, clock):
+    """Сводка после сжатия контекста идущий шаг прерванным не делает."""
+    cli("new", "demo")
+    cli("step", "start", "1")
+    clock.advance(600)
+    before = tree_hashes(home / "demo")
+    text = "\n".join(brief(cli, "--peek"))
+    assert tree_hashes(home / "demo") == before
+    assert "Шаг: 1 (Постановка) · в работе" in text and "Прервано" not in text
+    clock.advance(600)
+    code, _, err = cli("step", "done", "1")
+    assert code == 0, err
+    assert "прервано" not in [e.get("status") for e in journal_of(home / "demo")]
+
+
+def test_brief_without_peek_in_the_middle_of_a_step_still_interrupts(cli, home):
+    """Обычная сводка — для нового сеанса: прерванное выполняется заново, обхода через `step done` нет."""
+    cli("new", "demo")
+    cli("step", "start", "1")
+    brief(cli)
+    code, _, err = cli("step", "done", "1")
+    assert code == 1 and "не начат заново" in err
+    assert cli("step", "start", "1")[0] == 0
+    assert cli("step", "done", "1")[0] == 0
+
+
+def test_peek_names_outside_changes_but_writes_nothing(cli, home):
+    cli("new", "demo")
+    put_frame(cli)
+    frame = home / "demo" / "frame.yaml"
+    frame.write_bytes(frame.read_bytes() + "# правка руками\n".encode())
+    before = tree_hashes(home / "demo")
+    lines = brief(cli, "--peek")
+    assert any(line.startswith("Изменено вне агента: frame.yaml") for line in lines)
+    assert len(lines) <= 10
+    assert tree_hashes(home / "demo") == before  # ни события, ни новых хешей
+    brief(cli, "--peek")
+    assert tree_hashes(home / "demo") == before
+    brief(cli)  # обычная сводка записывает событие
+    assert kinds(home / "demo").count("изменено вне агента") == 1
+
+
+def test_peek_json_and_usage(cli, home):
+    cli("new", "demo")
+    assert json.loads(cli("status", "--brief", "--peek", "--json")[1])["peek"] is True
+    assert json.loads(cli("status", "--brief", "--json")[1])["peek"] is False
+    code, _, err = cli("status", "--peek")
+    assert code == 2 and "--brief" in err
+
+
+# --- правка вне агента между двумя командами ---
+
+
+def outside_events(root) -> list[dict]:
+    return [e for e in journal_of(root) if e["kind"] == "изменено вне агента"]
+
+
+def test_edit_between_two_commands_is_recorded_by_the_next_command(cli, home):
+    cli("new", "demo")
+    root = home / "demo"
+    put_frame(cli)
+    frame = root / "frame.yaml"
+    frame.write_bytes(frame.read_bytes() + "# правка руками\n".encode())
+    assert cli("step", "start", "2б")[0] == 0  # любая команда с записью состояния
+    events = outside_events(root)
+    assert [e["path"] for e in events] == ["frame.yaml"]
+    assert events[0]["actor"] == "CLI" and "frame.yaml" in events[0]["message"]
+    cli("step", "done", "2б")
+    brief(cli)
+    assert len(outside_events(root)) == 1  # одно событие на одно изменение
+    # хеш принят: следующая правка — новое событие
+    frame.write_bytes(frame.read_bytes() + "# ещё\n".encode())
+    cli("mode", "пилот")
+    assert len(outside_events(root)) == 2
+    assert check_project(root) == []
+
+
+def test_each_changed_file_gets_its_own_event(started, cli, tmp_path):
+    for name in ("claims.yaml", "sources.yaml"):
+        path = started / name
+        path.write_bytes(path.read_bytes() + b"# x\n")
+    assert cli("claim", "add", "--file", write_claims(tmp_path, fact()))[0] == 0
+    paths = sorted(e["path"] for e in outside_events(started))
+    assert paths == ["claims.yaml", "sources.yaml"]
+
+
+def test_output_file_put_by_hand_is_an_outside_change(cli, home):
+    """Файл выхода, которого нет в `state.files`, но он лежит в папке, — тоже правка вне агента."""
+    cli("new", "demo")
+    root = home / "demo"
+    shutil.copyfile(FIXTURE / "gaps.yaml", root / "gaps.yaml")
+    assert any(
+        line.startswith("Изменено вне агента: gaps.yaml") for line in brief(cli, "--peek")
+    )  # сводка называет такой файл
+    assert cli("step", "start", "1")[0] == 0
+    events = outside_events(root)
+    assert [e["path"] for e in events] == ["gaps.yaml"]
+    assert "gaps.yaml" in load_yaml(root / "state.yaml")["files"]  # принят после записи события
+
+
+def test_deleted_file_is_recorded_by_the_next_command(started, cli):
+    (started / "sources" / "i-1.txt").unlink()
+    cli("mode", "пилот")
+    events = outside_events(started)
+    assert [e["path"] for e in events] == ["sources/i-1.txt"] and "удалён" in events[0]["message"]
+
+
+def test_refused_command_does_not_swallow_an_outside_change(cli, home):
+    """Команда откатилась: правка не принята и не потеряна, сводка её по-прежнему называет."""
+    cli("new", "demo")
+    root = home / "demo"
+    put_frame(cli)
+    frame = root / "frame.yaml"
+    frame.write_bytes(frame.read_bytes() + "# правка руками\n".encode())
+    code, _, _ = cli(
+        "write",
+        "--file",
+        "-",
+        stdin=json.dumps(
+            {
+                "promises": {
+                    "promises": [
+                        {
+                            "id": "О-1",
+                            "text": "x",
+                            "capability": "y",
+                            "claims": ["У-9"],
+                            "conditions": "z",
+                            "status": "подтверждено",
+                        }
+                    ]
+                }
+            }
+        ),
+    )
+    assert code == 1  # новая ошибка: ссылка на несуществующее утверждение, откат
+    assert outside_events(root) == []
+    assert any("frame.yaml" in line for line in brief(cli, "--peek"))
+    brief(cli)
+    assert len(outside_events(root)) == 1
+
+
+def test_commands_of_the_cli_never_report_outside_changes(cli, home, net, page_html, tmp_path):
+    """Без правок руками ни одна команда не пишет «изменено вне агента»."""
+    from helpers import URL
+
+    net.add(URL, page_html)
+    cli("new", "demo")
+    root = home / "demo"
+    cli("step", "start", "1")
+    put_frame(cli)
+    cli("gate", "open", "В1", "--questions", "1")
+    put_frame(cli, deadline={"value": "позже", "origin": "ответ человека"})
+    cli("gate", "answer", "В1", "--answer", "ок")
+    cli("step", "done", "1")
+    cli("fetch", URL, "--region", "RU-MOW")
+    cli("claim", "add", "--file", write_claims(tmp_path, fact()))
+    put_frame(cli, deadline={"value": "ещё позже", "origin": "ответ человека"})
+    cli(
+        "cost",
+        "add",
+        "--session",
+        "s1",
+        "--role",
+        "аналитик",
+        "--model",
+        "m",
+        "--usd",
+        "0.1",
+        "--input",
+        "10",
+    )
+    cli("mode", "пилот")
+    cli("stop", "--reason", "нужен ответ")
+    cli("step", "start", "2б")
+    cli("step", "fail", "2б", "--reason", "сбой")
+    cli("event", "error", "--message", "сбой инструмента", "--tool", "Bash")
+    cli("claim", "revoke", "У-1", "--reason", "неверно")
+    brief(cli)
+    brief(cli, "--peek")
+    assert outside_events(root) == []
+    assert check_project(root) == []

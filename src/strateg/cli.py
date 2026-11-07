@@ -186,6 +186,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="сводка «где остановились» (до 10 строк); при продолжении работы записывает "
         "«прервано» и «изменено вне агента»",
     )
+    p.add_argument(
+        "--peek",
+        action="store_true",
+        help="с --brief: та же сводка без записи событий (середина сеанса, например после сжатия контекста)",
+    )
 
     step = add("step", commands.cmd_step_start, "начало и конец шага")
     step_sub = step.add_subparsers(dest="step_command", required=True, parser_class=_Parser)
