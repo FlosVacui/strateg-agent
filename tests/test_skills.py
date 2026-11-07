@@ -91,9 +91,8 @@ def case_thresholds() -> set[str]:
     return found
 
 
-# Файлы репозитория, на которые ссылаются тексты; шаблоны пишет другое задание, их пока нет.
+# Файлы репозитория, на которые ссылаются тексты.
 REPO_ROOTS = (".claude", "knowledge", "docs", "schemas", "config", "src", "scripts", "tests", "evals")
-NOT_YET = ("knowledge/templates/",)
 
 FENCE = re.compile(r"^```([^\n]*)\n(.*?)^```", re.S | re.M)
 SPAN = re.compile(r"`([^`\n]+)`")
@@ -106,6 +105,13 @@ def skill_files() -> list[Path]:
 
 def skill_dirs() -> list[Path]:
     return sorted(p for p in SKILLS.iterdir() if p.is_dir()) if SKILLS.is_dir() else []
+
+
+KNOWLEDGE = ROOT / "knowledge"
+
+
+def knowledge_files() -> list[Path]:
+    return sorted(p for p in KNOWLEDGE.rglob("*") if p.is_file())
 
 
 def all_texts() -> list[Path]:
@@ -188,8 +194,6 @@ def test_file_references_exist(path):
     text = path.read_text(encoding="utf-8")
     broken = []
     for ref in sorted(file_refs(text)):
-        if ref.startswith(NOT_YET):
-            continue
         if not (ROOT / ref).exists():
             broken.append(ref)
     for link in LINK.findall(FENCE.sub("", text)):
@@ -456,7 +460,7 @@ def test_example_checker_catches_broken_examples():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("path", all_texts(), ids=rel)
+@pytest.mark.parametrize("path", [*all_texts(), *knowledge_files()], ids=rel)
 def test_no_case_strings(path):
     text = path.read_text(encoding="utf-8")
     low = text.casefold()
@@ -531,7 +535,7 @@ def test_texts_in_write_samples_are_quoted():
     assert not bare, bare
 
 
-@pytest.mark.parametrize("path", all_texts(), ids=rel)
+@pytest.mark.parametrize("path", [*all_texts(), *knowledge_files()], ids=rel)
 def test_no_internal_traces(path):
     text = path.read_text(encoding="utf-8")
     found = [label for label, needle in FORBIDDEN.items() if needle.lower() in text.lower()]
@@ -545,3 +549,201 @@ def test_no_internal_traces(path):
         if pattern.search(text):
             found.append(label)
     assert not found, f"{rel(path)}: служебное {found}"
+
+
+# ---------------------------------------------------------------------------
+# Шаблоны документов, карточки методов, рубрика
+# ---------------------------------------------------------------------------
+
+TEMPLATES = KNOWLEDGE / "templates"
+METHODS = KNOWLEDGE / "methods"
+RUBRIC = KNOWLEDGE / "rubrics" / "completeness.yaml"
+MAX_TEMPLATE_LINES = 40
+MAX_CARD_LINES = 25  # без раздела «Источники»
+
+# Разделы документов, как их перечисляли скиллы до шаблонов: по порядку. Шаблон не меняет смысл скилла.
+TEMPLATE_HEADINGS = {
+    "frame": ["Кратко", "Поля рамки", "Было"],
+    "plan": ["Кратко", "Вопросы плана", "Исключено из плана", "Оценка пути"],
+    "situation": ["Кратко", "Известно", "Где источники спорят", "Чего не знаем"],
+    "options": [
+        "Кратко",
+        "Варианты",
+        "Возражения",
+        "Сравнение",
+        "Рекомендация",
+        "Пробелы, которые могут изменить выбор",
+    ],
+    "product-strategy": [
+        "Кратко",
+        "Аудитория и её задача",
+        "Альтернативы",
+        "Диагноз",
+        "Направление",
+        "Осознанные отказы",
+        "Польза, затраты и доходы",
+    ],
+    "comms-strategy": [
+        "Кратко",
+        "Аудитория и ситуация",
+        "Барьер",
+        "Ключевые сообщения",
+        "Роли каналов",
+        "Таблица обещаний",
+    ],
+    "verification-plan": [
+        "Кратко",
+        "Ожидаемое изменение",
+        "База сравнения",
+        "Срок",
+        "Нежелательные последствия",
+        "Защитные показатели",
+        "Условия отказа",
+        "Строки плана",
+    ],
+    "one-pager": [
+        "Кратко",
+        "Рекомендация и почему",
+        "Сильнейшее возражение и ответ",
+        "Что заставит передумать",
+        "Владелец и пересмотр",
+    ],
+    "report": [
+        "Кратко",
+        "Картина ситуации",
+        "Варианты",
+        "Стратегии",
+        "План проверки",
+        "Пробелы",
+        "Решение",
+    ],
+    "run-report": [
+        "Кратко",
+        "Время и стоимость",
+        "Сбои",
+        "Подозрительные источники",
+        "Помощь человека",
+        "Проверка полноты",
+        "Допущения",
+        "Среда",
+        "Ограничения этой версии",
+        "Не сделано",
+    ],
+}
+CARDS = [
+    "frame-and-questions",
+    "sources-and-evidence",
+    "gaps",
+    "users-and-alternatives",
+    "options",
+    "objections-and-premortem",
+    "product-strategy",
+    "communication-strategy",
+    "validation-plan",
+]
+
+
+def headings(path: Path) -> list[str]:
+    return re.findall(r"^## (.+?)\s*$", path.read_text(encoding="utf-8"), re.M)
+
+
+def test_ten_templates_exist():
+    assert sorted(p.stem for p in TEMPLATES.glob("*.md")) == sorted(TEMPLATE_HEADINGS)
+
+
+@pytest.mark.parametrize("name", TEMPLATE_HEADINGS)
+def test_template_has_the_headings_of_its_document(name):
+    path = TEMPLATES / f"{name}.md"
+    assert headings(path) == TEMPLATE_HEADINGS[name], f"{rel(path)}: заголовки и их порядок"
+    lines = len(path.read_text(encoding="utf-8").splitlines())
+    assert lines <= MAX_TEMPLATE_LINES, f"{rel(path)}: {lines} строк, предел {MAX_TEMPLATE_LINES}"
+
+
+@pytest.mark.parametrize("name", TEMPLATE_HEADINGS)
+def test_template_only_describes(name):
+    """Под каждым заголовком — одно описание в `<…>`: готовой фразы, образца и примера нет."""
+    text = (TEMPLATES / f"{name}.md").read_text(encoding="utf-8")
+    sections = re.split(r"^## .+$", text, flags=re.M)[1:]
+    assert len(sections) == len(TEMPLATE_HEADINGS[name])
+    for body in sections:
+        lines = [line for line in body.strip().splitlines() if line.strip()]
+        assert len(lines) == 1, f"{name}: под заголовком не одна строка"
+        line = lines[0].removeprefix("- ")
+        assert line.startswith("<") and line.endswith(">"), f"{name}: нет описания в <…>: {line[:40]}"
+    assert headings(TEMPLATES / f"{name}.md")[0] == "Кратко"
+
+
+@pytest.mark.parametrize("name", TEMPLATE_HEADINGS)
+def test_a_skill_points_to_each_template(name):
+    ref = f"knowledge/templates/{name}.md"
+    holders = [p for p in skill_files() if ref in p.read_text(encoding="utf-8")]
+    assert holders, f"ни один скилл не ссылается на {ref}"
+
+
+def test_skills_do_not_repeat_the_template_sections():
+    """Списки разделов живут в шаблонах: в скиллах строк вида «- «Кратко» — …» нет."""
+    pattern = re.compile(r"^\s*-\s*«(Кратко|Известно|Варианты|Возражения|Сравнение|Рекомендация)»", re.M)
+    for path in skill_files():
+        assert not pattern.search(path.read_text(encoding="utf-8")), rel(path)
+
+
+@pytest.mark.parametrize("name", CARDS)
+def test_method_card_is_short_and_has_sources(name):
+    path = METHODS / f"{name}.md"
+    text = path.read_text(encoding="utf-8")
+    assert "\n## Источники\n" in text, f"{rel(path)}: нет раздела «Источники»"
+    body, sources = text.split("\n## Источники\n", 1)
+    assert len(body.rstrip().splitlines()) <= MAX_CARD_LINES, f"{rel(path)}: длиннее {MAX_CARD_LINES} строк"
+    assert "07.11.2026" in sources, f"{rel(path)}: нет даты обращения"
+    for part in ("## Правила", "## Что это проверяет", "## Не делай"):
+        assert part in body, f"{rel(path)}: нет раздела «{part[3:]}»"
+    entries = [line for line in sources.splitlines() if line.startswith("- ")]
+    assert entries, f"{rel(path)}: нет ни одного источника"
+    for line in entries:
+        assert "http" in line or "карточку" in line, f"{rel(path)}: у источника нет адреса: {line[:60]}"
+
+
+def test_method_cards_are_exactly_the_planned_nine():
+    assert sorted(p.stem for p in METHODS.glob("*.md")) == sorted(CARDS)
+
+
+@pytest.mark.parametrize("name", CARDS)
+def test_a_skill_points_to_each_card_with_a_condition(name):
+    pattern = re.compile(rf"Метод и ситуации — `knowledge/methods/{name}\.md`: прочитай, когда \S+")
+    assert any(pattern.search(p.read_text(encoding="utf-8")) for p in skill_files()), name
+
+
+def test_rubric_is_yaml_within_limits_and_quoted():
+    text = RUBRIC.read_text(encoding="utf-8")
+    data = yaml.safe_load(text)
+    assert len(data["part_a"]) <= 30 and len(data["part_b"]) <= 15
+    ids = [x["id"] for x in data["part_a"] + data["part_b"]]
+    assert len(ids) == len(set(ids))
+    key = r"(id|step|rule|question|no_means|source|pass_rule|answer_format|how_to_read)"
+    bare = []
+    for n, line in enumerate(text.splitlines(), 1):
+        m = re.match(rf"\s*(?:- )?{key}: (.*)", line)
+        if m and not m.group(2).startswith('"'):
+            bare.append(f"{n}: {line.strip()[:50]}")
+    assert not bare, bare
+
+
+def test_rubric_sources_name_existing_cards():
+    """В `source` — названия карточек методов, и такие карточки есть."""
+    text = RUBRIC.read_text(encoding="utf-8")
+    data = yaml.safe_load(text)
+    name = r"[a-z]+(?:-[a-z]+)*"
+    names: set[str] = set()
+    for item in data["part_a"] + data["part_b"]:
+        for m in re.finditer(rf"карточк\S* ({name}(?: и {name})*)", item["source"]):
+            names |= set(m.group(1).split(" и "))
+    assert names and names <= set(CARDS), sorted(names - set(CARDS))
+    assert "Правило «" not in text
+
+
+def test_rubric_section_names_match_the_templates():
+    """Названия разделов в признаках — как в шаблонах."""
+    text = RUBRIC.read_text(encoding="utf-8")
+    known = {h for hs in TEMPLATE_HEADINGS.values() for h in hs}
+    for name in re.findall(r"раздел\w* «([^»]+)»", text):
+        assert name in known, f"в рубрике раздел «{name}», которого нет в шаблонах"

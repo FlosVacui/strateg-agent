@@ -20,7 +20,7 @@
   - `.tmp/` — твои временные файлы: входы для `write` и `claim add`, журнал поиска;
   - в корне — состояние, журнал, источники, утверждения и файлы выхода (`frame.yaml`, `plan.yaml`, `gaps.yaml`, `options.yaml`, `promises.yaml`, `verification.yaml`, `decisions.yaml`); прежние версии — в `history/`.
 - Инструменты — CLI `strateg` (`uv run strateg --help`).
-- Методика шагов — в скиллах `.claude/skills/<имя>/`. Рубрика полноты — `knowledge/rubrics/completeness.yaml`. Шаблоны документов — `knowledge/templates/`, если они есть.
+- Методика шагов — в скиллах `.claude/skills/<имя>/`. Рубрика полноты — `knowledge/rubrics/completeness.yaml`. Шаблоны документов — `knowledge/templates/`, карточки методов — `knowledge/methods/`: читай, когда велит скилл.
 - `docs/`, `evals/`, `tests/`, `scripts/`, `src/`, `schemas/` — разработка самого агента, а не материалы задачи. Не читай их и не ищи в них. Поиск по файлам — только в `knowledge/`, `.claude/skills/` и в папке своего проекта.
 - Не читай `.env`, `~/.strateg/` и другие файлы вне репозитория.
 
