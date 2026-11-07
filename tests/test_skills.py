@@ -53,6 +53,7 @@ CASE_STRINGS = (
 )
 CASE_WORDS = ("Ева",)
 DOMAIN_WORDS = ("абонент", "тариф")  # слова области по умолчанию; в `domain-words.yaml` допустимы
+DOMAIN_WORDS_FILE = "knowledge/rubrics/domain-words.yaml"  # исключение — только для этого пути
 # Структура кейса: развилка, цепочка «пробел → возражение → показатель», формулировки рамки.
 CASE_PHRASES = (
     "отдельной подпиской",
@@ -113,6 +114,11 @@ KNOWLEDGE = ROOT / "knowledge"
 
 def knowledge_files() -> list[Path]:
     return sorted(p for p in KNOWLEDGE.rglob("*") if p.is_file())
+
+
+def domain_exceptions(path: Path) -> tuple[str, ...]:
+    """Слова области, допустимые в файле: только в списке `knowledge/rubrics/domain-words.yaml`, по пути."""
+    return DOMAIN_WORDS if rel(path) == DOMAIN_WORDS_FILE else ()
 
 
 def all_texts() -> list[Path]:
@@ -466,7 +472,7 @@ def test_no_case_strings(path):
     text = path.read_text(encoding="utf-8")
     low = text.casefold()
     # Список слов области — единственное место, где «абонент» и «тариф» уместны: ради них он и нужен.
-    domain = DOMAIN_WORDS if path.name == "domain-words.yaml" else ()
+    domain = domain_exceptions(path)
     found = [s for s in CASE_STRINGS if s.casefold() in low and s not in domain]
     found += [w for w in CASE_WORDS if re.search(rf"(?<!\w){re.escape(w)}(?!\w)", text)]
     found += [s for s in CASE_PHRASES if s.casefold() in low]
@@ -477,6 +483,13 @@ def test_no_case_strings(path):
     flat = re.sub(r"\s+", "", low)
     found += [f"порог «{s}»" for s in sorted(case_thresholds()) if s in flat]
     assert not found, f"{rel(path)}: строки, цены и пороги учебного кейса {found}"
+
+
+def test_domain_words_exception_is_tied_to_the_path_not_the_name():
+    assert domain_exceptions(KNOWLEDGE / "rubrics" / "domain-words.yaml") == DOMAIN_WORDS
+    for other in (ROOT / "src" / "domain-words.yaml", ROOT / "config" / "domain-words.yaml"):
+        assert domain_exceptions(other) == ()
+    assert domain_exceptions(KNOWLEDGE / "rubrics" / "completeness.yaml") == ()
 
 
 def test_case_lists_are_not_empty():

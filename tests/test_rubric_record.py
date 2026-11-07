@@ -17,6 +17,7 @@ RUBRIC = rubric.load_rubric()
 CRITICAL = [q.id for q in RUBRIC.part_b if q.critical]
 SOFT = [q.id for q in RUBRIC.part_b if not q.critical]
 IF_QUESTIONS = [q.id for q in RUBRIC.part_b if q.question.startswith("Если")]
+IF_PART_ONLY = [q.id for q in RUBRIC.part_b if "Если" in q.question and not q.question.startswith("Если")]
 
 
 @pytest.fixture
@@ -41,8 +42,18 @@ def answers(**no: str) -> list[dict]:
 
 
 def record(cli, proj, data, *extra) -> tuple[int, dict | str, str]:
+    by = () if "--by" in extra else ("--by", "критик")  # --by обязателен: значения по умолчанию нет
     code, out, err = cli(
-        "rubric", "record", "--project", str(proj), "--file", "-", "--json", *extra, stdin=json.dumps(data)
+        "rubric",
+        "record",
+        "--project",
+        str(proj),
+        "--file",
+        "-",
+        "--json",
+        *by,
+        *extra,
+        stdin=json.dumps(data),
     )
     return code, (json.loads(out) if out.strip().startswith("{") else out), err
 
@@ -79,32 +90,35 @@ def test_all_yes_passes_and_writes_file_and_event(cli, proj):
 
 def test_one_non_critical_no_still_passes(cli, proj):
     code, data, _ = record(cli, proj, answers(**{SOFT[0].replace("-", "_"): "x"}))
-    assert code == 0 and data["result"] == "пройдено" and data["failed"] == [SOFT[0]]
+    assert code == 0 and data["ok"] is True
+    assert data["result"] == "пройдено" and data["failed"] == [SOFT[0]]
     assert saved(proj)["failed"] == [SOFT[0]] and check_project(proj) == []
 
 
 def test_two_non_critical_no_fail(cli, proj):
     code, data, _ = record(cli, proj, answers(**{s.replace("-", "_"): "x" for s in SOFT[:2]}))
-    assert code == 0 and data["result"] == "не пройдено" and data["failed"] == SOFT[:2]
+    assert code == 1 and data["ok"] is False
+    assert data["result"] == "не пройдено" and data["failed"] == SOFT[:2]
     assert check_project(proj) == []
 
 
 def test_one_critical_no_fails_and_names_what_to_add(cli, proj):
     code, data, _ = record(cli, proj, answers(**{CRITICAL[0].replace("-", "_"): "x"}))
+    assert code == 1 and data["ok"] is False
     assert data["result"] == "не пройдено" and data["failed"] == [CRITICAL[0]]
     assert CRITICAL[0] in data["part_b_failed"] and data["part_b_failed"][CRITICAL[0]]
     code, out, _ = cli(
-        "rubric", "record", "--project", str(proj), "--file", "-",
+        "rubric", "record", "--project", str(proj), "--file", "-", "--by", "критик",
         stdin=json.dumps(answers(**{CRITICAL[1].replace("-", "_"): "x"})),
     )  # fmt: skip
-    assert "Что дополнить" in out and "В доработку идёт каждый признак с «нет»" in out
+    assert code == 1 and "Что дополнить" in out and "В доработку идёт каждый признак с «нет»" in out
 
 
 def test_part_a_failure_fails_the_result_and_lists_the_message(cli, proj):
     (proj / "verification.yaml").unlink()
     rehash(proj)
     code, data, _ = record(cli, proj, answers())
-    assert code == 0 and data["result"] == "не пройдено"
+    assert code == 1 and data["ok"] is False and data["result"] == "не пройдено"
     assert "А-1" in data["failed"] and "Б-1" not in data["failed"]
     file = saved(proj)
     a1 = next(a for a in file["part_a"] if a["id"] == "А-1")
@@ -123,12 +137,72 @@ def test_record_runs_part_a_at_the_current_step(cli, proj):
     last["name"] = "шаг 6"
     last["idempotency_hash"] = "b" * 64
     (proj / "journal.jsonl").write_text(
-        "\n".join([*lines, _j.dumps(last, ensure_ascii=False)]) + "\n", encoding="utf-8"
+        "\n".join([*lines, _j.dumps(last, ensure_ascii=False)]) + "\n", encoding="utf-8", newline="\n"
     )
     rehash(proj)
     code, data, err = record(cli, proj, answers())
     assert code == 0, err
     assert data["step"] == "6" and len(saved(proj)["part_a"]) == 24
+
+
+# --- проверка полноты — шаг 6 и коды выхода -------------------------------
+
+
+@pytest.mark.parametrize("step", ["1", "2а", "3", "5"])
+def test_record_before_step_6_is_refused_and_writes_nothing(cli, proj, step):
+    edit_yaml(proj, "state.yaml", lambda d: d.update(step=step))
+    before = tree_hashes(proj)
+    code, out, err = cli(
+        "rubric", "record", "--project", str(proj), "--file", "-", "--by", "критик", "--json",
+        stdin=json.dumps(answers()),
+    )  # fmt: skip
+    data = json.loads(out)
+    assert code == 2 and data["ok"] is False
+    assert "шаг 6" in data["error"] and f"шаге {step}" in data["error"]
+    assert "пройдено" not in err and tree_hashes(proj) == before
+    assert not (proj / "completeness.yaml").exists()
+
+
+def test_record_from_step_6_on_is_allowed(cli, proj):
+    for step in ("6", "7", "8"):
+        edit_yaml(proj, "state.yaml", lambda d, step=step: d.update(step=step))
+        code, out, err = cli("rubric", "record", "--project", str(proj), "--file", "-", "--by", "критик",
+                             stdin=json.dumps(answers()))  # fmt: skip
+        assert "шаг 6" not in err, (step, err)
+
+
+def test_exit_codes_pass_fail_input_error(cli, proj):
+    """0 — «пройдено», 1 — «не пройдено» (файл и событие записаны), 2 — ошибка входа; `ok` = «пройдено»."""
+    code, data, _ = record(cli, proj, answers())
+    assert (code, data["ok"], data["result"]) == (0, True, "пройдено")
+    events = len(journal_of(proj))
+    code, data, _ = record(cli, proj, answers(**{CRITICAL[0].replace("-", "_"): "x"}))
+    assert (code, data["ok"], data["result"]) == (1, False, "не пройдено")
+    assert saved(proj)["result"] == "не пройдено" and len(journal_of(proj)) == events + 1
+    code, data, _ = record(cli, proj, answers()[:-1])
+    assert code == 2 and data["ok"] is False and "error" in data
+
+
+def test_unchanged_failed_input_still_exits_1(cli, proj):
+    bad = answers(**{CRITICAL[0].replace("-", "_"): "x"})
+    assert record(cli, proj, bad)[0] == 1
+    code, data, _ = record(cli, proj, bad)
+    assert code == 1 and data["changed"] is False and data["ok"] is False
+
+
+def test_text_output_of_a_failed_run_exits_1(cli, proj):
+    code, out, err = cli(
+        "rubric", "record", "--project", str(proj), "--file", "-", "--by", "агент",
+        stdin=json.dumps(answers(**{CRITICAL[0].replace("-", "_"): "x"})),
+    )  # fmt: skip
+    assert code == 1 and "не пройдено" in out and "не независимая" in out
+
+
+def test_help_describes_the_exit_codes_and_by(cli):
+    code, out, _ = cli("rubric", "record", "--help")
+    assert code == 0
+    for needle in ("Коды выхода", "0  итог «пройдено»", "1  итог «не пройдено»", "2  ошибка входа", "--by"):
+        assert needle in out, needle
 
 
 # --- условный вопрос «Если» -------------------------------------------------------
@@ -144,12 +218,45 @@ def test_if_question_may_be_yes_when_there_is_no_condition(cli, proj):
     assert out["result"] == "пройдено"
 
 
+def test_no_condition_is_accepted_for_a_part_of_the_question_that_starts_with_if(cli, proj):
+    """у Б-13 вопрос начинается не с «Если», а вторая фраза — условная часть."""
+    assert IF_PART_ONLY, "в рубрике нет вопроса с условной частью: тест ничего не проверяет"
+    data = answers()
+    for item in data:
+        if item["id"] in IF_PART_ONLY:
+            item["why"] = "контрольной группы нет, условия нет: просмотрены ПП-1, ПП-2"
+    code, out, err = record(cli, proj, data)
+    assert code == 0, err
+    assert out["result"] == "пройдено"
+
+
+def test_no_condition_is_refused_where_if_is_lowercase_inside_a_clause(cli, proj):
+    """«а если предмета нет» в середине фразы Б-3 условной частью не считается."""
+    mid = next(q.id for q in RUBRIC.part_b if "если" in q.question and "Если" not in q.question)
+    data = answers()
+    next(i for i in data if i["id"] == mid)["why"] = "условия нет: просмотрены У-1"
+    refused(cli, proj, data, mid, "Если")
+
+
+def test_no_condition_needs_the_numbers_of_reviewed_records(cli, proj):
+    """«условия нет» без номеров записей — отговорка; ничего не записано."""
+    for qid in (IF_QUESTIONS[0], IF_PART_ONLY[0]):
+        data = answers()
+        next(i for i in data if i["id"] == qid)["why"] = "условия нет"
+        refused(cli, proj, data, qid, "номера просмотренных записей")
+    data = answers()
+    next(i for i in data if i["id"] == IF_QUESTIONS[0])["why"] = "условия нет: просмотрены У-1…У-6"
+    assert record(cli, proj, data)[0] == 0
+
+
 def test_no_condition_is_refused_for_a_question_without_if(cli, proj):
     plain = next(q.id for q in RUBRIC.part_b if not q.question.startswith("Если"))
     data = answers()
     next(i for i in data if i["id"] == plain)["why"] = "Условия нет"
-    code, out, err = cli("rubric", "record", "--project", str(proj), "--file", "-", stdin=json.dumps(data))
-    assert code == 1 and plain in err and "Если" in err
+    code, out, err = cli(
+        "rubric", "record", "--project", str(proj), "--file", "-", "--by", "критик", stdin=json.dumps(data)
+    )
+    assert code == 2 and plain in err and "Если" in err
     assert not (proj / "completeness.yaml").exists()
 
 
@@ -159,9 +266,10 @@ def test_no_condition_is_refused_for_a_question_without_if(cli, proj):
 def refused(cli, proj, data, *needles: str):
     before = tree_hashes(proj)
     code, out, err = cli(
-        "rubric", "record", "--project", str(proj), "--file", "-", stdin=json.dumps(data, ensure_ascii=False)
-    )
-    assert code == 1, (out, err)
+        "rubric", "record", "--project", str(proj), "--file", "-", "--by", "критик",
+        stdin=json.dumps(data, ensure_ascii=False),
+    )  # fmt: skip
+    assert code == 2, (out, err)
     for n in needles:
         assert n in err, (n, err)
     assert tree_hashes(proj) == before
@@ -218,10 +326,12 @@ def test_unknown_question_and_extra_field_and_bad_shape(cli, proj):
 def test_input_file_is_read_from_path(cli, proj, tmp_path):
     path = tmp_path / "answers.yaml"
     path.write_text(yaml.safe_dump(answers(), allow_unicode=True), encoding="utf-8")
-    code, out, err = cli("rubric", "record", "--project", str(proj), "--file", str(path))
+    code, out, err = cli("rubric", "record", "--project", str(proj), "--file", str(path), "--by", "критик")
     assert code == 0, err and "Проверка полноты: пройдено" in out
-    code, _, err = cli("rubric", "record", "--project", str(proj), "--file", str(tmp_path / "нет.yaml"))
-    assert code == 1 and "не найден" in err
+    code, _, err = cli(
+        "rubric", "record", "--project", str(proj), "--file", str(tmp_path / "нет.yaml"), "--by", "критик"
+    )
+    assert code == 2 and "не найден" in err
 
 
 # --- повтор, история, независимость ---------------------------------------------------
@@ -236,7 +346,17 @@ def test_same_input_again_is_unchanged(cli, proj, clock):
     assert code == 0 and data["changed"] is False
     assert (proj / "completeness.yaml").read_bytes() == first
     assert len(journal_of(proj)) == events and not (proj / "history" / "completeness.v1.yaml").exists()
-    code, out, _ = cli("rubric", "record", "--project", str(proj), "--file", "-", stdin=json.dumps(answers()))
+    code, out, _ = cli(
+        "rubric",
+        "record",
+        "--project",
+        str(proj),
+        "--file",
+        "-",
+        "--by",
+        "критик",
+        stdin=json.dumps(answers()),
+    )
     assert "без изменений" in out
 
 
@@ -287,9 +407,23 @@ def test_by_agent_is_marked_in_file_and_output(cli, proj):
     assert "не независимая" in out
 
 
-def test_default_executor_is_critic(cli, proj):
-    record(cli, proj, answers())
-    assert saved(proj)["by"] == "критик"
+def test_by_is_required_there_is_no_default(cli, proj):
+    """без --by проверка агента записалась бы как независимая; ошибка входа с подсказкой."""
+    before = tree_hashes(proj)
+    code, out, err = cli(
+        "rubric", "record", "--project", str(proj), "--file", "-", "--json", stdin=json.dumps(answers())
+    )
+    data = json.loads(out)
+    assert code == 2 and data["ok"] is False
+    assert "--by" in data["error"] and "критик" in data["error"] and "агент" in data["error"]
+    code, _, err = cli("rubric", "record", "--project", str(proj), "--file", "-", stdin=json.dumps(answers()))
+    assert code == 2 and "--by" in err
+    assert tree_hashes(proj) == before and not (proj / "completeness.yaml").exists()
+
+
+def test_by_critic_is_recorded_as_independent(cli, proj):
+    code, data, _ = record(cli, proj, answers(), "--by", "критик")
+    assert code == 0 and data["independent"] is True and saved(proj)["by"] == "критик"
 
 
 def test_unknown_executor_is_a_usage_error(cli, proj):

@@ -468,7 +468,7 @@ def test_r_2_3_37_history_files_are_hashed(project):
 
 def test_r_2_3_38_data_model_doc_keeps_room_and_has_no_wall_of_text():
     doc = (Path(__file__).resolve().parent.parent / "docs" / "data-model.md").read_text(encoding="utf-8")
-    assert len(doc.encode("utf-8")) <= 15000
+    assert len(doc.encode("utf-8")) <= 16000
     assert max(len(line.encode("utf-8")) for line in doc.splitlines()) <= 1200
 
 

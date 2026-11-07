@@ -437,7 +437,7 @@ def test_a18_empty_and_missing_sections(proj):
 
 def test_a18_template_placeholder_is_empty():
     assert is_empty_body("<3–5 строк: для кого>") and is_empty_body("\n \n")
-    assert not is_empty_body("Нет.")
+    assert not is_empty_body("Нет, цена не зависит от канала.")
 
 
 def test_a19_no_labels_and_unknown_label(proj):

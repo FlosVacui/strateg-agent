@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -18,7 +19,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from strateg import project as proj
-from strateg.commands import _norm_step, _open, _read_input, emit
+from strateg.commands import _norm_step, _open, _read_input
 from strateg.models import (
     SCHEMA_VERSION,
     CompletenessFile,
@@ -28,13 +29,19 @@ from strateg.models import (
     Text,
     latin_hint,
 )
-from strateg.project import CliError, Project
+from strateg.project import CliError, Project, UsageError
 from strateg.project_check import COMPLETENESS_FILE, _format_errors
 from strateg.rubric_checks import CHECKS, STEP_INDEX, Ctx, Result, knowledge_dir
 
 RUBRIC_FILE = "completeness.yaml"
-FOR_QUESTION = "Если"  # вопрос с этого слова может получить «да», когда условия нет
+FOR_QUESTION = "Если"  # вопрос или его часть с этого слова может получить «да», когда условия нет
 NO_CONDITION = "условия нет"
+# «Если» в начале вопроса или в начале предложения внутри него.
+_IF_PART = re.compile(rf"(?:^|[.?!]\s+){FOR_QUESTION}\b")
+# Номер просмотренной записи: У-1, ВП-2, Вар-3 (русские буквы).
+_RECORD_NO = re.compile(r"[А-Яа-яЁё]+-\d+")
+CHECKED_BY = ("критик", "агент")
+FIRST_FULL_STEP = "6"  # проверка полноты — шаг 6 (ADR-0006): раньше итог «пройдено» не выносится
 
 
 # ---------------------------------------------------------------------------
@@ -215,16 +222,17 @@ def parse_answers(raw: Any, rubric: Rubric) -> list[PartBAnswer]:
                     + ("файл и место" if key == "where" else "причину одной строкой")
                 )
         why = item.get("why")
-        if (
-            norm_answer == "да"
-            and isinstance(why, str)
-            and NO_CONDITION in why.casefold()
-            and not question.question.startswith(FOR_QUESTION)
-        ):
-            errors.append(
-                f"{label}: «{NO_CONDITION}» допустимо только для вопроса, "
-                f"который начинается со слова «{FOR_QUESTION}»"
-            )
+        if norm_answer == "да" and isinstance(why, str) and NO_CONDITION in why.casefold():
+            if not _IF_PART.search(question.question):
+                errors.append(
+                    f"{label}: «{NO_CONDITION}» допустимо только для вопроса или его части, "
+                    f"которые начинаются со слова «{FOR_QUESTION}»"
+                )
+            elif not _RECORD_NO.search(why):
+                errors.append(
+                    f"{label}: к «{NO_CONDITION}» нужны номера просмотренных записей в why "
+                    "(например У-1, ВП-2): без них проверку не повторить"
+                )
         if qid in answers:
             errors.append(f"{label}: на вопрос больше одного ответа: нужен один")
         if len(errors) == before and qid not in answers:
@@ -277,11 +285,39 @@ def _history_path(p: Project) -> str:
     return proj.history_path(COMPLETENESS_FILE, taken + 1)
 
 
+def _emit_record(args: argparse.Namespace, data: dict[str, Any], lines: list[str]) -> int:
+    """Вывод `rubric record`: код 0 — «пройдено», 1 — «не пройдено»; `ok` в JSON — то же самое."""
+    passed = data["result"] == "пройдено"
+    if getattr(args, "json", False):
+        print(json.dumps({"ok": passed, **data}, ensure_ascii=False))
+    else:
+        for line in lines:
+            print(line)
+    return 0 if passed else 1
+
+
 def cmd_rubric_record(args: argparse.Namespace) -> int:
+    by = getattr(args, "by", None)
+    if by not in CHECKED_BY:
+        raise UsageError(
+            "не указано, кто проверял: задайте --by критик (проверка независимая, ответы дал критик) "
+            "или --by агент (ответы дал сам агент, проверка не независимая)",
+            ["значения по умолчанию нет: иначе проверка, сделанная самим агентом, пройдёт как независимая"],
+        )
     p = _open(args)
+    if STEP_INDEX[p.state.step] < STEP_INDEX[FIRST_FULL_STEP]:
+        raise UsageError(
+            f"проверка полноты — шаг {FIRST_FULL_STEP}, а проект на шаге {p.state.step}: "
+            "до шага 6 часть А проверена не полностью и итог «пройдено» не выносится; "
+            f"сверить файлы до шага 6 можно командой `strateg rubric check --step {p.state.step}`"
+        )
     rubric = load_rubric()
-    by = getattr(args, "by", None) or "критик"
-    answers = parse_answers(_read_input(args.file), rubric)
+    try:
+        answers = parse_answers(_read_input(args.file), rubric)
+    except UsageError:
+        raise
+    except CliError as err:  # вход не по формату — ошибка входа (код 2), а не итог проверки
+        raise UsageError(err.message, err.details) from err
     started = time.monotonic()
     results = run_checks(p.root, rubric, p.state.step)
     new = _build(p, rubric, results, answers, by)
@@ -296,7 +332,7 @@ def cmd_rubric_record(args: argparse.Namespace) -> int:
             old = None
     data = _record_data(rubric, new)
     if old is not None and _same(old, new):
-        return emit(
+        return _emit_record(
             args,
             {"changed": False, **data},
             [f"{COMPLETENESS_FILE}: без изменений", *_summary_lines(rubric, new)],
@@ -331,7 +367,7 @@ def cmd_rubric_record(args: argparse.Namespace) -> int:
         + ("создан" if history is None else f"перезаписан, прежняя версия в {history}"),
         *_summary_lines(rubric, new),
     ]
-    return emit(args, {"changed": True, "history": history, **data}, lines)
+    return _emit_record(args, {"changed": True, "history": history, **data}, lines)
 
 
 def _record_data(rubric: Rubric, comp: CompletenessFile) -> dict[str, Any]:

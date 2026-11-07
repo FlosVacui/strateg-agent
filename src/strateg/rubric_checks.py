@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from strateg import project as proj
 from strateg.models import (
+    Claim,
     ClaimsFile,
     FrameFile,
     GapsFile,
@@ -137,11 +138,15 @@ class Result:
 # ---------------------------------------------------------------------------
 
 _FENCE = re.compile(r"^\s*(```|~~~)")
-_LIST_START = re.compile(r"^(?:[-*+]|\d+[.)])\s+\S")
+_BULLETS = "-*+•–—"
+_LIST_START = re.compile(rf"^(?:[{_BULLETS}]|\d+[.)])\s+\S")
 _TABLE_ROW = re.compile(r"^\s*\|")
 _TABLE_SEP = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$")
-_PLACEHOLDER = re.compile(r"^<[^<>]*>$")
+_PLACEHOLDER_SPAN = re.compile(r"<[^<>]*>")
 _MD_MARKS = re.compile(r"[*_`]+")
+_WORDS = re.compile(r"[^\W_]+")
+# Слова-заглушки: раздел из одного такого слова остался незаполненным.
+_STUB_WORDS = frozenset({"todo", "tbd", "fixme", "xxx", "нет", "заполнить"})
 
 
 def sections(text: str) -> dict[str, str]:
@@ -172,15 +177,17 @@ def find_section(text: str, name: str) -> str | None:
 
 
 def is_empty_body(body: str | None) -> bool:
-    """Раздел пуст: нет текста или только место для текста из шаблона `<...>`."""
-    stripped = (body or "").strip()
-    return not stripped or bool(_PLACEHOLDER.match(stripped))
+    """Пусто: нет ни одной буквы или цифры вне мест для текста `<...>`, либо остались только слова-заглушки
+    («TODO», «нет»). Так пуст и раздел из нескольких строк-заглушек шаблона."""
+    words = [w.casefold() for w in _WORDS.findall(_PLACEHOLDER_SPAN.sub(" ", body or ""))]
+    return not words or all(w in _STUB_WORDS for w in words)
 
 
 def list_items(body: str) -> list[str]:
     """Пункты раздела: строки списка (с вложенными и продолжениями) и строки таблицы без заголовка."""
     items: list[str] = []
     table: list[str] = []
+    in_list = False  # последний пункт — строка списка: ему можно дописывать продолжение
     blank_after_list = False
 
     def flush_table() -> None:
@@ -193,20 +200,24 @@ def list_items(body: str) -> list[str]:
     for line in body.splitlines():
         if _TABLE_ROW.match(line):
             table.append(line)
+            in_list = False
             blank_after_list = True
             continue
         flush_table()
         if not line.strip():
             blank_after_list = True
             continue
+        indented = line.startswith(("\t", "  "))
         if _LIST_START.match(line):
             items.append(line.strip())
+            in_list = True
             blank_after_list = False
-        elif items and not blank_after_list and line.startswith((" ", "\t")):
-            items[-1] += " " + line.strip()  # вложенный пункт или продолжение
-        elif items and not blank_after_list and not table:
+        elif in_list and indented:
+            items[-1] += " " + line.strip()  # вложенный пункт, продолжение (в том числе после пустой строки)
+        elif in_list and not blank_after_list:
             items[-1] += " " + line.strip()  # продолжение пункта без отступа
         else:
+            in_list = False
             blank_after_list = True
     flush_table()
     return items
@@ -218,6 +229,9 @@ def short(text: str, n: int = 60) -> str:
 
 
 _TOKEN = re.compile(r"(?<![\w-])([A-Za-zА-Яа-яЁё]{1,3})-([0-9]+)(?!\d)")
+# Номер не по форме: без дефиса («У99», только русские буквы) или с пробелом у дефиса («У- 99», «У -99»).
+_SLOPPY = re.compile(r"(?<![\w-])([A-Za-zА-Яа-яЁё]{1,3})(?:-[ \t]+|[ \t]+-|)([0-9]+)(?!\d)")
+_DASH_BEFORE_DIGIT = re.compile(r"(?<=[A-Za-zА-Яа-яЁё])[‐-―−](?=\d)")
 _TO_CYR = str.maketrans("abcehkmoptxyABCEHKMOPTXY", "авсенкмортхуАВСЕНКМОРТХУ")
 PREFIXES = {
     "И": "sources",
@@ -231,8 +245,25 @@ PREFIXES = {
 PROMISE_DOCS = frozenset({COMMS_STRATEGY, ONE_PAGER})
 
 
+def dashes(text: str) -> str:
+    """Неразрывный дефис, короткое и длинное тире и минус между буквами и цифрой номера читаются как «-»."""
+    return _DASH_BEFORE_DIGIT.sub("-", text)
+
+
+def _sloppy(text: str) -> list[tuple[str, str, str]]:
+    """Номера не по форме: (как написано, префикс по-русски, число). Строгая запись `У-99` не в счёт."""
+    out: list[tuple[str, str, str]] = []
+    for m in _SLOPPY.finditer(text):
+        letters, n = m.groups()
+        cyr = letters.translate(_TO_CYR)
+        if cyr in PREFIXES and (m.group(0).count("-") or letters == cyr):
+            out.append((m.group(0), cyr, n))
+    return out
+
+
 def refs(text: str, prefix: str) -> list[str]:
     """Номера вида `У-3` (буквы русские) в порядке появления, без повторов."""
+    text = dashes(text)
     found = re.findall(rf"(?<![\w-]){re.escape(prefix)}-([0-9]+)(?!\d)", text)
     return list(dict.fromkeys(f"{prefix}-{n}" for n in found))
 
@@ -350,7 +381,7 @@ def _first(problems: list[str]) -> list[str]:
 
 def _latin_note(text: str) -> str:
     """Подсказка, если в тексте есть номер с латинскими буквами."""
-    for letters, n in _TOKEN.findall(text):
+    for letters, n in _TOKEN.findall(dashes(text)):
         cyr = letters.translate(_TO_CYR)
         if letters != cyr and cyr in PREFIXES:
             return f" (номер {letters}-{n} написан латинскими буквами, нужны русские)"
@@ -450,12 +481,17 @@ def plan_questions_have_claims(c: Ctx) -> list[str]:
     claims, errs = c.claims()
     if plan is None or claims is None:
         return out + errs
-    linked = {(cl.plan_question or "").strip() for cl in claims.claims}
+    linked = {(cl.plan_question or "").strip() for cl in claims.claims if cl.status == "действует"}
+    stale = {(cl.plan_question or "").strip(): cl for cl in claims.claims if cl.status != "действует"}
     for q in plan.questions:
         if q.status == "закрыт" and q.id not in linked:
+            hint = ""
+            if q.id in stale:
+                old = stale[q.id]
+                hint = f"; утверждение {old.id} {_status_note(old)}: запишите действующее"
             out.append(
-                f"{PLAN_FILE}, запись {q.id}: статус «закрыт», а в {CLAIMS_FILE} нет утверждения "
-                f"с plan_question: {q.id}"
+                f"{PLAN_FILE}, запись {q.id}: статус «закрыт», а в {CLAIMS_FILE} нет действующего "
+                f"утверждения с plan_question: {q.id}{hint}"
             )
     return out
 
@@ -491,9 +527,14 @@ def metric_coverage_complete(c: Ctx) -> list[str]:
     return out
 
 
-def _claim_ids(c: Ctx) -> tuple[set[str] | None, list[str]]:
+def _status_note(cl: Claim) -> str:
+    """«отозвано» или «заменено на У-5»: почему ссылка на утверждение больше не годится."""
+    return f"заменено на {cl.replaced_by}" if cl.status == "заменено" and cl.replaced_by else cl.status
+
+
+def _claim_ids(c: Ctx) -> tuple[dict[str, Claim] | None, list[str]]:
     claims, errs = c.claims()
-    return ({cl.id for cl in claims.claims} if claims else None), errs
+    return ({cl.id: cl for cl in claims.claims} if claims else None), errs
 
 
 def _section(c: Ctx, rel: str, name: str) -> tuple[str | None, list[str]]:
@@ -523,7 +564,13 @@ def known_items_have_claims(c: Ctx) -> list[str]:
         if not named:
             out.append(f"{label}: нет номера утверждения У-n{_latin_note(item)}")
         else:
-            out += [f"{label}: {r} нет в {CLAIMS_FILE}" for r in named if r not in ids]
+            for r in named:
+                if r not in ids:
+                    out.append(f"{label}: {r} нет в {CLAIMS_FILE}")
+                elif ids[r].status != "действует":
+                    out.append(
+                        f"{label}: {r} {_status_note(ids[r])}, замените ссылку на действующее утверждение"
+                    )
     return _first(out)
 
 
@@ -545,6 +592,7 @@ def disputes_recorded(c: Ctx) -> list[str]:
     items = [] if norm(body).strip(" .").casefold() in ("", "нет") else list_items(body)
     items = [i for i in items if norm(i).strip(" .-*").casefold() != "нет"]
     named_gaps: set[str] = set()
+    named_pairs: list[set[str]] = []
     for item in items:
         pair = _item_pair(item)
         label = f"{SITUATION}, раздел «{SEC_DISPUTES}», «{short(item)}»"
@@ -552,6 +600,7 @@ def disputes_recorded(c: Ctx) -> list[str]:
             out.append(f"{label}: не названа пара утверждений У-n и У-m")
             continue
         a, b = pair
+        named_pairs.append({a, b})
         missing = [p for p in pair if p not in by_id]
         if missing:
             out.append(f"{label}: {', '.join(missing)} нет в {CLAIMS_FILE}")
@@ -563,11 +612,15 @@ def disputes_recorded(c: Ctx) -> list[str]:
     if gaps is None:
         return _first(out + gerrs)
     for g in gaps.gaps:
-        if g.reason == "источники спорят" and g.id not in named_gaps:
-            out.append(
-                f"{GAPS_FILE}, запись {g.id}: причина «источники спорят», а в разделе «{SEC_DISPUTES}» "
-                f"{SITUATION} нет пункта с {g.id} и парой утверждений"
-            )
+        if g.reason != "источники спорят" or g.id in named_gaps:
+            continue
+        in_text = set(refs(g.text, "У"))  # пара названа в самом пробеле: П-n в пункте раздела не нужен
+        if any(pair <= in_text for pair in named_pairs):
+            continue
+        out.append(
+            f"{GAPS_FILE}, запись {g.id}: причина «источники спорят», а в разделе «{SEC_DISPUTES}» "
+            f"{SITUATION} нет пункта с парой утверждений, названной в тексте пробела, или с {g.id}"
+        )
     return _first(out)
 
 
@@ -582,7 +635,7 @@ def _role_of(item: str) -> str:
         cells = [x.strip() for x in item.strip().strip("|").split("|")]
         return cells[1] if len(cells) > 1 else ""
     plain = " ".join(_MD_MARKS.sub("", item).split())
-    plain = re.sub(r"^(?:[-+]|\d+[.)])\s+", "", plain)
+    plain = re.sub(rf"^(?:[{_BULLETS}]|\d+[.)])\s+", "", plain)
     m = re.search(r"\s[—–-]\s|:\s", plain)
     return plain[m.end() :].strip() if m else ""
 
@@ -595,7 +648,7 @@ def messages_confirmed_channels_roled(c: Ctx) -> list[str]:
     chans, cerrs = _section(c, COMMS_STRATEGY, SEC_CHANNELS)
     if claims is None:
         return errs
-    kind = {cl.id: cl.type for cl in claims.claims}
+    by_id = {cl.id: cl for cl in claims.claims}
     if msgs is None:
         out += merrs
     else:
@@ -603,11 +656,20 @@ def messages_confirmed_channels_roled(c: Ctx) -> list[str]:
         if not items:
             out.append(f"{COMMS_STRATEGY}, раздел «{SEC_MESSAGES}»: нет ключевых сообщений (пунктов списка)")
         for n, item in enumerate(items, start=1):
-            facts = [r for r in refs(item, "У") if kind.get(r) == "факт"]
+            named = refs(item, "У")
+            facts = [
+                r for r in named if r in by_id and by_id[r].type == "факт" and by_id[r].status == "действует"
+            ]
             if not facts:
+                stale = [
+                    f"{r} {_status_note(by_id[r])}"
+                    for r in named
+                    if r in by_id and by_id[r].status != "действует"
+                ]
+                tail = f"; {', '.join(stale)}: замените ссылку на действующий факт" if stale else ""
                 out.append(
-                    f"{COMMS_STRATEGY}, сообщение {n} («{short(item)}»): нет номера утверждения У-n "
-                    f"типа «факт», которое его подтверждает{_latin_note(item)}"
+                    f"{COMMS_STRATEGY}, сообщение {n} («{short(item)}»): нет номера действующего "
+                    f"утверждения У-n типа «факт», которое его подтверждает{tail}{_latin_note(item)}"
                 )
     if chans is None:
         out += cerrs
@@ -616,7 +678,7 @@ def messages_confirmed_channels_roled(c: Ctx) -> list[str]:
         if not items:
             out.append(f"{COMMS_STRATEGY}, раздел «{SEC_CHANNELS}»: нет каналов (пунктов списка)")
         for n, item in enumerate(items, start=1):
-            if not _role_of(item):
+            if is_empty_body(_role_of(item)):
                 out.append(f"{COMMS_STRATEGY}, канал {n} («{short(item)}»): не названа роль канала")
     return _first(out)
 
@@ -831,11 +893,32 @@ def strategy_sections_filled(c: Ctx) -> list[str]:
     return out
 
 
-_MARK = re.compile(r"\[([OО])-([0-9]+)\]")
+_BRACKET = re.compile(r"\[([^\[\]\n]*)\]")
+_MARK = re.compile(r"(?<![\w-])([OО])-([0-9]+)(?!\d)")
+_MARK_LOOSE = re.compile(r"(?<![\w-])[OО][ \t]*-?[ \t]*[0-9]+")
 
 
-def _marks(text: str) -> list[tuple[str, str]]:
-    return list(dict.fromkeys((letter, n) for letter, n in _MARK.findall(text)))
+def _marks(text: str) -> tuple[list[tuple[str, str]], list[str]]:
+    """Метки обещаний в квадратных скобках: ([(буква, номер)], скобки неразборной формы).
+
+    В одних скобках может стоять несколько номеров: `[О-2, О-1]`, `[О-2; О-1]`. Скобка, в которой
+    есть что-то похожее на номер обещания, но не `О-n` («[О2]», «[О 2]»), — неразборной формы.
+    """
+    marks: list[tuple[str, str]] = []
+    bad: list[str] = []
+    for m in _BRACKET.finditer(dashes(text)):
+        inner = m.group(1)
+        found = _MARK.findall(inner)
+        marks += found
+        if len(_MARK_LOOSE.findall(inner)) > len(found):
+            bad.append(f"[{inner.strip()}]")
+    return list(dict.fromkeys(marks)), list(dict.fromkeys(bad))
+
+
+def _bad_brackets(rel: str, bad: list[str]) -> list[str]:
+    return [
+        f"{rel}: скобка «{b}» неразборной формы: метка пишется [О-n] (русская О, дефис, номер)" for b in bad
+    ]
 
 
 @check("promise_labels_resolve")
@@ -847,11 +930,16 @@ def promise_labels_resolve(c: Ctx) -> list[str]:
     if prom is None:
         return errs
     known = {p.id for p in prom.promises}
-    marks = _marks(text)
+    marks, bad = _marks(text)
+    out += _bad_brackets(COMMS_STRATEGY, bad)
+    one_pager = c.text(ONE_PAGER)
+    if one_pager is not None:
+        out += _bad_brackets(ONE_PAGER, _marks(one_pager)[1])
     if not marks:
         return [
             f"{COMMS_STRATEGY}: нет ни одной метки [О-n]; "
-            f"пометьте обещающие фразы номерами из {PROMISES_FILE}"
+            f"пометьте обещающие фразы номерами из {PROMISES_FILE}",
+            *out,
         ]
     for letter, n in marks:
         if letter == "O":
@@ -872,7 +960,7 @@ def unconfirmed_promise_not_released(c: Ctx) -> list[str]:
         if text is None:
             out += errs
             continue
-        for letter, n in _marks(text):
+        for letter, n in _marks(text)[0]:
             if status.get(f"О-{n}") == "не подтверждено":
                 out.append(
                     f"{rel}: метка [{letter}-{n}] ведёт на обещание со статусом «не подтверждено»: "
@@ -910,8 +998,17 @@ def document_refs_resolve(c: Ctx) -> list[str]:
     out: list[str] = []
     no_file: dict[tuple[str, str], list[str]] = {}
     for rel in docs:
-        text = c.text(rel) or ""
+        text = dashes(c.text(rel) or "")
         seen: set[str] = set()
+        for raw, cyr, n in _sloppy(text):
+            if cyr == "О" and rel not in PROMISE_DOCS:
+                continue
+            if raw not in seen:
+                seen.add(raw)
+                out.append(
+                    f"{rel}: номер «{raw}» написан не по форме, нужно {cyr}-{n} "
+                    "(русские буквы, дефис, число, без пробелов)"
+                )
         for letters, n in _TOKEN.findall(text):
             token = f"{letters}-{n}"
             if token in seen:

@@ -1,7 +1,9 @@
 """Маршрут роли (ADR-0008): модель и effort роли из `config/routing.yaml` с учётом профиля.
 
 `strateg route <роль>` называет модель роли и пишет выбор в журнал; `--upgrade` — повышение по условию
-из таблицы (не больше `times` раз на роль и шаг, счёт по событиям журнала); `strateg route --profile`
+из таблицы (не больше `times` раз на роль и шаг, счёт по событиям журнала). Условие повышения критика
+CLI проверяет сам: в `completeness.yaml` итог «не пройдено». Повышение действует до конца шага:
+следующий `strateg route <роль>` на этом шаге возвращает повышенную модель. `strateg route --profile`
 переключает профиль проекта («экономнее», «глубже», «обычный»). Таблица — единственный источник выбора
 модели для ролей; субагентам и хукам она советует, а не навязывает.
 """
@@ -9,6 +11,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal, Self
 
@@ -20,7 +23,7 @@ from strateg.budget import config_dir
 from strateg.commands import _open, emit
 from strateg.models import SchemaVersion, Text
 from strateg.project import CliError, Project, UsageError
-from strateg.project_check import _format_errors
+from strateg.project_check import COMPLETENESS_FILE, _format_errors
 
 ROUTING_FILE = "routing.yaml"
 Level = Literal["сильная", "средняя", "дешёвая"]
@@ -146,6 +149,34 @@ def upgrades_done(p: Project, role: str) -> int:
     )
 
 
+def completeness_failed(p: Project) -> bool:
+    """Последняя проверка полноты не пройдена: в `completeness.yaml` итог «не пройдено»."""
+    path = p.root / COMPLETENESS_FILE
+    try:
+        raw = proj.read_yaml(path) if path.is_file() else None
+    except CliError:
+        return False
+    return isinstance(raw, dict) and raw.get("result") == "не пройдено"
+
+
+@dataclass(frozen=True)
+class Guard:
+    """Условие повышения, которое CLI проверяет сам."""
+
+    holds: Callable[[Project], bool]
+    refusal: str
+
+
+# У остальных ролей условие CLI проверить не может («не уверен» виден только классификатору):
+# оно на совести вызывающего и пишется в журнал текстом.
+UPGRADE_GUARDS: dict[str, Guard] = {
+    "critic": Guard(
+        completeness_failed,
+        f"в {COMPLETENESS_FILE} нет итога «не пройдено» (файла нет или проверка пройдена)",
+    ),
+}
+
+
 def _profile(p: Project) -> str:
     return p.state.profile or DEFAULT_PROFILE
 
@@ -213,6 +244,10 @@ def _pick(args: argparse.Namespace, role: str) -> int:
     reason = (getattr(args, "reason", None) or "").strip()
     upgrade = bool(getattr(args, "upgrade", False))
     chosen = base
+    sticky = False
+    if not upgrade and base.upgrade is not None and upgrades_done(p, role) and base.upgrade.to != base.level:
+        chosen = effective(table, role, profile, level=base.upgrade.to)  # повышение действует до конца шага
+        sticky = True
     if upgrade:
         rule = base.upgrade
         if rule is None:
@@ -221,7 +256,13 @@ def _pick(args: argparse.Namespace, role: str) -> int:
         if done >= rule.times:
             raise CliError(
                 f"повышение роли «{role}» на шаге {p.state.step} уже записано {done} раз из {rule.times}: "
-                "предел достигнут, выбор остаётся прежним"
+                "предел достигнут, повышенная модель действует до конца шага"
+            )
+        guard = UPGRADE_GUARDS.get(role)
+        if guard is not None and not guard.holds(p):
+            raise CliError(
+                f"повышение роли «{role}» не по условию «{rule.when}»: {guard.refusal}",
+                ["сначала запишите проверку полноты: `strateg rubric record`"],
             )
         if rule.to == base.level:
             raise CliError(f"роль «{role}» уже на уровне «{rule.to}»: повышать некуда")
@@ -231,6 +272,8 @@ def _pick(args: argparse.Namespace, role: str) -> int:
     if upgrade:
         assert base.upgrade is not None
         parts.append(f"повышение: {base.level} -> {chosen.level}, условие: {base.upgrade.when}")
+    elif sticky:
+        parts.append(f"повышение на шаге {p.state.step} действует: {base.level} -> {chosen.level}")
     elif not reason:
         parts.append("по таблице маршрутов")
     parts.append(f"профиль {profile}")
@@ -254,4 +297,8 @@ def _pick(args: argparse.Namespace, role: str) -> int:
     ]
     if upgrade:
         lines.append(f"Повышение: {base.level} -> {chosen.level}; записано в журнал.")
-    return emit(args, _route_data(chosen, upgrade=upgrade), lines)
+    if sticky:
+        lines.append(
+            f"Повышение на шаге {p.state.step} действует до конца шага: {base.level} -> {chosen.level}."
+        )
+    return emit(args, {**_route_data(chosen, upgrade=upgrade), "upgraded": upgrade or sticky}, lines)

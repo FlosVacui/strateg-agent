@@ -10,7 +10,7 @@ import pytest
 import yaml
 
 from helpers import COMPLETE, journal_of
-from strateg import routing
+from strateg import routing, rubric
 from strateg.project import CliError, UsageError
 from strateg.project_check import check_project
 
@@ -28,6 +28,20 @@ def proj(tmp_path, clock) -> Path:
 def route(cli, proj, *args):
     code, out, err = cli("route", *args, "--project", str(proj), "--json")
     return code, (json.loads(out) if out.strip().startswith("{") else out), err
+
+
+def record_completeness(cli, proj, *, passed: bool) -> None:
+    """Записывает итог проверки полноты: `rubric record` с ответами «да» (или с одним «нет» у критичного)."""
+    rb = rubric.load_rubric()
+    critical = next(q.id for q in rb.part_b if q.critical)
+    answers = [
+        {"id": q.id, "answer": "нет" if q.id == critical and not passed else "да", "where": "x", "why": "y"}
+        for q in rb.part_b
+    ]
+    code, out, err = cli(
+        "rubric", "record", "--project", str(proj), "--file", "-", "--by", "критик", stdin=json.dumps(answers)
+    )
+    assert code == (0 if passed else 1), (out, err)
 
 
 def picks(proj, role: str | None = None) -> list[dict]:
@@ -208,6 +222,7 @@ def test_same_profile_again_changes_nothing(cli, proj):
 
 
 def test_upgrade_goes_to_the_stronger_model_and_is_logged(cli, proj):
+    record_completeness(cli, proj, passed=False)
     code, data, err = route(cli, proj, "critic", "--upgrade", "--reason", "после доработки не пройдено")
     assert code == 0, err
     assert data["model"] == "opus" and data["level"] == "сильная" and data["upgrade"] is True
@@ -220,6 +235,7 @@ def test_upgrade_goes_to_the_stronger_model_and_is_logged(cli, proj):
 
 
 def test_upgrade_is_limited_to_times_per_role_and_step(cli, proj):
+    record_completeness(cli, proj, passed=False)
     assert route(cli, proj, "critic", "--upgrade")[0] == 0
     before = len(journal_of(proj))
     code, out, err = cli("route", "critic", "--upgrade", "--project", str(proj))
@@ -250,9 +266,86 @@ def test_role_without_upgrade_rule_is_refused(cli, proj):
 
 
 def test_nothing_to_upgrade_when_profile_already_strongest(cli, proj):
+    record_completeness(cli, proj, passed=False)
     route(cli, proj, "--profile", "глубже")
     code, _, err = cli("route", "critic", "--upgrade", "--project", str(proj))
     assert code == 1 and "повышать некуда" in err
+
+
+# --- условие повышения критика: последняя проверка полноты «не пройдено» ----------------------------
+
+
+def test_critic_upgrade_is_refused_without_a_completeness_file(cli, proj):
+    before = len(journal_of(proj))
+    code, out, err = cli("route", "critic", "--upgrade", "--project", str(proj), "--json")
+    data = json.loads(out)
+    assert code == 1 and data["ok"] is False
+    assert "completeness.yaml" in data["error"] and "не пройдено" in data["error"]
+    assert "проверка полноты не пройдена после доработки" in data["error"]
+    assert len(journal_of(proj)) == before and picks(proj, "critic") == []
+
+
+def test_critic_upgrade_is_refused_when_the_last_check_passed(cli, proj):
+    record_completeness(cli, proj, passed=True)
+    code, _, err = cli("route", "critic", "--upgrade", "--project", str(proj))
+    assert code == 1 and "не пройдено" in err and "пройдена" in err
+    assert picks(proj, "critic") == []
+    record_completeness(cli, proj, passed=False)  # критик не прошёл: теперь повышение допустимо
+    assert route(cli, proj, "critic", "--upgrade")[1]["model"] == "opus"
+
+
+def test_critic_upgrade_follows_the_last_record_not_an_earlier_one(cli, proj):
+    record_completeness(cli, proj, passed=False)
+    record_completeness(cli, proj, passed=True)  # доработали, проверка пройдена
+    code, _, err = cli("route", "critic", "--upgrade", "--project", str(proj))
+    assert code == 1 and picks(proj, "critic") == []
+
+
+def test_other_roles_upgrade_condition_stays_with_the_caller(cli, proj):
+    code, data, err = route(cli, proj, "classifier", "--upgrade", "--reason", "ответ «не уверен»")
+    assert code == 0, err
+    assert data["model"] == "sonnet" and data["upgrade"] is True
+
+
+def test_upgrade_holds_until_the_end_of_the_step(cli, proj):
+    record_completeness(cli, proj, passed=False)
+    assert route(cli, proj, "critic")[1]["model"] == "sonnet"  # до повышения — таблица
+    assert route(cli, proj, "critic", "--upgrade")[1]["model"] == "opus"
+    for _ in range(2):  # обычный выбор роли на том же шаге возвращает повышенную модель
+        code, data, err = route(cli, proj, "critic")
+        assert code == 0, err
+        assert data["model"] == "opus" and data["level"] == "сильная" and data["upgrade"] is False
+        assert data["upgraded"] is True
+    event = picks(proj, "critic")[-1]
+    assert event["name"] == "выбор" and event["model"] == "opus" and event["level"] == "сильная"
+    assert "действует" in event["message"] and "средняя -> сильная" in event["message"]
+    code, out, _ = cli("route", "critic", "--project", str(proj))
+    assert "opus" in out and "до конца шага" in out
+    # повышение не расходуется выбором: счёт повышений прежний
+    assert len([e for e in picks(proj, "critic") if e["name"] == "повышение"]) == 1
+    assert check_project(proj) == []
+
+
+def test_sticky_upgrade_is_per_role_and_per_step(cli, proj):
+    record_completeness(cli, proj, passed=False)
+    route(cli, proj, "critic", "--upgrade")
+    assert route(cli, proj, "classifier")[1]["model"] == "haiku"  # другая роль не повышена
+    assert route(cli, proj, "respondent")[1]["model"] == "sonnet"
+    assert cli("step", "start", "6", "--project", str(proj))[0] == 0
+    code, data, _ = route(cli, proj, "critic")
+    assert data["model"] == "sonnet" and data["upgraded"] is False  # на новом шаге повышения нет
+
+
+def test_sticky_upgrade_for_a_role_without_a_guard(cli, proj):
+    route(cli, proj, "classifier", "--upgrade")
+    assert route(cli, proj, "classifier")[1]["model"] == "sonnet"
+
+
+def test_upgrade_limit_message_says_the_upgrade_stays(cli, proj):
+    record_completeness(cli, proj, passed=False)
+    route(cli, proj, "critic", "--upgrade")
+    code, _, err = cli("route", "critic", "--upgrade", "--project", str(proj))
+    assert code == 1 and "предел" in err and "до конца шага" in err
 
 
 def test_route_event_is_valid_for_the_journal_model():

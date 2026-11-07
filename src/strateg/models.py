@@ -1516,7 +1516,6 @@ class DecisionsFile(_Model):
     decisions: list[Decision]
 
 
-# Схемы, которые генерирует scripts/gen_schemas.py: имя файла без `.schema.json` -> модель.
 # ---------------------------------------------------------------------------
 # completeness.yaml — итог проверки полноты (рубрика, ADR-0006)
 # ---------------------------------------------------------------------------
@@ -1584,6 +1583,7 @@ class CompletenessFile(_Model):
         return self
 
 
+# Схемы, которые генерирует scripts/gen_schemas.py: имя файла без `.schema.json` -> модель.
 SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "state": ProjectState,
     "sources": SourcesFile,

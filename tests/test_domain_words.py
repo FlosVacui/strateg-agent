@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import re
 
+import pytest
 import yaml
 
-from strateg.rubric_checks import knowledge_dir, load_domain_words, phrase_lemmas
+from strateg.rubric_checks import _contains, knowledge_dir, lemma_tokens, load_domain_words, phrase_lemmas
 from test_skills import CASE_PHRASES, CASE_WORDS
 from test_skills import CASE_STRINGS as SKILL_CASE_STRINGS
 
@@ -55,3 +56,40 @@ def test_every_entry_is_made_of_words_and_has_lemmas():
     assert set(data) == {"words"}
     for w in data["words"]:
         assert isinstance(w, str) and phrase_lemmas(w), w
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Новая СИМ-карта",
+        "СИМ-карты",
+        "сим-картой",
+        "e-SIM",
+        "eSIM",
+        "SMS-рассылка",
+        "СМС-рассылки",
+        "СМС",
+        "SMS",
+    ],
+)
+def test_cyrillic_and_common_variants_are_found(text):
+    tokens = lemma_tokens(text)
+    assert any(_contains(tokens, phrase_lemmas(w)) for w in load_domain_words()), text
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "номер телефона",
+        "мобильный платёж",
+        "входящий звонок",
+        "перенос номера",
+        "пополнение баланса",
+        "оператор",
+    ],
+)
+def test_general_phrases_that_give_a_false_no_on_other_tasks_are_not_in_the_list(phrase):
+    """«Оператор» отдельным словом слишком общий; сочетания общие для банка, магазина, ЖКХ."""
+    assert phrase not in {w.casefold() for w in load_domain_words()}
+    tokens = lemma_tokens(phrase)
+    assert not any(_contains(tokens, phrase_lemmas(w)) for w in load_domain_words()), phrase

@@ -315,7 +315,15 @@ def build_parser() -> argparse.ArgumentParser:
     p = rub_sub.add_parser(
         "record",
         parents=[common],
-        help="записать ответы части Б, прогнать часть А и вынести итог по pass_rule",
+        help="записать ответы части Б, прогнать часть А и вынести итог (коды выхода 0, 1, 2)",
+        description="Записать ответы части Б, прогнать часть А на шаге проекта и вынести итог по pass_rule.\n"
+        "Работает с шага 6 (проверка полноты).",
+        epilog="Коды выхода:\n"
+        "  0  итог «пройдено»\n"
+        "  1  итог «не пройдено»: completeness.yaml и событие журнала записаны\n"
+        "  2  ошибка входа (формат ответов, нет --by, шаг раньше 6): ничего не пишется\n"
+        "В --json поле ok равно «пройдено».",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.set_defaults(func=commands.run, handler=rubric.cmd_rubric_record)
     p.add_argument(
@@ -326,8 +334,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--by",
         choices=["критик", "агент"],
-        default="критик",
-        help="кто отвечал: «агент» — проверка не независимая, это видно в файле и в выводе",
+        help="кто отвечал на часть Б, обязательно: «критик» — независимая проверка, «агент» — ответы дал "
+        "сам агент, проверка не независимая (видно в файле и в выводе); значения по умолчанию нет",
     )
 
     p = add("route", routing.cmd_route, "модель и effort роли; профиль проекта")
