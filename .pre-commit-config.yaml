@@ -19,7 +19,7 @@ repos:
         language: system
         types: [python]
       - id: sync-skills
-        name: копия скиллов совпадает
+        name: скрипт копии скиллов даёт точную копию
         entry: uv run python scripts/sync_skills.py --check
         language: system
         pass_filenames: false

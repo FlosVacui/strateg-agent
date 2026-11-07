@@ -13,6 +13,8 @@ htmlcov/
 # Личные настройки среды
 .claude/settings.local.json
 CLAUDE.local.md
+# Копия скиллов для Codex создаётся по запросу (scripts/sync_skills.py) и не коммитится
+.agents/
 .vscode/
 .idea/
 
