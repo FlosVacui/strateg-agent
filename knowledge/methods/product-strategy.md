@@ -23,5 +23,4 @@
 Все обращения — 07.11.2026.
 - Porter M. E., What Is Strategy?, Harvard Business Review, ноябрь–декабрь 1996. https://hbr.org/1996/11/what-is-strategy. Сверено по странице издателя: выбор отличающихся действий и компромиссы.
 - Rumelt R., Good Strategy / Bad Strategy, 2011: диагноз, направляющая политика, согласованные действия. https://sachinrekhi.com/good-strategy-bad-strategy-richard-rumelt. Вторичный источник: пересказ, книга не открывалась.
-- Gupta S. и др., Modeling Customer Lifetime Value, Journal of Service Research 9(2), 2006, с. 139–155, https://doi.org/10.1177/1094670506293810. Вторичный источник: библиографические данные по справочным записям, страница издателя не открылась.
 - Rodden K., Hutchinson H., Fu X., Measuring the User Experience on a Large Scale, CHI 2010. https://research.google/pubs/pub36299/. Сверено по аннотации: рамка HEART как способ сопоставить цели продукта с метриками. Автор термина «North Star» не установлен, поэтому не назван.

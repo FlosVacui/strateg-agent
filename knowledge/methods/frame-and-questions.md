@@ -19,6 +19,6 @@
 - Не ищи только подтверждения одной версии.
 
 ## Источники
-Все обращения — 07.11.2026.
+Все обращения — 07.11.2026. Правила 1–3 — договорённость продукта, отдельным источником не подкреплены.
 - Heuer R. J., Psychology of Intelligence Analysis, CIA Center for the Study of Intelligence, 1999, гл. 8 «Analysis of Competing Hypotheses». https://www.cia.gov/resources/csi/static/Pyschology-of-Intelligence-Analysis.pdf. Сверено по тексту: шаги ACH и понятие диагностичности улики.
 - ODNI, Intelligence Community Directive 203 «Analytic Standards», раздел D, п. 6.e(4): анализ альтернативных гипотез. https://archive.dni.gov/files/documents/ICD/ICD-203.pdf. Сверено по тексту.
