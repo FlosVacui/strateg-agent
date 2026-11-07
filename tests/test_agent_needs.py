@@ -117,7 +117,7 @@ def test_basis_may_point_to_a_claim_of_the_same_file(started, cli, tmp_path):
 
 
 def test_whatever_claim_add_writes_passes_check(started, cli, tmp_path):
-    quote = "после подключения услуга предостовляется бесплатно, затем списывается абонентская плата"
+    quote = "после подключения услуга предоставляется бесплатно, затем списывается абонентская плата"
     batch = [fact(), fact(quote, text="Первая неделя бесплатна")]
     assert cli("claim", "add", "--file", write_claims(tmp_path, batch))[0] == 0
     assert check_project(started) == []

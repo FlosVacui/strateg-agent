@@ -11,7 +11,13 @@ import yaml
 
 URL = "https://example.com/protection"
 QUOTE = "Стоимость подписки в Москве — 199 рублей в месяц"
+# Независимый источник: рекомендация и обещание держатся не только на заявлении компании о себе.
 PUBLISHER = {
+    "publisher": "компания «Пример-Аналитика»",
+    "publisher_kind": "отраслевое исследование",
+    "self_reported": False,
+}
+SELF_REPORTED = {
     "publisher": "компания «Пример»",
     "publisher_kind": "официальный первоисточник",
     "self_reported": True,

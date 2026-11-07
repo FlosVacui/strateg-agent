@@ -59,3 +59,73 @@ def test_normal_text_is_not_marked_as_instruction():
 
 def test_clean_text_has_lf_and_no_control_chars():
     assert safety.clean_text("a\r\nb\x00\r\n\r\n\r\n\r\nc  \n") == "a\nb\n\nc\n"
+
+
+def test_capitalized_closed_marker_is_found_but_dsp_only_in_capitals():
+    assert (
+        "для служебного пользования"
+        in safety.inspect_text("Для служебного пользования. Цена 249.").closed_markers
+    )
+    assert "для служебного пользования" in safety.inspect_text("Документ ДСП, экз. 1").closed_markers
+    assert safety.inspect_text("Пишем дсп в нижнем регистре").closed_markers == []
+
+
+# --- материалы человека: номера с контрольными суммами, имена -------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("digits", "ok"),
+    [("500100732259", True), ("500100732258", False), ("7707083893", True), ("7707083894", False)],
+)
+def test_inn_check_sums(digits, ok):
+    assert safety.inn_ok(digits) is ok
+
+
+@pytest.mark.parametrize(
+    ("digits", "ok"), [("11223344595", True), ("11223344596", False), ("112233445", False)]
+)
+def test_snils_check_sums(digits, ok):
+    assert safety.snils_ok(digits) is ok
+
+
+@pytest.mark.parametrize(
+    ("digits", "ok"),
+    [
+        ("4111111111111111", True),
+        ("5555555555554444", True),
+        ("4111111111111112", False),
+        ("1234567890123456", False),
+    ],
+)
+def test_luhn_check_sums(digits, ok):
+    assert safety.luhn_ok(digits) is ok
+
+
+def test_mask_personal_replaces_only_valid_numbers_and_reports_lines():
+    text = (
+        "ИНН 500100732259\nСНИЛС 112-233-445 95, карта 4111 1111 1111 1111\n"
+        "ИНН орг. 7707083893, тел. 8-800-555-35-35"
+    )
+    masked, replacements, categories = safety.mask_personal(text)
+    assert masked.splitlines() == [
+        "ИНН [ИНН]",
+        "СНИЛС [СНИЛС], карта [карта]",
+        "ИНН орг. 7707083893, тел. 8-800-555-35-35",
+    ]
+    assert [(r.label, r.line) for r in replacements] == [("[ИНН]", 1), ("[СНИЛС]", 2), ("[карта]", 2)]
+    assert categories == ["номера документов и карт"]
+
+
+def test_org_inn_and_hotline_are_not_taken_for_another_number():
+    # 8-800 без разделителей — тоже 11 цифр, которые могли бы пройти как СНИЛС
+    masked, replacements, _ = safety.mask_personal("звоните 88005553535, ИНН 7707083893")
+    assert masked == "звоните 88005553535, ИНН 7707083893" and replacements == []
+
+
+def test_find_names_uses_the_dictionary_and_only_warns():
+    names = dict(
+        safety.find_names("Иванов Иван Петрович живёт в Москве.\nПодписка Базовый тариф. Роза ветров.")
+    )
+    assert {"Иванов", "Иван", "Петрович", "Роза"} <= set(names) and "Москве" not in names
+    assert names["Роза"] == 2
+    assert safety.find_names("подписка стоит 199 рублей") == []

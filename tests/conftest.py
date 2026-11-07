@@ -137,3 +137,12 @@ def started(cli, net, page_html, home):
     code, out, err = cli("fetch", URL, "--region", "RU-MOW")
     assert code == 0, err
     return home / "demo"
+
+
+@pytest.fixture
+def private(tmp_path, monkeypatch) -> Path:
+    """Домашняя папка пользователя во временной папке: `~/.strateg/private/` берётся через `Path.home()`."""
+    folder = tmp_path / "home"
+    folder.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: folder))
+    return folder / ".strateg" / "private"

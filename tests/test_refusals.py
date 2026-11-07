@@ -46,14 +46,14 @@ def test_fact_without_quote_is_refused(started, cli, tmp_path):
 @pytest.mark.parametrize(
     ("quote", "reason"),
     [
-        # подмена цифры: сходство с настоящим текстом выше порога, но число другое
-        ("Стоимость подписки в Москве — 149 рублей в месяц. Первые семь дней после подключения", "числа"),
+        # подмена цифры: похожего места в снимке достаточно, но число другое
+        ("Стоимость подписки в Москве — 149 рублей в месяц. Первые семь дней после подключения", "нет"),
         # вставка «не»
         (
             "Услуга не работает на всех тарифах оператора и подключается в личном кабинете за минуту",
-            "отрицания",
+            "нет",
         ),
-        # короткая цитата с опечаткой: нечёткое сходство ей не разрешено
+        # короткая цитата с опечаткой: проходит только точное вхождение
         ("Подписка «Защита» помогвет отсеивать", "короче 40"),
         # то же, но длинная цитата, начатая с середины числа
         (
@@ -78,12 +78,11 @@ def test_exact_quote_with_different_formatting_is_accepted(started, cli, tmp_pat
     assert q["check"]["method"] == "точное вхождение" and q["check"]["similarity"] == 100
 
 
-def test_fuzzy_quote_is_recorded_with_similarity(started, cli, tmp_path):
+def test_quote_with_typo_is_refused_there_is_no_fuzzy_match(started, cli, tmp_path):
     typo = "после подключения услуга предостовляется бесплатно, затем списывается абонентская плата"
     code, _, err = add(cli, tmp_path, fact(typo, text="Первая неделя подписки бесплатна", region="RU-MOW"))
-    assert code == 0, err
-    check = claims_of(started)[0]["quotes"][0]["check"]
-    assert check["method"] == "нечёткое" and 93 <= check["similarity"] < 100
+    assert code == 1 and "цитата не найдена" in err
+    assert claims_of(started) == []
 
 
 def test_all_errors_of_a_file_are_reported_and_nothing_is_written(started, cli, tmp_path):

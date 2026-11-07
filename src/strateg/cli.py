@@ -1,5 +1,6 @@
 """Точка входа CLI `strateg`: `doctor` и команды проекта (`new`, `use`, `status`, `step`, `gate`, `fetch`,
-`claim`, `write`, `event`, `check`, `cost`). Сами команды проекта — в `strateg.commands`.
+`add`, `claim`, `write`, `event`, `check`, `cost`, `budget`, `pack`). Сами команды проекта — в
+`strateg.commands`.
 
 Коды возврата: 0 — успех, 1 — ошибка данных или правил, 2 — ошибка использования.
 """
@@ -234,6 +235,32 @@ def build_parser() -> argparse.ArgumentParser:
     p = add("fetch", commands.cmd_fetch, "скачать страницу или PDF и сохранить снимок")
     p.add_argument("url", help="адрес http или https")
     p.add_argument("--region", help="код региона, если содержание зависит от региона")
+
+    p = add("add", commands.cmd_add, "зарегистрировать материал из inputs/ или подтвердить замены")
+    p.add_argument("path", nargs="?", help="файл в папке inputs/ проекта")
+    p.add_argument(
+        "--kind",
+        help="вид материала, если он не по расширению: «интервью» для расшифровки, "
+        "«заметка пользователя» для текста с незнакомым расширением",
+    )
+    p.add_argument(
+        "--confirm",
+        metavar="И-n",
+        help="человек подтвердил замены персональных данных (или что на изображении их нет)",
+    )
+
+    budget = add("budget", commands.cmd_budget_check, "бюджет проекта")
+    budget_sub = budget.add_subparsers(dest="budget_command", required=True, parser_class=_Parser)
+    p = budget_sub.add_parser("set", parents=[common], help="задать бюджет проекта")
+    p.set_defaults(func=commands.run, handler=commands.cmd_budget_set)
+    p.add_argument("--usd", type=float, help="лимит денег, USD")
+    p.add_argument("--minutes", type=float, help="лимит времени работы агента, минуты")
+    p = budget_sub.add_parser("check", parents=[common], help="можно ли платное действие (0 — да, 1 — нет)")
+    p.set_defaults(func=commands.run, handler=commands.cmd_budget_check)
+    p.add_argument("--action", help="что собираются делать; «выпуск» берёт резерв бюджета")
+
+    p = add("pack", commands.cmd_pack, "упаковать проект в архив .zip без секретов и исходников с ПДн")
+    p.add_argument("--out", help="куда положить архив (по умолчанию — рядом с проектами, <id>.zip)")
 
     claim = add("claim", commands.cmd_claim_list, "утверждения")
     claim_sub = claim.add_subparsers(dest="claim_command", required=True, parser_class=_Parser)

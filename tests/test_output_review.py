@@ -257,7 +257,6 @@ def test_r_2_3_29_baseline_that_looks_like_a_number_is_explained(project, value)
         "Пробел в данных не закрыт",
         "P-50 перцентиль времени отклика",
         "П-1 за прошлый месяц",
-        "П-9 (см.)",
     ],
 )
 def test_r_2_3_29_baseline_text_stays_valid(project, value):

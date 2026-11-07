@@ -120,8 +120,8 @@ def test_fact_needs_checked_quote_and_publisher_fields():
     )
 
 
-def test_fuzzy_threshold_is_forty_characters_after_whitespace_normalization():
-    check = {"method": "нечёткое", "similarity": 95, "snapshot_sha256": SHA, "checked_at": T}
+def test_inexact_method_needs_forty_characters_after_whitespace_normalization():
+    check = {"method": "без пробелов и дефисов", "similarity": 100, "snapshot_sha256": SHA, "checked_at": T}
     ok = claim(type="факт", origin="источник", quotes=[quote(text="а" * 40, check=check)])
     parse(ok)
     short = claim(type="факт", origin="источник", quotes=[quote(text="а" * 39, check=check)])
@@ -272,14 +272,16 @@ def test_quote_check_similarity_rules():
     assert "требует сходства 100" in messages(
         ClaimsFile, {"schema_version": 1, "claims": [claim(quotes=[bad_exact])]}
     )
-    long_text = "а" * 50
-    fuzzy = exact | {"method": "нечёткое"}
-    parse(claim(quotes=[quote(text=long_text, check=fuzzy | {"similarity": 93})]))
-    low = quote(text=long_text, check=fuzzy | {"similarity": 92.9})
-    assert "ниже порога 93" in messages(ClaimsFile, {"schema_version": 1, "claims": [claim(quotes=[low])]})
 
 
-@pytest.mark.parametrize("method", ["без пробелов и дефисов", "нечёткое"])
+def test_there_is_no_fuzzy_check_method():
+    """Нечёткого пути нет: способа «нечёткое» в записи проверки больше не бывает."""
+    fuzzy = quote(text="а" * 50, check=quote()["check"] | {"method": "нечёткое", "similarity": 95})
+    text = messages(ClaimsFile, {"schema_version": 1, "claims": [claim(quotes=[fuzzy])]})
+    assert "точное вхождение" in text and "без пробелов и дефисов" in text  # допустимые способы
+
+
+@pytest.mark.parametrize("method", ["без пробелов и дефисов"])
 def test_short_quote_allows_only_exact_method(method):
     check = quote()["check"] | {"method": method}
     short = claim(quotes=[quote(text="не рост", check=check)])

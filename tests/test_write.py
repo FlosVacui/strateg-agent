@@ -585,9 +585,9 @@ def test_old_error_in_another_file_is_only_a_warning(cli, example):
             {
                 "source": "И-1",
                 "text": "Стоимость подписки в Москве — 199 рублей в месяц. Первые семь дней бесплатно",
-                "publisher": "компания «Пример»",
-                "publisher_kind": "официальный первоисточник",
-                "self_reported": True,
+                "publisher": "компания «Пример-Аналитика»",
+                "publisher_kind": "отраслевое исследование",
+                "self_reported": False,
             }
         ],
     }

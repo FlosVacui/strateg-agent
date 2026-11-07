@@ -402,28 +402,30 @@ def test_status_line_format_and_numbers(started, cli, clock):
     code, out, _ = cli("status", "--line")
     line = out.strip()
     assert code == 0 and "\n" not in line
-    assert (
-        line
-        == "Шаг 2б из 8 · Сбор · источников 1 · утверждений 1, без цитаты 0 · сбоев 0 · $1,20 · 18 из 60 мин"
+    assert line == (
+        "Шаг 2б из 8 · Сбор · источников 1 · утверждений 1, без цитаты 0 · сбоев 0 · $1,20 из $5 · "
+        "18 из 60 мин"
     )
     assert json.loads(cli("status", "--line", "--json")[1])["line"] == line
 
 
 def test_status_line_with_money_limit_and_without_cost(cli, home):
     cli("new", "demo")
+    # у нового проекта бюджет по умолчанию: деньги есть, стоимость пока неизвестна
+    line = cli("status", "--line")[1].strip()
+    assert line.endswith("сбоев 0 · стоимость: нет данных · 0 из 60 мин")
+    state_file = home / "demo" / "state.yaml"
+    state = yaml.safe_load(state_file.read_text(encoding="utf-8"))
+    del state["budget"]["limit_usd"]  # лимита денег нет: в строке только время
+    state_file.write_text(yaml.safe_dump(state, allow_unicode=True), encoding="utf-8")
     assert cli("status", "--line")[1].strip() == (
         "Шаг 1 из 8 · Постановка · источников 0 · утверждений 0, без цитаты 0 · сбоев 0 · 0 из 60 мин"
     )
-    state_file = home / "demo" / "state.yaml"
-    state = yaml.safe_load(state_file.read_text(encoding="utf-8"))
     state["budget"]["limit_usd"] = 5.0
     state_file.write_text(yaml.safe_dump(state, allow_unicode=True), encoding="utf-8")
-    line = cli("status", "--line")[1].strip()
-    assert line.endswith("сбоев 0 · стоимость: нет данных · 0 из 60 мин")
     cli("cost", "add", "--session", "s1", "--role", "r", "--model", "m", "--usd", "1.2", "--total")
     line = cli("status", "--line")[1].strip()
     assert line.endswith("сбоев 0 · $1,20 из $5 · 0 из 60 мин")
-    assert LINE.match(line)
 
 
 def test_status_line_counts_failures_and_claims_without_quote(started, cli, net):

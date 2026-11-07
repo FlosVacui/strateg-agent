@@ -32,8 +32,7 @@ from pydantic import (
 )
 
 SCHEMA_VERSION = 1
-MIN_FUZZY_QUOTE_LEN = 40  # цитата короче проходит проверку только точным вхождением
-FUZZY_THRESHOLD = 93  # стартовый порог нечёткого сходства, процентов
+MIN_COMPACT_QUOTE_LEN = 40  # цитата короче проходит проверку только точным вхождением
 WEB_DIR = "sources"  # снимки веба
 INPUTS_DIR = "inputs"  # материалы человека и извлечённый из них текст
 
@@ -317,7 +316,7 @@ PublisherKind = Literal[
     "отзыв пользователя",
     "материал пользователя",
 ]
-CheckMethod = Literal["точное вхождение", "без пробелов и дефисов", "нечёткое"]
+CheckMethod = Literal["точное вхождение", "без пробелов и дефисов"]
 
 EventKind = Literal[
     "действие",
@@ -459,6 +458,9 @@ class Source(_Model):
     no_personal_data_confirmed: Flag = Field(
         False, description="Для изображения: человек подтвердил, что ПДн нет"
     )
+    material_sha256: Sha256 | None = Field(
+        None, description="sha256 исходного файла материала: по нему повтор `add` отдаёт прежний номер"
+    )
 
     @model_validator(mode="after")
     def _rules(self) -> Self:
@@ -503,11 +505,10 @@ class Source(_Model):
             if not self.text_path.startswith(folder + "/"):
                 p.append(f"текст {'снимка веба' if web else 'материала'} должен лежать в {folder}/")
 
-        if local:
-            if self.anonymized and not self.anonymization_confirmed:
-                p.append("материал обезличен, но человек не подтвердил обезличенную копию")
-            if self.kind == "изображение" and not self.no_personal_data_confirmed:
-                p.append("изображение: человек не подтвердил, что персональных данных на нём нет")
+        # Не подтверждённые человеком замены и изображение — состояние между `add` и `add --confirm`:
+        # модель его допускает, `check_project` называет ошибкой, а цитировать такой материал нельзя.
+        if self.material_sha256 is not None and not local:
+            p.append("material_sha256 бывает только у материала из inputs/")
         _raise(p)
         return self
 
@@ -529,7 +530,7 @@ class QuoteCheck(_Model):
 
     method: CheckMethod
     similarity: Percent = Field(
-        description="Сходство, 0–100; для точных способов — 100, для нечёткого — не ниже порога"
+        description="Сходство: оба способа точные, поэтому всегда 100 (поле осталось от нечёткого пути)"
     )
     snapshot_sha256: Sha256 = Field(description="sha256 снимка, по которому проверяли")
     checked_at: Time
@@ -537,13 +538,8 @@ class QuoteCheck(_Model):
     @model_validator(mode="after")
     def _rules(self) -> Self:
         p: list[str] = []
-        if self.method != "нечёткое" and self.similarity != 100:
+        if self.similarity != 100:
             p.append(f"способ «{self.method}» требует сходства 100, а в записи проверки {self.similarity:g}")
-        if self.method == "нечёткое" and self.similarity < FUZZY_THRESHOLD:
-            p.append(
-                f"сходство {self.similarity:g} ниже порога {FUZZY_THRESHOLD}: "
-                "цитата нечёткой проверкой не проходит"
-            )
         _raise(p)
         return self
 
@@ -568,9 +564,9 @@ class Quote(_Model):
             )
         if self.check is not None and self.check.method != "точное вхождение":
             n = len(" ".join(self.text.split()))
-            if n < MIN_FUZZY_QUOTE_LEN:
+            if n < MIN_COMPACT_QUOTE_LEN:
                 p.append(
-                    f"цитата короче {MIN_FUZZY_QUOTE_LEN} знаков (в цитате {n}) проверяется только "
+                    f"цитата короче {MIN_COMPACT_QUOTE_LEN} знаков (в цитате {n}) проверяется только "
                     f"точным вхождением, а записан способ «{self.check.method}»"
                 )
         _raise(p)
