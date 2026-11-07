@@ -486,12 +486,49 @@ def test_phrase_table_lives_only_in_agents_md():
 
 
 def test_first_turn_summary_is_described_in_one_place():
-    """`status --brief` — первый ход нового чата: он в AGENTS.md и strateg, другие скиллы его не вызывают."""
+    """`status --brief` — раз на проект за чат: он в AGENTS.md и strateg, другие скиллы его не вызывают."""
     for path in skill_files():
         if path.parts[-2] == "strateg":
             continue
         assert "status --brief" not in path.read_text(encoding="utf-8"), rel(path)
-    assert "Второй вызов запрещён" in AGENTS.read_text(encoding="utf-8")
+    agents = AGENTS.read_text(encoding="utf-8")
+    assert "один раз на проект за чат" in agents and "сразу после `use`" in agents
+    assert "Повтор на том же проекте запрещён" in agents and "status --brief --peek" in agents
+
+
+_ID = re.compile(r"^(И|У|ВП|П|Вар|О|ПП|Реш)-\d+$")
+_NUMBER = re.compile(r"^-?\d+(\.\d+)?$")
+_PAIR = re.compile(r"(?:^\s*(?:- )?|[{,] )([A-Za-z_]+): ([^{},\[\]\n][^,}\n]*)", re.M)
+
+
+def _closed_values() -> set[str]:
+    import typing
+
+    from strateg import models
+
+    out: set[str] = set()
+    for name in dir(models):
+        obj = getattr(models, name)
+        if typing.get_origin(obj) is typing.Literal:
+            out |= {v for v in typing.get_args(obj) if isinstance(v, str)}
+    return out
+
+
+def test_texts_in_write_samples_are_quoted():
+    """Агент перенимает стиль образца: текст без кавычек ломается на запятой, двоеточии и `#`."""
+    closed = _closed_values()
+    bare = []
+    for path in skill_files():
+        for lang, body in FENCE.findall(path.read_text(encoding="utf-8")):
+            if lang.strip() != "yaml" or path.name != "SKILL.md":
+                continue
+            for key, value in _PAIR.findall(body):
+                v = value.strip()
+                if v[:1] in ("'", '"', "|", ">") or not v or v in closed or v in ("true", "false"):
+                    continue
+                if not (_ID.match(v) or _NUMBER.match(v)):
+                    bare.append(f"{rel(path)}: {key}: {v}")
+    assert not bare, bare
 
 
 @pytest.mark.parametrize("path", all_texts(), ids=rel)
