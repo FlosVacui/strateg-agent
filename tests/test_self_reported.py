@@ -1,7 +1,8 @@
-"""Рекомендация и обещание не держатся на заявлении компании о себе (`self_reported: true`).
+"""Рекомендация не держится на заявлении компании о себе (`self_reported: true`).
 
-`write` отказывает, если среди оснований рекомендации или у обещания со статусом «подтверждено» нет факта
-из источника не «о себе». Пояснение — по-русски и с номерами утверждений.
+`write` отказывает, если среди оснований рекомендации нет факта из источника не «о себе». Пояснение —
+по-русски и с номерами утверждений. Обещание о возможности своего продукта подтверждает его документация:
+у обещаний этой проверки нет, обещание результата оценивает критик.
 """
 
 from __future__ import annotations
@@ -44,15 +45,11 @@ def test_recommendation_only_on_self_reported_fact_is_rejected(project):
     )
 
 
-def test_promise_confirmed_only_on_self_reported_fact_is_rejected(project):
+def test_confirmed_promise_may_stand_on_the_product_documentation(project):
     edit_yaml(project, "claims.yaml", make_self_reported)
-    assert_error(
-        project,
-        "promises.yaml, запись О-1",
-        "обещание О-1 со статусом «подтверждено»",
-        "только на заявлении компании о себе",
-        "У-2",
-    )
+    errors = errors_of(project)
+    assert not any("promises.yaml" in e for e in errors)  # возможность описана страницей самой компании
+    assert any("options.yaml, recommendation" in e for e in errors)  # а рекомендация отклоняется
 
 
 def test_partially_confirmed_promise_may_stand_on_self_reported_fact(project):

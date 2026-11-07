@@ -904,14 +904,6 @@ def _check_promises(prom: PromisesFile, cl: _Claims, errors: list[str]) -> None:
         where = f"{PROMISES_FILE}, запись {p.id} (№{n})"
         for ref in p.claims:
             cl.ref(where, "claims", ref, type_="факт", live_for="обещание")
-        only_self = cl.only_self_reported(p.claims) if p.status == "подтверждено" else None
-        if only_self:
-            errors.append(
-                f"{where}, поле claims: обещание {p.id} со статусом «подтверждено» держится только на "
-                f"заявлении компании о себе: факты {', '.join(only_self)} взяты из источников, где издатель "
-                "пишет о себе или своём продукте (self_reported: true); добавьте факт из независимого "
-                "источника или понизьте статус до «подтверждено частично» или «не подтверждено»"
-            )
 
 
 def _threshold_key(text: str) -> str:
