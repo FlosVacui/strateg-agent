@@ -178,9 +178,10 @@ def test_session_start_script_gives_context(product):
 
 
 def test_session_start_script_without_project(product):
-    event = {"hook_event_name": "SessionStart", "session_id": "s", "source": "compact", "cwd": str(product)}
-    out = body(run_hook(product, "session_start.py", event))
-    assert out["additionalContext"] == "Проекта нет, начни с `strateg new`."
+    for source in ("compact", "fork"):
+        event = {"hook_event_name": "SessionStart", "session_id": "s", "source": source, "cwd": str(product)}
+        out = body(run_hook(product, "session_start.py", event))
+        assert out["additionalContext"] == "Проекта нет, начни с `strateg new`."
 
 
 def test_failure_script_writes_to_journal(product):
@@ -226,7 +227,7 @@ def hook_entries(event: str) -> list[dict]:
 
 def test_settings_cover_the_events_of_the_adr_table():
     assert set(SETTINGS["hooks"]) == {"SessionStart", "PreToolUse", "PostToolUseFailure"}
-    assert SETTINGS["hooks"]["SessionStart"][0]["matcher"] == "startup|resume|clear|compact"
+    assert SETTINGS["hooks"]["SessionStart"][0]["matcher"] == "startup|resume|clear|compact|fork"
 
 
 def test_settings_commands_are_exec_form_with_utf8_and_existing_scripts():
@@ -245,6 +246,11 @@ def test_settings_commands_are_exec_form_with_utf8_and_existing_scripts():
         assert args[-1] == "${CLAUDE_PROJECT_DIR}/.claude/hooks/" + script
         assert (HOOKS / script).is_file()
     assert SETTINGS["env"]["PYTHONUTF8"] == "1"
+
+
+def test_hook_timeouts_are_short_so_that_a_hang_does_not_hold_the_session():
+    for event in ("SessionStart", "PreToolUse", "PostToolUseFailure"):
+        assert hook_entries(event)[0]["timeout"] == 15
 
 
 def test_permission_hook_blocks_on_failure_others_do_not():

@@ -285,7 +285,6 @@ def test_critic_reads_project_folder_and_knowledge(tool):
         "projects/demo/options.yaml",
         "projects/demo/outputs/options.md",
         "projects/demo/sources/page.txt",
-        "projects/demo",
         "knowledge/methods/objections-and-premortem.md",
     ):
         tin = {key: target}
@@ -375,8 +374,8 @@ def test_main_agent_works_in_the_working_folder():
         ("Write", {"file_path": "projects/demo/.tmp/claim.yaml", "content": "x"}),
         ("Edit", {"file_path": "projects/demo/outputs/frame.md", "old_string": "a", "new_string": "b"}),
         ("Grep", {"pattern": "x", "path": "knowledge"}),
-        ("Grep", {"pattern": "x"}),
-        ("Glob", {"pattern": "**/*.md"}),
+        ("Grep", {"pattern": "x", "path": "projects/demo"}),
+        ("Glob", {"pattern": "**/*.md", "path": "knowledge"}),
     ):
         allowed(decide(tool, tin))
 
@@ -471,7 +470,6 @@ def test_documents_and_command_inputs_are_written_by_the_agent():
         "outputs/options.md",
         ".tmp/claim.yaml",
         ".tmp/write.yaml",
-        "inputs/note.txt",
     ):
         allowed(decide("Write", {"file_path": f"projects/demo/{rel}", "content": "x"}))
 

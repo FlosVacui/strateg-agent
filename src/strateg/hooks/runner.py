@@ -18,12 +18,14 @@ from strateg.hooks import effects, flags, rules
 
 NO_PROJECT_TEXT = "Проекта нет, начни с `strateg new`."
 MAX_REASON_CHARS = 300
+PEEK_SOURCES = frozenset({"compact", "fork"})
 
 
 @dataclass(frozen=True)
 class HookResult:
     stdout: str = ""
     exit_code: int = 0
+    stderr: str = ""  # пояснение для человека; не часть ответа хука
 
 
 def parse_event(raw: bytes) -> dict[str, Any]:
@@ -72,12 +74,16 @@ def run_pre_tool_use(
         if services is None:
             services = effects.LiveServices(ctx).as_services()
         decision = rules.decide_pre_tool_use(event, ctx, services)
+        note = ""
         try:
             effects.record_events(decision.events, ctx)
-        except Exception:
+        except Exception as exc:
             if not decision.denied:
                 raise  # без записи в журнал роль не запускаем: «всё пишется в журнал»
-        return HookResult(decision.output())
+            note = "хук: событие «отказ хука» не записано в журнал: " + effects.clip(
+                str(exc), MAX_REASON_CHARS
+            )
+        return HookResult(decision.output(), stderr=note)
     except Exception as exc:
         return HookResult(crash_output(exc))
 
@@ -105,10 +111,13 @@ def active_project() -> bool:
 
 
 def session_summary(source: str) -> str:
-    """Сводка «где остановились». После сжатия контекста — `--peek`: идущий шаг прерванным не становится."""
+    """Сводка «где остановились». После сжатия контекста и в ответвлённой сессии — `--peek`.
+
+    При `compact` и `fork` идущий шаг прерванным не становится: сессия продолжает работу, а не начинается.
+    """
     if not active_project():
         return NO_PROJECT_TEXT
-    peek = source == "compact"
+    peek = source in PEEK_SOURCES
     argv = ["status", "--brief", *(["--peek"] if peek else [])]
     code, out, err = _run_cli(argv)
     title = "Сводка «где остановились» (`strateg status --brief" + (" --peek`):" if peek else "`):")

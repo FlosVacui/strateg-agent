@@ -16,7 +16,11 @@ def main() -> int:
     try:
         from strateg.hooks import runner
 
-        out = runner.run_pre_tool_use(raw, os.environ).stdout
+        result = runner.run_pre_tool_use(raw, os.environ)
+        out = result.stdout
+        if result.stderr:  # потерянное событие журнала не молчит
+            sys.stderr.buffer.write(result.stderr.encode("utf-8") + b"\n")
+            sys.stderr.buffer.flush()
     except BaseException as exc:  # noqa: BLE001 - пакет не подключился или сбой до решения: отказ
         reason = f"хук прав не сработал: {type(exc).__name__}: {exc}"[:300]
         out = json.dumps(

@@ -383,6 +383,15 @@ def test_session_start_compact_is_peek_and_writes_nothing(demo, cli):
     assert not any(e.get("status") == "прервано" for e in journal_of(demo))
 
 
+def test_session_start_fork_is_peek_and_writes_nothing(demo, cli):
+    assert cli("step", "start", "1")[0] == 0
+    before = journal_of(demo)
+    text = session("fork")
+    assert "--peek" in text and "Проект: demo" in text
+    assert journal_of(demo) == before
+    assert not any(e.get("status") == "прервано" for e in journal_of(demo))
+
+
 def test_session_start_startup_records_interrupted_step(demo, cli):
     assert cli("step", "start", "1")[0] == 0
     session("startup")
@@ -394,6 +403,7 @@ def test_session_start_without_project_is_one_line(home):
     text = session("startup")
     assert text == "Проекта нет, начни с `strateg new`."
     assert session("compact") == text
+    assert session("fork") == text
 
 
 def test_session_start_failure_does_not_block(demo, monkeypatch):

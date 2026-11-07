@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -15,6 +14,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from strateg import storage
 from strateg.hooks import paths
 from strateg.hooks.rules import Choice, Ctx, EventSpec, HookError, Pick, ProjectView, RoutingView, Services
 
@@ -23,7 +23,6 @@ MAX_ERROR_CHARS = 500
 HIDDEN_LINE = "[строка скрыта: похожа на ключ]"
 PROJECT_ID = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 JOURNAL, STATE = "journal.jsonl", "state.yaml"
-_JOURNAL_HASH = re.compile(r"(?m)^(  journal\.jsonl: )[0-9a-f]{64}$")
 
 
 def product_root(env: Mapping[str, str], cwd: str) -> str:
@@ -141,8 +140,13 @@ class LiveServices:
     def agents(self) -> frozenset[str]:
         return agent_names(Path(self.ctx.penv.root) / ".claude" / "agents")
 
+    def active(self) -> str | None:
+        """Номер активного проекта без тяжёлых модулей (зоны чтения и записи ролей); нет проекта — None."""
+        root = active_project_root(self.ctx)
+        return root.name if root is not None else None
+
     def as_services(self) -> Services:
-        return Services(project=self.project, routing=self.routing, agents=self.agents)
+        return Services(project=self.project, routing=self.routing, agents=self.agents, active=self.active)
 
 
 # --- Журнал ------------------------------------------------------------------------------------------------
@@ -187,52 +191,38 @@ def now() -> Any:
     return dt.datetime.now().astimezone().replace(microsecond=0)
 
 
-def _sha(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
 def append_event(root: Path, spec: EventSpec) -> bool:
     """Добавляет событие в `journal.jsonl` проекта и обновляет в `state.yaml` только хеш журнала.
 
-    Хеши других файлов не трогаются: правку человека принимает только команда CLI, записав «изменено вне
-    агента». Модели проекта не подключаются: хук на отказе должен отвечать быстро; правильность строки
-    проверяют тесты (`check_project`). Возвращает False, если проект не удалось прочитать.
+    Запись идёт тем же кодом, что и у CLI (`strateg.storage`): под блокировкой папки проекта, поэтому
+    параллельные хуки и команда CLI не теряют событий и не дают ложного «изменено вне агента». Хеши других
+    файлов не трогаются: правку человека принимает только команда CLI. Модели проекта не подключаются: хук
+    на отказе должен отвечать быстро; правильность строки проверяют тесты (`check_project`). Возвращает
+    False, если проект не удалось прочитать. Папка занята дольше таймаута — `storage.LockTimeout`.
     """
     import yaml
 
-    state_path, journal_path = root / STATE, root / JOURNAL
-    try:
-        state_bytes = state_path.read_bytes()
-        state = yaml.safe_load(state_bytes.decode("utf-8-sig"))
-        journal_before = journal_path.read_bytes()
-    except (OSError, UnicodeDecodeError, yaml.YAMLError):
-        return False
-    if not isinstance(state, dict) or not isinstance(state.get("step"), str):
-        return False
-    event: dict[str, Any] = {
-        "schema_version": 1,
-        "time": now().isoformat(),
-        "actor": ACTOR,
-        "kind": spec.kind,
-        "step": state["step"],
-    }
-    for key in ("name", "message", "role", "model", "level", "effort"):
-        value = getattr(spec, key)
-        if value is not None:
-            event[key] = value
-    line = json.dumps(event, ensure_ascii=False).encode("utf-8") + b"\n"
-    with journal_path.open("ab") as f:
-        f.write(line)
-    files = state.get("files")
-    recorded = files.get(JOURNAL) if isinstance(files, dict) else None
-    if recorded == _sha(journal_before):  # журнал руками не правили: новый хеш принимаем
-        text = state_bytes.decode("utf-8-sig")
-        new_text, n = _JOURNAL_HASH.subn(lambda m: m.group(1) + _sha(journal_before + line), text)
-        if n == 1:
-            tmp = state_path.with_name(STATE + ".tmp")
-            tmp.write_bytes(new_text.replace("\r\n", "\n").encode("utf-8"))
-            os.replace(tmp, state_path)
-    return True
+    def build(state_bytes: bytes) -> bytes | None:
+        try:
+            state = yaml.safe_load(state_bytes.decode("utf-8-sig"))
+        except (UnicodeDecodeError, yaml.YAMLError):
+            return None
+        if not isinstance(state, dict) or not isinstance(state.get("step"), str):
+            return None
+        event: dict[str, Any] = {
+            "schema_version": 1,
+            "time": now().isoformat(),
+            "actor": ACTOR,
+            "kind": spec.kind,
+            "step": state["step"],
+        }
+        for key in ("name", "message", "role", "model", "level", "effort"):
+            value = getattr(spec, key)
+            if value is not None:
+                event[key] = value
+        return json.dumps(event, ensure_ascii=False).encode("utf-8")
+
+    return storage.append_journal(root, build, storage.lock_timeout(storage.HOOK_LOCK_TIMEOUT))
 
 
 def _already_noted(root: Path, spec: EventSpec) -> bool:

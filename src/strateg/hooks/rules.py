@@ -147,6 +147,7 @@ class Services:
     project: Callable[[], ProjectView | None]
     routing: Callable[[], RoutingView]
     agents: Callable[[], frozenset[str]]  # роли, у которых есть обёртка в `.claude/agents/`
+    active: Callable[[], str | None] = lambda: None  # номер активного проекта; None — активного нет
 
 
 @dataclass(frozen=True)
@@ -257,7 +258,143 @@ def _cli_hint(name: str) -> str:
     )
 
 
-def _check_file_tool(tool: str, kind: str, raw: str | None, implicit: bool, cwd: str, ctx: Ctx) -> str | None:
+PATTERN_SEPARATORS = re.compile(r"[/\\{},]")
+OUTPUTS, TMP = "outputs", ".tmp"
+CRITIC_CLOSED_DIRS = {
+    "inputs": "там материалы человека",
+    TMP: "там рабочие файлы агента",
+    "history": "там прежние версии файлов",
+}
+CRITIC_HINT = "Читай выводы проекта: `outputs/` и файлы выходов."
+CRITIC_CLOSED_FILES = {
+    "state.yaml": "это служебное состояние проекта",
+    "cost.jsonl": "это учёт стоимости",
+    "completeness.yaml": "это оценка полноты, её пишет CLI",
+}
+
+
+def _pattern_problem(tool: str, tin: Mapping[str, Any]) -> str | None:
+    """Шаблон `Glob` (и фильтр `glob` у `Grep`): `evals` в любом месте и `..` в любом сегменте — отказ."""
+    value = tin.get("pattern") if tool == "Glob" else tin.get("glob") if tool == "Grep" else None
+    if not isinstance(value, str) or not value:
+        return None
+    parts = PATTERN_SEPARATORS.split(value)
+    if any(p.strip().lower() == "evals" for p in parts):
+        return (
+            f"Доступ к evals/ закрыт всем ролям: {SENSITIVE_WHY['evals/']}. В шаблоне `{value}` есть `evals`."
+        )
+    if tool == "Glob" and any(p.replace("[.]", ".").startswith("..") for p in parts):
+        return (
+            f"В шаблоне Glob `{value}` есть `..`: шаблон не выходит из папки `path`. "
+            "Укажи `path` нужной папки и шаблон без `..`."
+        )
+    return None
+
+
+def _write_zone(pl: paths.Place, active: str | None) -> bool:
+    """Запись без `STRATEG_DEV=1`: `outputs/` и `.tmp/` активного проекта (если его нет — любого), блокнот."""
+    if pl.in_scratchpad:
+        return True
+    if not (pl.in_projects and pl.project_id and pl.project_rel):
+        return False
+    if active is not None and pl.project_id != active:
+        return False
+    return pl.project_rel[0] in (OUTPUTS, TMP)
+
+
+WRITE_ZONE_HINT = (
+    "документы — в `projects/<id>/outputs/`, входы команд — в `projects/<id>/.tmp/`, "
+    "остальное пишет CLI (`uv run strateg …`); правит код и правила разработчик с `STRATEG_DEV=1`"
+)
+
+
+def _check_search(tool: str, implicit: bool, places: list[paths.Place], svc: Services) -> str | None:
+    """Поиск основного агента: `path` внутри активного проекта или `knowledge/`; без `path` отказ."""
+    if implicit:
+        return (
+            f"У {tool} нет `path`: без него поиск идёт от корня продукта и заденет лишнее. "
+            "Укажи `path`: `projects/<id>/` активного проекта или `knowledge/`."
+        )
+    active = svc.active()
+    for pl in places:
+        if pl.in_knowledge or (pl.project_id is not None and (active is None or pl.project_id == active)):
+            continue
+        return (
+            f"Поиск {tool} — только в папке активного проекта (`projects/<id>/`) или в `knowledge/`: "
+            "укажи `path` внутри них."
+        )
+    return None
+
+
+def _check_researcher(tool: str, implicit: bool, places: list[paths.Place], svc: Services) -> str | None:
+    if implicit:
+        return (
+            f"У {tool} нет `path`, а рабочая папка исследователю закрыта: "
+            "укажи `projects/<id>/sources/` или `knowledge/`."
+        )
+    active = svc.active()
+    for pl in places:
+        if pl.in_knowledge:
+            continue
+        if not _is_sources(pl):
+            return (
+                "Исследователь читает только `sources/` активного проекта и `knowledge/`. "
+                "Материалов и выводов проекта у него нет."
+            )
+        if active is not None and pl.project_id != active:
+            return (
+                f"Исследователь читает `sources/` только активного проекта «{active}», "
+                f"а не «{pl.project_id}»."
+            )
+    return None
+
+
+def _flat_listing(tool: str, tin: Mapping[str, Any]) -> bool:
+    """Glob по папке проекта без захода в подпапки: `*.yaml`. Тогда закрытые папки не заденет."""
+    pattern = tin.get("pattern")
+    if tool != "Glob" or not isinstance(pattern, str):
+        return False
+    return not any(c in pattern for c in "/\\") and "**" not in pattern
+
+
+def _check_critic(
+    tool: str, tin: Mapping[str, Any], implicit: bool, places: list[paths.Place], svc: Services
+) -> str | None:
+    active = svc.active()
+    for pl in places:
+        if pl.in_knowledge:
+            continue
+        if not pl.project_id:
+            hint = " Укажи `path` внутри них." if implicit else ""
+            return f"Критик читает только папку проекта `projects/<id>/` и `knowledge/`.{hint}"
+        if active is not None and pl.project_id != active:
+            return f"Критик читает только папку активного проекта «{active}», а не «{pl.project_id}»."
+        rel = pl.project_rel or ()
+        if not rel:
+            if tool == "Grep" or (tool == "Glob" and not _flat_listing(tool, tin)):
+                return (
+                    f"Критик ищет не по всей папке проекта: `inputs/`, `.tmp/` и `history/` ему закрыты. "
+                    f"Укажи `path`: `outputs/`, `sources/` или файл вывода ({tool})."
+                )
+            continue
+        head = rel[0]
+        if head in CRITIC_CLOSED_DIRS:
+            return f"Критик не открывает `{head}/`: {CRITIC_CLOSED_DIRS[head]}. {CRITIC_HINT}"
+        if len(rel) == 1 and head in CRITIC_CLOSED_FILES:
+            return f"Критик не открывает `{head}`: {CRITIC_CLOSED_FILES[head]}. {CRITIC_HINT}"
+    return None
+
+
+def _check_file_tool(
+    tool: str,
+    kind: str,
+    raw: str | None,
+    implicit: bool,
+    cwd: str,
+    ctx: Ctx,
+    tin: Mapping[str, Any],
+    svc: Services,
+) -> str | None:
     """Причина отказа файловому инструменту или None. Все роли: чувствительное; по ролям: зоны."""
     writing = tool in WRITE_TOOLS
     if raw is None:
@@ -265,6 +402,9 @@ def _check_file_tool(tool: str, kind: str, raw: str | None, implicit: bool, cwd:
     if kind in (RESEARCHER, CRITIC) and writing:
         who = "Исследователю" if kind == RESEARCHER else "Критику"
         return f"{who} запись файлов закрыта: роль ничего не записывает."
+    problem = _pattern_problem(tool, tin)
+    if problem:
+        return problem
     places = paths.places(raw, ctx.penv, cwd=cwd)
     if places is None:
         return f"Путь «{raw}» не удалось привести к одному виду (переменная, диск без черты): отказ."
@@ -291,28 +431,21 @@ def _check_file_tool(tool: str, kind: str, raw: str | None, implicit: bool, cwd:
                     f"Подсказка: {_cli_hint(owned)}."
                 )
     if kind == RESEARCHER:
-        if implicit:
-            return (
-                f"У {tool} нет `path`, а рабочая папка исследователю закрыта: "
-                "укажи `projects/<id>/sources/` или `knowledge/`."
-            )
-        if not all(pl.in_knowledge or _is_sources(pl) for pl in places):
-            return (
-                "Исследователь читает только `projects/<id>/sources/` и `knowledge/`. "
-                "Материалов и выводов проекта у него нет."
-            )
-        return None
+        return _check_researcher(tool, implicit, places, svc)
     if kind == CRITIC:
-        if not all(pl.in_knowledge or pl.project_id for pl in places):
-            hint = " Укажи `path` внутри них." if implicit else ""
-            return f"Критик читает только папку проекта `projects/<id>/` и `knowledge/`.{hint}"
-        return None
+        return _check_critic(tool, tin, implicit, places, svc)
     # основной агент и прочие роли: рабочая папка, папка проектов, служебные папки Claude Code
     if not all(_main_may(pl, writing=writing) for pl in places):
         return (
             f"{tool} вне рабочей папки закрыт. Материалы пользователя — в `projects/<id>/inputs/`, "
             "затем `uv run strateg add '<путь>'`."
         )
+    if tool in ("Grep", "Glob"):
+        return _check_search(tool, implicit, places, svc)
+    if writing and not ctx.dev:
+        active = svc.active()
+        if not all(_write_zone(pl, active) for pl in places):
+            return f"{tool}: запись только в `outputs/` и `.tmp/` активного проекта — {WRITE_ZONE_HINT}."
     return None
 
 
@@ -328,7 +461,9 @@ def _is_sources(pl: paths.Place) -> bool:
 # --- Bash, поиск, браузер ----------------------------------------------------------------------------------
 
 
-def _decide_shell(tool: str, kind: str, tin: Mapping[str, Any]) -> str | None:
+def _decide_shell(
+    tool: str, kind: str, tin: Mapping[str, Any], cwd: str, ctx: Ctx, svc: Services
+) -> str | None:
     command = tin.get("command")
     if kind == CRITIC:
         return "Критику закрыто всё, кроме чтения (Read, Grep, Glob) в папке проекта и `knowledge/`."
@@ -362,6 +497,26 @@ def _decide_shell(tool: str, kind: str, tin: Mapping[str, Any]) -> str | None:
     mention = shell.sensitive_mention(command)
     if mention:
         return f"Доступ к {mention} закрыт всем ролям: {SENSITIVE_WHY[mention]}."
+    if not ctx.dev:
+        return _bash_write_reason(command, cwd, ctx, svc)
+    return None
+
+
+def _bash_write_reason(command: str, cwd: str, ctx: Ctx, svc: Services) -> str | None:
+    """Запись через Bash (перенаправление, `tee`, `sed -i`, `cp`, `rm`, `Set-Content` …) вне зоны записи."""
+    targets = shell.write_targets(command)
+    if not targets:
+        return None
+    active = svc.active()
+    for raw in targets:
+        found = paths.places(raw, ctx.penv, cwd=cwd)
+        if found is None:
+            continue  # переменная или другая запись, которую нельзя привести: Bash разбирается лишь отчасти
+        if not all(_write_zone(pl, active) for pl in found):
+            return (
+                f"Запись в «{raw}» через Bash закрыта: только `outputs/` и `.tmp/` активного проекта — "
+                f"{WRITE_ZONE_HINT}."
+            )
     return None
 
 
@@ -482,7 +637,7 @@ def _decide_agent(kind: str, tin: Mapping[str, Any], event: Mapping[str, Any], s
         events.append(pick_event)
     if name == RESEARCHER:
         events.append(EventSpec("задание исследователю", text[:MAX_TASK_CHARS], name=None, role=name))
-    updated = {**tin, "model": model}
+    updated = {**tin, "subagent_type": name, "model": model}
     return Decision("allow", f"модель роли {name}: {model}", updated_input=updated, events=tuple(events))
 
 
@@ -512,7 +667,7 @@ def _decide_foreign(event: Mapping[str, Any], ctx: Ctx) -> Decision:
         reason = _check_guard_only(tool, raw, cwd, ctx)
     elif tool in SHELL_TOOLS:
         command = tin.get("command")
-        mention = shell.sensitive_mention(command) if isinstance(command, str) else None
+        mention = shell.sensitive_mention(command, evals=False) if isinstance(command, str) else None
         if mention:
             reason = f"Доступ к {mention} закрыт: {SENSITIVE_WHY[mention]}."
     if reason:
@@ -557,10 +712,10 @@ def decide_pre_tool_use(event: Mapping[str, Any], ctx: Ctx, services: Services) 
         )
     if tool in READ_TOOLS | WRITE_TOOLS:
         raw, implicit = _target(tool, tin, cwd)
-        reason = _check_file_tool(tool, kind, raw, implicit, cwd, ctx)
+        reason = _check_file_tool(tool, kind, raw, implicit, cwd, ctx, tin, services)
         return _deny(reason, tool, event) if reason else Decision("allow")
     if tool in SHELL_TOOLS:
-        reason = _decide_shell(tool, kind, tin)
+        reason = _decide_shell(tool, kind, tin, cwd, ctx, services)
         return _deny(reason, tool, event) if reason else Decision("allow")
     if tool in AGENT_TOOLS:
         return _decide_agent(kind, tin, event, services)

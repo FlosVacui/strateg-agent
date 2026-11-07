@@ -22,6 +22,7 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
+from strateg import storage
 from strateg.models import (
     SCHEMA_VERSION,
     Budget,
@@ -44,6 +45,7 @@ from strateg.project_check import (
     check_project,
 )
 
+HOOK_ACTOR = "хук"  # исполнитель событий, которые пишут хуки Claude Code
 ACTIVE_FILE = ".active"
 PROJECTS_ENV = "STRATEG_PROJECTS_DIR"  # где лежат проекты (по умолчанию — projects/ репозитория)
 PROJECT_ENV = "STRATEG_PROJECT"  # активный проект: номер или путь к папке
@@ -185,10 +187,7 @@ def set_active(project_id: str) -> None:
 
 def write_text(path: Path, text: str) -> None:
     """UTF-8 без BOM, окончания LF, замена файла целиком."""
-    data = text.replace("\r\n", "\n").encode("utf-8")
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_bytes(data)
-    os.replace(tmp, path)
+    storage.atomic_write_bytes(path, text.replace("\r\n", "\n").encode("utf-8"))
 
 
 def dump_yaml(model: BaseModel) -> str:
@@ -208,8 +207,7 @@ def read_yaml(path: Path) -> dict[str, Any]:
 
 def append_jsonl(path: Path, model: BaseModel) -> None:
     line = json.dumps(model.model_dump(mode="json", exclude_none=True), ensure_ascii=False)
-    with path.open("ab") as f:
-        f.write(line.encode("utf-8") + b"\n")
+    storage.append_bytes(path, line.encode("utf-8") + b"\n")
 
 
 def read_jsonl(path: Path, model: type[BaseModel]) -> list[Any]:
@@ -220,6 +218,16 @@ def read_jsonl(path: Path, model: type[BaseModel]) -> list[Any]:
         if line.strip():
             out.append(model.model_validate(json.loads(line)))
     return out
+
+
+@contextlib.contextmanager
+def locked(root: Path) -> Iterator[None]:
+    """Папка проекта занята на время блока (CLI и хуки пишут журнал и `state.yaml` по очереди)."""
+    try:
+        with storage.project_lock(root):
+            yield
+    except storage.LockTimeout as exc:
+        raise CliError(str(exc)) from exc
 
 
 @dataclass
@@ -247,6 +255,11 @@ class Project:
     # --- чтение ---
     @classmethod
     def load(cls, root: Path) -> Project:
+        with locked(root):  # хук не допишет журнал между чтением журнала и сверкой его хеша
+            return cls._load(root)
+
+    @classmethod
+    def _load(cls, root: Path) -> Project:
         try:
             project = cls(
                 root=root,
@@ -294,9 +307,10 @@ class Project:
     def save_state(self) -> None:
         # Хеши пересчитываются целиком, поэтому правку человека сначала записываем в журнал:
         # иначе любая команда молча приняла бы её за свою.
-        self.record_outside_changes()
-        self.state.files = self._hashes()
-        write_text(self.root / STATE_FILE, dump_yaml(self.state))
+        with locked(self.root):
+            self.record_outside_changes()
+            self.state.files = self._hashes()
+            write_text(self.root / STATE_FILE, dump_yaml(self.state))
 
     def save_sources(self) -> None:
         write_text(self.root / SOURCES_FILE, dump_yaml(self.sources))
@@ -305,11 +319,18 @@ class Project:
         write_text(self.root / CLAIMS_FILE, dump_yaml(self.claims))
 
     def add_event(self, event: JournalEvent) -> None:
-        append_jsonl(self.root / JOURNAL_FILE, event)
+        """Дописывает событие в журнал; хеш журнала в `state.yaml` остаётся верным (хук пишет так же)."""
+        line = json.dumps(event.model_dump(mode="json", exclude_none=True), ensure_ascii=False).encode(
+            "utf-8"
+        )
+        with locked(self.root):
+            if not storage.append_journal(self.root, lambda _state: line):
+                append_jsonl(self.root / JOURNAL_FILE, event)  # state.yaml ещё нет: проект создаётся
         self.journal.append(event)
 
     def add_cost(self, record: CostRecord) -> None:
-        append_jsonl(self.root / COST_FILE, record)
+        with locked(self.root):
+            append_jsonl(self.root / COST_FILE, record)
         self.costs.append(record)
 
     def _hashes(self) -> dict[str, str]:
@@ -411,6 +432,40 @@ def _drop_empty_history(root: Path, *, keep_root: bool) -> None:
             history.rmdir()
 
 
+def _hook_lines_after(journal: Path, before: bytes | None) -> bytes:
+    """Строки журнала, которые хук дописал после `before` (события команды CLI в них не входят)."""
+    if before is None or not journal.is_file():
+        return b""
+    now_bytes = journal.read_bytes()
+    if not now_bytes.startswith(before):
+        return b""  # журнал правили руками: ничего не угадываем
+    kept = []
+    for raw in now_bytes[len(before) :].split(b"\n"):
+        if not raw.strip():
+            continue
+        try:
+            actor = json.loads(raw.decode("utf-8")).get("actor")
+        except (ValueError, AttributeError):
+            continue
+        if actor == HOOK_ACTOR:
+            kept.append(raw + b"\n")
+    return b"".join(kept)
+
+
+def _rehash_journal(root: Path, journal_before: bytes, journal_now: bytes) -> None:
+    """После отката хеш журнала в `state.yaml` учитывает события хука."""
+    state_path = root / STATE_FILE
+    try:
+        state_bytes = state_path.read_bytes()
+        recorded = storage.recorded_journal_hash(state_bytes.decode("utf-8-sig"))
+    except (OSError, UnicodeDecodeError):
+        return
+    if recorded == sha256_bytes(journal_before):
+        new_state = storage.with_journal_hash(state_bytes, sha256_bytes(journal_now))
+        if new_state is not None:
+            storage.atomic_write_bytes(state_path, new_state)
+
+
 @contextlib.contextmanager
 def transaction(
     root: Path,
@@ -426,22 +481,28 @@ def transaction(
     `block` называет ошибки, которые вызывают откат, даже если были до записи.
     После отката папка такая же, как до блока: новые файлы и пустые папки в `history/` убраны.
     """
-    before = {p: (p.read_bytes() if p.is_file() else None) for p in _tracked_files(root)}
+    with locked(root):
+        before = {p: (p.read_bytes() if p.is_file() else None) for p in _tracked_files(root)}
+        baseline = set(check_project(root))
     history_existed = (root / HISTORY_DIR).is_dir()
-    baseline = set(check_project(root))
 
     def restore() -> None:
-        for p in _tracked_files(root):
-            if p not in before:
-                p.unlink(missing_ok=True)
-        for p, data in before.items():
-            if data is None:
-                p.unlink(missing_ok=True)
-            else:
-                tmp = p.with_name(p.name + ".tmp")
-                tmp.write_bytes(data)
-                os.replace(tmp, p)
-        _drop_empty_history(root, keep_root=history_existed)
+        with locked(root):
+            journal = root / JOURNAL_FILE
+            foreign = _hook_lines_after(journal, before.get(journal))
+            for p in _tracked_files(root):
+                if p not in before:
+                    p.unlink(missing_ok=True)
+            for p, data in before.items():
+                if data is None:
+                    p.unlink(missing_ok=True)
+                else:
+                    storage.atomic_write_bytes(p, data)
+            if foreign:  # события хука, записанные за время команды, откат не трогает
+                kept = (before[journal] or b"") + foreign
+                storage.append_bytes(journal, foreign)
+                _rehash_journal(root, before[journal] or b"", kept)
+            _drop_empty_history(root, keep_root=history_existed)
 
     try:
         yield
@@ -449,9 +510,11 @@ def transaction(
         restore()
         raise
     if rollback:
+        with locked(root):  # не читаем журнал в момент дозаписи хука
+            errors = check_project(root)
         new = [
             e
-            for e in check_project(root)
+            for e in errors
             if (e not in baseline or (block and block(e))) and not (tolerate and tolerate(e))
         ]
         if new:

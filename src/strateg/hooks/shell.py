@@ -88,9 +88,6 @@ OPENERS: tuple[str, ...] = (
 SHELL_INTERPRETERS = frozenset({"bash", "sh", "zsh", "dash", "ksh", "fish", "cmd", "powershell", "pwsh"})
 INLINE_FLAGS = frozenset({"-c", "-e", "-r", "-E", "--eval", "-command", "-commandwithargs", "/c", "/k"})
 WRAPPERS = frozenset({"env", "sudo", "command", "exec", "nohup", "time", "nice", "xargs", "timeout", "call"})
-UV_FLAGS_WITH_VALUE = frozenset(
-    {"--project", "--directory", "--with", "--python", "-p", "--env-file", "--group", "--extra"}
-)
 PYTHON_NAME = re.compile(r"^(?:python[\d.]*|py|pythonw|pypy[\d.]*)$")
 
 # --- Команда исследователя --------------------------------------------------------------------------------
@@ -139,6 +136,7 @@ class Segment:
     text: str
     words: tuple[str, ...]
     subst: bool  # внутри есть `$(`, обратная кавычка или перенаправление: текст нельзя пропускать
+    loose: bool = False  # кавычка не закрыта: где команда, не знаем, просматриваются все слова
 
 
 def _split(command: str) -> tuple[list[Segment], bool]:
@@ -226,41 +224,86 @@ def _program(word: str) -> str:
     return name[:-4] if name.endswith(".exe") else name
 
 
-def strateg_call(words: tuple[str, ...]) -> str | None:
-    """Подкоманда `strateg`, если сегмент — вызов CLI (`uv run strateg …`, `python -m strateg.cli …`).
+_ASSIGNMENT = re.compile(r"^[A-Za-z_]\w*=")
+LAUNCHERS = frozenset({"uv", "uvx", "pipx", "npx", "poetry", "pdm", "hatch"})  # за ними идёт другая команда
 
-    Возвращает слово после `strateg` (или пустую строку, если его нет); None — это не вызов `strateg`.
-    """
+
+def _command_index(words: tuple[str, ...]) -> int:
+    """Номер слова, на котором стоит команда: после присваиваний `X=1` в начале."""
     i = 0
-    n = len(words)
-    while i < n and (re.match(r"^[A-Za-z_]\w*=", words[i]) or _program(words[i]) in WRAPPERS):
+    while i < len(words) and _ASSIGNMENT.match(words[i]):
         i += 1
-    if i < n and _program(words[i]) == "uv":
-        i += 1
-        if i < n and words[i] == "run":
-            i += 1
-        while i < n and words[i].startswith("-"):
-            i += 2 if words[i] in UV_FLAGS_WITH_VALUE else 1
-    if i >= n:
-        return None
-    prog = _program(words[i])
-    if prog == "strateg":
-        return words[i + 1] if i + 1 < n else ""
-    if PYTHON_NAME.match(prog):
-        for j in range(i + 1, n - 1):
-            if words[j] == "-m" and _program(words[j + 1]) in ("strateg", "strateg.cli"):
-                return words[j + 2] if j + 2 < n else ""
+    return i
+
+
+def _program_like(word: str) -> bool:
+    """Слово называет программу, которая сама ходит в сеть или запускает чужой код."""
+    prog = _program(word)
+    return (
+        prog in NETWORK_PROGRAMS
+        or prog in SHELL_INTERPRETERS
+        or prog in OPENERS
+        or prog == "certutil"
+        or bool(INLINE_INTERPRETERS.match(prog))
+    )
+
+
+def _after_strateg(words: tuple[str, ...], start: int, *, scan: bool) -> str | None:
+    """Слово после `strateg` в `words[start:]`; `scan=False` — только на первом месте (без `uv run`)."""
+    for k in range(start, len(words)):
+        prog = _program(words[k])
+        if prog == "strateg":
+            return words[k + 1] if k + 1 < len(words) else ""
+        if PYTHON_NAME.match(prog):
+            for j in range(k + 1, len(words) - 1):
+                if words[j] == "-m" and _program(words[j + 1]) in ("strateg", "strateg.cli"):
+                    return words[j + 2] if j + 2 < len(words) else ""
+            return None
+        if not scan or _program_like(words[k]):
+            return None  # другая программа: `strateg` дальше по строке — её аргумент
     return None
 
 
-def _network_word(words: tuple[str, ...]) -> str | None:
-    names = NETWORK_PROGRAMS
-    for w in words:
+def strateg_call(words: tuple[str, ...]) -> str | None:
+    """Подкоманда `strateg`, если сегмент — вызов CLI (`uv run strateg …`, `python -m strateg.cli …`).
+
+    После `uv run` стоят флаги uv, любые, в том числе неизвестные нам, поэтому слово `strateg` ищется среди
+    слов сегмента, а не после списка флагов. Чужая программа раньше него отменяет вызов
+    (`uv run curl x strateg`).
+    Возвращает слово после `strateg` (или пустую строку, если его нет); None — это не вызов `strateg`.
+    """
+    i = _command_index(words)
+    while i < len(words) and _program(words[i]) in WRAPPERS:
+        i += 1
+        i += _command_index(words[i:])
+    if i >= len(words):
+        return None
+    if _program(words[i]) == "uv":
+        rest = words[i + 1 :]
+        if "run" not in rest:
+            return None
+        return _after_strateg(rest, rest.index("run") + 1, scan=True)
+    return _after_strateg(words, i, scan=False)
+
+
+def _network_word(words: tuple[str, ...], *, loose: bool = False) -> str | None:
+    """Сетевая программа на месте команды сегмента.
+
+    Имя программы среди аргументов (`grep -r curl docs/`) вызовом не считается. Если команду запускает другая
+    (`env`, `sudo`, `xargs`, `time`, `uv run` и подобные), просматриваются все слова после неё.
+    """
+    start = _command_index(words)
+    if start >= len(words):
+        return None
+    first = _program(words[start])
+    scan_all = loose or first in WRAPPERS or first in LAUNCHERS
+    last = len(words) if scan_all else start + 1
+    for w in words[start:last]:
         prog = _program(w)
-        if prog in names:
+        if prog in NETWORK_PROGRAMS:
             return prog
-    for i, w in enumerate(words):
-        prog = _program(w)
+    for i in range(start, last):
+        prog = _program(words[i])
         if prog == "certutil" and any(x.lower() in CERTUTIL_NETWORK_FLAGS for x in words[i + 1 :]):
             return "certutil -urlcache"
         nxt = words[i + 1].lower() if i + 1 < len(words) else ""
@@ -277,7 +320,7 @@ def _rest(command: str) -> tuple[list[Segment], bool]:
     """
     segments, ok = _split(command)
     if not ok:  # кавычка не закрыта: разбор ненадёжен, смотрим весь текст целиком
-        segments = [Segment(command, tuple(command.split()), True)]
+        segments = [Segment(command, tuple(command.split()), True, True)]
     rest: list[Segment] = []
     for seg in segments:
         sub = strateg_call(seg.words)
@@ -296,7 +339,7 @@ def network_reason(command: str, *, _depth: int = 0) -> str | None:
     if fetch:
         return "`strateg fetch`"
     for seg in rest:
-        found = _network_word(seg.words)
+        found = _network_word(seg.words, loose=seg.loose)
         if found:
             return found
         # `bash -c '…'`, `powershell -Command "…"`: разбираем вложенную команду
@@ -321,22 +364,177 @@ def network_reason(command: str, *, _depth: int = 0) -> str | None:
 
 _SENSITIVE_MENTION = re.compile(
     r"(?:^|[\s/\\\"'=:~])(?:\.env(?:\.(?!example(?![\w-]))[\w-]+)?(?![\w.-])|\.strateg(?=[/\\\s\"']|$)|"
-    r"\.tmp[/\\]+pending(?=[/\\\s\"']|$))",
+    r"\.tmp[/\\]+pending(?=[/\\\s\"']|$)|evals(?=[/\\\s\"']|$))",
     re.IGNORECASE,
 )
 
 
-def sensitive_mention(command: str) -> str | None:
-    """В команде названы `.env`, `~/.strateg/` или `.tmp/pending/`: что именно. Ищем по тексту, не по пути."""
+def sensitive_mention(command: str, *, evals: bool = True) -> str | None:
+    """В команде названы `.env`, `~/.strateg/`, `.tmp/pending/` или `evals/`: что именно.
+
+    Ищем по тексту, не по пути; `evals` — отдельное слово или составляющая пути (`git show HEAD:evals/x`),
+    а не часть другого слова. `evals=False` — среда без ролей: стенд оценки там не закрываем.
+    """
     rest, _ = _rest(command)
     for seg in rest:
-        m = _SENSITIVE_MENTION.search(seg.text)
-        if not m:
-            continue
-        hit = m.group(0).strip(" /\\\"'=:~" + chr(9)).lower()
-        if hit.startswith(".env"):
-            return ".env"
-        if hit.startswith(".strateg"):
-            return "~/.strateg/"
-        return ".tmp/pending/"
+        for m in _SENSITIVE_MENTION.finditer(seg.text):
+            hit = m.group(0).strip(" /\\\"'=:~" + chr(9)).lower()
+            if hit.startswith(".env"):
+                return ".env"
+            if hit.startswith(".strateg"):
+                return "~/.strateg/"
+            if hit.startswith("evals"):
+                if evals:
+                    return "evals/"
+                continue
+            return ".tmp/pending/"
     return None
+
+
+# --- Запись через Bash: куда пишет команда (где это распознаётся) ------------------------------------------
+
+NO_FILE = frozenset({"/dev/null", "/dev/stdout", "/dev/stderr", "nul", "$null", "-"})
+CD_COMMANDS = frozenset({"cd", "pushd", "popd", "chdir", "set-location", "sl"})
+# Все нефлаговые аргументы — пишутся (создаются, правятся, удаляются).
+WRITES_ALL_ARGS = frozenset({"tee", "mv", "rm", "rmdir", "touch", "mkdir", "unlink", "shred", "md", "rd"})
+# Пишется последний нефлаговый аргумент.
+WRITES_LAST_ARG = frozenset({"cp", "ln", "install", "truncate"})
+# PowerShell: имя командлета (и псевдоним) -> путь берётся из -Path/-FilePath/-LiteralPath или первого слова.
+PS_WRITES = frozenset(
+    {
+        "set-content", "sc", "add-content", "ac", "out-file", "new-item", "ni", "remove-item", "ri", "del",
+        "erase", "clear-content", "clc", "set-itemproperty", "tee-object",
+    }
+)  # fmt: skip
+PS_COPY = frozenset({"copy-item", "copy", "cpi"})
+PS_MOVE = frozenset({"move-item", "move", "mi"})
+PS_PATH_PARAMS = frozenset({"-path", "-filepath", "-literalpath"})
+PS_VALUE_PARAMS = frozenset(
+    {
+        "-value", "-encoding", "-filter", "-include", "-exclude", "-itemtype", "-stream", "-width", "-name",
+        "-delimiter", "-inputobject", "-newname", "-credential", "-variable",
+    }
+)  # fmt: skip
+
+
+def _tokens(text: str) -> tuple[list[str], list[str]]:
+    """Слова сегмента без перенаправлений и цели перенаправлений `>`, `>>`, `>|` (по тексту сегмента)."""
+    words: list[str] = []
+    targets: list[str] = []
+    word: list[str] = []
+    in_word = False
+    pending: str | None = None  # что делать со следующим словом: "target" или "skip"
+    state = None
+    i, n = 0, len(text)
+
+    def end_word() -> None:
+        nonlocal in_word, pending
+        if not in_word:
+            return
+        value = "".join(word)
+        word.clear()
+        in_word = False
+        if pending == "target":
+            targets.append(value)
+        elif pending != "skip":
+            words.append(value)
+        pending = None
+
+    while i < n:
+        c = text[i]
+        if state:
+            if c == state:
+                state = None
+            else:
+                word.append(c)
+        elif c in "'\"":
+            state = c
+            in_word = True
+        elif c == ">":
+            if in_word and "".join(word).isdigit():  # `2>` и `1>`: номер потока, а не слово
+                word.clear()
+                in_word = False
+            else:
+                end_word()
+            while i + 1 < n and text[i + 1] in ">|":
+                i += 1
+            pending = "target"
+        elif c == "<":
+            end_word()
+            while i + 1 < n and text[i + 1] == "<":
+                i += 1
+            pending = "skip"  # файл или ограничитель heredoc: не цель записи
+        elif c.isspace():
+            end_word()
+        else:
+            word.append(c)
+            in_word = True
+        i += 1
+    end_word()
+    return words, targets
+
+
+def _non_flags(args: list[str]) -> list[str]:
+    return [a for a in args if not a.startswith("-")]
+
+
+def _powershell_targets(prog: str, args: list[str]) -> list[str]:
+    paths: list[str] = []
+    positional: list[str] = []
+    destination: str | None = None
+    k = 0
+    while k < len(args):
+        a = args[k]
+        low = a.lower()
+        if low in PS_PATH_PARAMS and k + 1 < len(args):
+            paths.append(args[k + 1])
+            k += 1
+        elif low == "-destination" and k + 1 < len(args):
+            destination = args[k + 1]
+            k += 1
+        elif low in PS_VALUE_PARAMS:
+            k += 1  # значение параметра — не путь
+        elif not a.startswith("-"):
+            positional.append(a)
+        k += 1
+    if prog in PS_COPY:
+        return [destination] if destination else positional[1:2]
+    if prog in PS_MOVE:
+        return [*(paths or positional[:1]), *([destination] if destination else positional[1:2])]
+    return paths or positional[:1]
+
+
+def write_targets(command: str) -> list[str]:
+    """Пути, в которые команда пишет, как их видно по тексту: перенаправления, `tee`, `sed -i`, `cp`, `mv`,
+    `rm`, `touch`, `mkdir` и командлеты PowerShell (`Set-Content`, `Out-File`, `Remove-Item` …).
+
+    Разбор неполный, как и весь разбор Bash: он ловит явные записи и не гарантирует защиту. Команда со сменой
+    папки (`cd`) или с незакрытой кавычкой не разбирается: относительные пути в ней нельзя привести.
+    """
+    segments, ok = _split(command)
+    if not ok:
+        return []
+    found: list[str] = []
+    for seg in segments:
+        words, redirects = _tokens(seg.text)
+        found += redirects
+        i = _command_index(tuple(words))
+        while i < len(words) and _program(words[i]) in WRAPPERS:
+            i += 1 + _command_index(tuple(words[i + 1 :]))
+        if i >= len(words):
+            continue
+        prog = _program(words[i])
+        if prog in CD_COMMANDS:
+            return []
+        args = words[i + 1 :]
+        flat = _non_flags(args)
+        if prog in WRITES_ALL_ARGS:
+            found += flat
+        elif prog in WRITES_LAST_ARG:
+            found += flat[-1:] if len(flat) > 1 else []
+        elif prog == "sed":
+            if any(a == "--in-place" or a.startswith(("-i", "--in-place=")) for a in args):
+                found += flat[1:]
+        elif prog in PS_WRITES | PS_COPY | PS_MOVE:
+            found += _powershell_targets(prog, args)
+    return [t for t in found if t and t.lower() not in NO_FILE]
