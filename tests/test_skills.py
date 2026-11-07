@@ -971,7 +971,7 @@ def test_agents_md_has_the_roles_table_and_rules():
     for needle in (
         "| Роль | Когда | Получает | Возвращает |",
         "**Весь веб — у исследователя.** Пока он доступен, ты сам не ищешь и не делаешь `fetch`",
-        "встроенные субагенты среды (`general-purpose`, `Explore`, `Plan`) не зовёшь",
+        "`statusline-setup`, `claude-code-guide`) не зовёшь",
         "**Перед вызовом роли.**",
         "**Запасной путь.**",
     ):
