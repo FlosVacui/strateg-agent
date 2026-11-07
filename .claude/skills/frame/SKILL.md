@@ -8,9 +8,9 @@ description: "Шаг 1 — постановка задачи и ворота В1
 Цель: рамка задачи, которую человек принял. Без неё шаги 2а–7 строить не на чем.
 
 ## Вход
-- `uv run strateg status --brief`. Проекта нет — `uv run strateg new <id>`.
-- Шаг 1 уже «в работе» — `step start` не повторяй. Посмотри `uv run strateg claim list --step 1` и `projects/<id>/sources.yaml`, допиши недостающее.
-- Новый чат, а В1 уже ждёт ответа и сообщение человека — это ответ: иди к разделу «Ответ на В1».
+- `uv run strateg status`. Сводку `uv run strateg status --brief` здесь не вызывай: она — только в первом ходе нового чата, в скилле `strateg`. Проекта нет — `uv run strateg new <id>`.
+- Шаг 1 «в работе» в этом разговоре — `step start` не повторяй. Сводка назвала шаг 1 прерванным — `uv run strateg step start 1` ещё раз. В обоих случаях посмотри `uv run strateg claim list --step 1` и `projects/<id>/sources.yaml`, допиши недостающее.
+- В1 уже ждёт ответа, и сообщение человека — это ответ: иди к разделу «Ответ на В1».
 
 ## Работа
 1. `uv run strateg step start 1`.
@@ -68,9 +68,9 @@ frame:
 Остановись и жди ответа.
 
 ## Ответ на В1
-1. Перепиши рамку по ответу: `write` с полным новым содержимым. Принятые допущения оставь с происхождением `допущение`, ответы человека пометь `ответ человека`.
+1. Перепиши рамку по ответу: `uv run strateg write --file projects/<id>/.tmp/frame.yaml` с полным новым содержимым, без `--by`. Рамка ещё черновик, а ответ человека запишет `gate answer`; `--by пользователь` — только для правок после В1. Принятые допущения оставь с происхождением `допущение`, ответы человека пометь `ответ человека`.
 2. Обнови `outputs/frame.md` и добавь блок «Было»: поле, прежнее значение, новое.
-3. Допущения из рамки запиши в реестр: `uv run strateg claim add --file projects/<id>/.tmp/assumptions.yaml`. Формат допущения — в разделе «Утверждение» файла `AGENTS.md` и в `.claude/skills/research/claims.md`. Слова человека — `origin: пользователь`, твои — `origin: агент`; `taken_from: ответ на В1`.
+3. Допущения из рамки запиши в реестр: `uv run strateg claim add --file projects/<id>/.tmp/assumptions.yaml`. Формат допущения — в `.claude/skills/research/claims.md`. Слова человека — `origin: пользователь`, твои — `origin: агент`; `taken_from: ответ на В1`.
 4. Фраза «пилот» или «автопилот» — `uv run strateg mode пилот` или `uv run strateg mode автопилот`.
 5. `uv run strateg gate answer В1 --answer '<ответ человека дословно>'`. CLI копирует рамку в событие ворот.
 6. `uv run strateg step done 1 --next 'шаг 2а: план исследования'`. Дальше — скилл `research`.
