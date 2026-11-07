@@ -1,6 +1,6 @@
 """Точка входа CLI `strateg`: `doctor` и команды проекта (`new`, `use`, `status`, `step`, `gate`, `fetch`,
-`add`, `claim`, `write`, `event`, `check`, `cost`, `budget`, `pack`). Сами команды проекта — в
-`strateg.commands`.
+`add`, `claim`, `write`, `event`, `check`, `cost`, `budget`, `pack`, `rubric`, `route`). Сами команды
+проекта — в `strateg.commands`, проверка полноты — в `strateg.rubric`, маршрут роли — в `strateg.routing`.
 
 Коды возврата: 0 — успех, 1 — ошибка данных или правил, 2 — ошибка использования.
 """
@@ -17,7 +17,7 @@ import tempfile
 from pathlib import Path
 from typing import NoReturn
 
-from strateg import __version__, commands
+from strateg import __version__, commands, routing, rubric
 
 OK, WARN, ERR = "OK", "WARN", "ERR"
 _MARKS = {OK: "OK  ", WARN: "ПРЕД", ERR: "НЕТ "}
@@ -302,6 +302,41 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--message", required=True, help="что произошло")
     p.add_argument("--step", help="шаг; по умолчанию текущий")
     p.add_argument("--tool", help="инструмент, который дал ошибку")
+
+    rub = add("rubric", rubric.cmd_rubric_check, "проверка полноты по рубрике")
+    rub_sub = rub.add_subparsers(dest="rubric_command", required=True, parser_class=_Parser)
+    p = rub_sub.add_parser(
+        "check",
+        parents=[common],
+        help="признаки части А, которые к шагу уже должны выполняться (0 — все «да», 1 — есть «нет»)",
+    )
+    p.set_defaults(func=commands.run, handler=rubric.cmd_rubric_check)
+    p.add_argument("--step", help="шаг: 1, 2а, 2б, 3 … 8 (по умолчанию текущий из state.yaml)")
+    p = rub_sub.add_parser(
+        "record",
+        parents=[common],
+        help="записать ответы части Б, прогнать часть А и вынести итог по pass_rule",
+    )
+    p.set_defaults(func=commands.run, handler=rubric.cmd_rubric_record)
+    p.add_argument(
+        "--file",
+        required=True,
+        help="файл YAML или JSON: список {id, answer, where, why}; «-» — стандартный ввод",
+    )
+    p.add_argument(
+        "--by",
+        choices=["критик", "агент"],
+        default="критик",
+        help="кто отвечал: «агент» — проверка не независимая, это видно в файле и в выводе",
+    )
+
+    p = add("route", routing.cmd_route, "модель и effort роли; профиль проекта")
+    p.add_argument("role", nargs="?", help="роль из config/routing.yaml, например critic")
+    p.add_argument("--reason", help="причина выбора (в журнал)")
+    p.add_argument("--upgrade", action="store_true", help="повысить уровень по условию из таблицы")
+    p.add_argument(
+        "--profile", choices=["обычный", "экономнее", "глубже"], help="профиль проекта вместо выбора роли"
+    )
 
     add("check", commands.cmd_check, "проверить активный проект")
 

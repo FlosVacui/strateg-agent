@@ -116,3 +116,40 @@ def journal_of(root: Path) -> list[dict]:
 
 def load_yaml(path: Path) -> dict:
     return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+COMPLETE = Path(__file__).parent / "fixtures" / "project_complete"
+
+
+def edit_yaml(root: Path, rel: str, fn) -> None:
+    """Правит YAML-файл проекта: `fn(данные)` меняет их на месте."""
+    path = root / rel
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    fn(data)
+    text = yaml.safe_dump(data, allow_unicode=True, sort_keys=False, width=100)
+    path.write_text(text, encoding="utf-8", newline="\n")
+
+
+def edit_text(root: Path, rel: str, old: str, new: str) -> None:
+    """Заменяет текст в файле проекта; нет такого текста — тест сломан, а не проект."""
+    path = root / rel
+    text = path.read_text(encoding="utf-8")
+    assert old in text, f"в {rel} нет текста {old!r}"
+    path.write_text(text.replace(old, new, 1), encoding="utf-8", newline="\n")
+
+
+def edit_journal(root: Path, fn) -> None:
+    """Правит события журнала: `fn(список словарей)` меняет их на месте."""
+    events = journal_of(root)
+    fn(events)
+    lines = [json.dumps(e, ensure_ascii=False) for e in events]
+    (root / "journal.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+
+
+def rehash(root: Path) -> None:
+    """Записывает в state.yaml хеши файлов, как они лежат: правка теста не считается правкой вне агента."""
+    from strateg import project as proj
+
+    p = proj.Project.load(root)
+    p.state.files = p._hashes()
+    proj.write_text(root / "state.yaml", proj.dump_yaml(p.state))

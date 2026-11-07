@@ -1,0 +1,31 @@
+schema_version: 1
+id: example-protection
+mode: автопилот
+step: '7'
+gates:
+  В1: отвечено
+  В2: пройдены автоматически
+  В3: пройдены автоматически
+  В4: отвечено
+  В5: впереди
+budget:
+  limit_usd: 5.0
+  spent_usd: 0.81
+  limit_minutes: 60.0
+  spent_minutes: 0.1
+next_action: 'Выпустить документы: отчёт, одна страница, отчёт о прогоне'
+files:
+  claims.yaml: 7e383b623df88669414ffe62b8007ceb59fb10edc439cfe67205aea24818d3ab
+  cost.jsonl: 21212d8a0542a475c80d9c498dbd4c335356edf9452ae4c24e961db769cfba6d
+  decisions.yaml: 1dc41b2cd1feecc688d67e1a737bff61465a732e12d19393ceea16ed3be8e173
+  frame.yaml: 1dca43f57ac0ffba58f0f5ea0ea6b0e4b1c015e3632ccc3c338b5ceee2f38988
+  gaps.yaml: 35e66478fbb00a1e47d1b8f3e80a191b232c135aa338fbb89c622839a5447473
+  history/frame.v1.yaml: f99bacc61705747455a6d984ea14024cc70cda95b60c2282107c2e1b4feb13a5
+  inputs/report.txt: 46972da3ff07a4a3ed231c4e211af8fe100b43ce7e917ee463635aaf77152f56
+  journal.jsonl: b9212b55cf052aa38500880035a4d47573c348bdb955bc87cd18e6808545cf31
+  options.yaml: 1163e6c1ec146be23e94a5b326166683062d1de7d4afb8d0545a538877f82b57
+  plan.yaml: dda626bb144ec9c971b522a140403a06fbbffb6fd193d0bb3a34ba1ea06abda9
+  promises.yaml: 018bf6cc763e5573c40283d7becbe8e3576fcf8d2709ab9ee5fae399b93ae1b1
+  sources.yaml: 0f975d773a159e3c254a8c247bc01ba38e19c4bfb96e47ad5b9f37ce2c0511c1
+  sources/i-1.txt: deb6df4405ae41f9142e96d68fd96b66a8ecab5c638f4d3d18ba03ef22e55a19
+  verification.yaml: 73344f2494f12dc4276458f55667044466f6918219da7c68bfccbf16b87f0489

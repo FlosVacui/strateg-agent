@@ -1,0 +1,22 @@
+schema_version: 1
+sources:
+  - id: И-1
+    kind: страница
+    url: https://example.com/protection/terms
+    access: получен
+    fetch:
+      accessed_at: "2026-11-06T10:12:00+03:00"
+      final_url: https://example.com/msk/protection/terms
+      region: RU-MOW
+      encoding: utf-8
+      extractor: trafilatura 2.0.0
+      raw_sha256: 8bae5605ac55e6b283a26db6f3453197458068beadafa9f8fa75999f40e8cd66
+    text_path: sources/i-1.txt
+    text_sha256: deb6df4405ae41f9142e96d68fd96b66a8ecab5c638f4d3d18ba03ef22e55a19
+    untrusted: true
+  - id: И-2
+    kind: PDF
+    path: inputs/report.pdf
+    access: получен
+    text_path: inputs/report.txt
+    text_sha256: 46972da3ff07a4a3ed231c4e211af8fe100b43ce7e917ee463635aaf77152f56

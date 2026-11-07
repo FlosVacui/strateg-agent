@@ -52,6 +52,7 @@ CASE_STRINGS = (
     "тариф",
 )
 CASE_WORDS = ("Ева",)
+DOMAIN_WORDS = ("абонент", "тариф")  # слова области по умолчанию; в `domain-words.yaml` допустимы
 # Структура кейса: развилка, цепочка «пробел → возражение → показатель», формулировки рамки.
 CASE_PHRASES = (
     "отдельной подпиской",
@@ -464,7 +465,9 @@ def test_example_checker_catches_broken_examples():
 def test_no_case_strings(path):
     text = path.read_text(encoding="utf-8")
     low = text.casefold()
-    found = [s for s in CASE_STRINGS if s.casefold() in low]
+    # Список слов области — единственное место, где «абонент» и «тариф» уместны: ради них он и нужен.
+    domain = DOMAIN_WORDS if path.name == "domain-words.yaml" else ()
+    found = [s for s in CASE_STRINGS if s.casefold() in low and s not in domain]
     found += [w for w in CASE_WORDS if re.search(rf"(?<!\w){re.escape(w)}(?!\w)", text)]
     found += [s for s in CASE_PHRASES if s.casefold() in low]
     squeezed = squeeze(text)
