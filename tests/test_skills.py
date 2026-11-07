@@ -982,3 +982,10 @@ def test_agents_md_has_the_roles_table_and_rules():
     assert "границу прав держат хуки" not in text
     table = [x for x in text.splitlines() if x.startswith("| `researcher`") or x.startswith("| `critic`")]
     assert len(table) == 4 and any("пре-мортем" in x for x in table), table
+
+
+def test_frame_puts_the_question_of_the_decision_not_the_answer():
+    """Шаг 1: в рамке — что решаем; ответ до сбора данных не предлагается, иначе он становится якорем."""
+    text = (SKILLS / "frame" / "SKILL.md").read_text(encoding="utf-8")
+    assert "рекомендуемый вариант" not in text
+    assert "Ответ на само решение до сбора данных не предлагай" in text
