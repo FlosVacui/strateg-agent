@@ -374,7 +374,7 @@ def test_main_agent_works_in_the_working_folder():
         ("Write", {"file_path": "projects/demo/.tmp/claim.yaml", "content": "x"}),
         ("Edit", {"file_path": "projects/demo/outputs/frame.md", "old_string": "a", "new_string": "b"}),
         ("Grep", {"pattern": "x", "path": "knowledge"}),
-        ("Grep", {"pattern": "x", "path": "projects/demo"}),
+        ("Grep", {"pattern": "x", "path": "projects/demo/outputs"}),
         ("Glob", {"pattern": "**/*.md", "path": "knowledge"}),
     ):
         allowed(decide(tool, tin))

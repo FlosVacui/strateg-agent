@@ -144,7 +144,6 @@ def test_main_agent_search_without_path_is_refused_with_a_hint(tool):
 @pytest.mark.parametrize(
     "target",
     [
-        "projects/demo",
         "projects/demo/outputs",
         "projects/demo/inputs",
         "projects/demo/sources/page.txt",
@@ -154,6 +153,30 @@ def test_main_agent_search_without_path_is_refused_with_a_hint(tool):
 )
 def test_main_agent_search_in_active_project_and_knowledge(tool, target):
     allowed(decide(tool, keyed(tool, target), svc=with_active("demo")))
+
+
+def test_main_agent_grep_over_the_project_root_is_refused_with_a_hint():
+    for env in (None, DEV):  # `.tmp/pending/` закрыт и в режиме разработки
+        d = refused(
+            decide("Grep", {"pattern": "x", "path": "projects/demo"}, env=env, svc=with_active("demo")),
+            "Поиск",
+        )
+        assert "outputs" in d.reason and "sources" in d.reason
+
+
+@pytest.mark.parametrize("pattern", ["**/*.pdf", "*/*.pdf", "**/state.yaml", ".tmp/**", "**"])
+def test_main_agent_recursive_glob_from_the_project_root_is_refused(pattern):
+    for env in (None, DEV):
+        refused(
+            decide("Glob", {"pattern": pattern, "path": "projects/demo"}, env=env, svc=with_active("demo")),
+            "Поиск",
+        )
+
+
+def test_main_agent_flat_glob_and_deeper_globs_from_the_project_root_are_fine():
+    allowed(decide("Glob", {"pattern": "*.yaml", "path": "projects/demo"}, svc=with_active("demo")))
+    allowed(decide("Glob", {"pattern": "outputs/**/*.md", "path": "projects/demo"}, svc=with_active("demo")))
+    allowed(decide("Glob", {"pattern": "**/*.txt", "path": "projects/demo/sources"}, svc=with_active("demo")))
 
 
 @pytest.mark.parametrize("tool", ["Grep", "Glob"])
@@ -173,15 +196,36 @@ def test_main_agent_search_over_the_repository_root_by_absolute_path_is_refused(
 
 def test_main_agent_search_without_active_project_is_open_in_knowledge_and_any_project_folder():
     allowed(decide("Grep", keyed("Grep", "knowledge"), svc=with_active(None)))
-    allowed(decide("Grep", keyed("Grep", "projects/other"), svc=with_active(None)))
+    allowed(decide("Grep", keyed("Grep", "projects/other/outputs"), svc=with_active(None)))
     refused(decide("Grep", {"pattern": "x"}, svc=with_active(None)), "path")
     refused(decide("Grep", keyed("Grep", "docs"), svc=with_active(None)), "Поиск")
 
 
 @pytest.mark.parametrize("tool", ["Grep", "Glob"])
-def test_main_agent_search_stays_closed_in_dev_mode_too(tool):
-    refused(decide(tool, {"pattern": "x"}, env=DEV, svc=with_active("demo")), "path")
+def test_dev_mode_lifts_the_search_limit_of_the_main_agent(tool):
+    allowed(decide(tool, {"pattern": "x"}, env=DEV, svc=with_active("demo")))
+    for target in ("docs", "src", "tests", ".", "projects/other/outputs"):
+        allowed(decide(tool, keyed(tool, target), env=DEV, svc=with_active("demo")))
+
+
+@pytest.mark.parametrize("tool", ["Grep", "Glob"])
+def test_dev_mode_keeps_the_closed_zones_in_search(tool):
     refused(decide(tool, keyed(tool, "evals"), env=DEV, svc=with_active("demo")), "evals/")
+    refused(decide(tool, keyed(tool, ".env"), env=DEV, svc=with_active("demo")), ".env")
+    refused(
+        decide(tool, keyed(tool, "projects/demo/.tmp/pending"), env=DEV, svc=with_active("demo")), "pending"
+    )
+    refused(decide(tool, keyed(tool, "~/.strateg"), env=DEV, svc=with_active("demo")), ".strateg")
+    refused(
+        decide("Glob", {"pattern": "evals/**", "path": "docs"}, env=DEV, svc=with_active("demo")), "evals"
+    )
+    refused(decide("Glob", {"pattern": "../x/*", "path": "docs"}, env=DEV, svc=with_active("demo")), "..")
+
+
+@pytest.mark.parametrize("role", ["researcher", "critic"])
+def test_dev_mode_does_not_open_search_for_roles(role):
+    refused(decide("Grep", {"pattern": "x"}, role, env=DEV))
+    refused(decide("Grep", keyed("Grep", "docs"), role, env=DEV))
 
 
 @pytest.mark.parametrize(

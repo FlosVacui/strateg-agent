@@ -308,21 +308,40 @@ WRITE_ZONE_HINT = (
 )
 
 
-def _check_search(tool: str, implicit: bool, places: list[paths.Place], svc: Services) -> str | None:
-    """Поиск основного агента: `path` внутри активного проекта или `knowledge/`; без `path` отказ."""
-    if implicit:
-        return (
-            f"У {tool} нет `path`: без него поиск идёт от корня продукта и заденет лишнее. "
-            "Укажи `path`: `projects/<id>/` активного проекта или `knowledge/`."
-        )
-    active = svc.active()
+def _check_search(
+    tool: str,
+    tin: Mapping[str, Any],
+    implicit: bool,
+    places: list[paths.Place],
+    svc: Services,
+    dev: bool,
+) -> str | None:
+    """Поиск основного агента.
+
+    Без `STRATEG_DEV=1`: `path` внутри активного проекта или `knowledge/`, без `path` отказ. Всегда: поиск по
+    всей папке проекта (и по `.tmp/`) закрыт: ripgrep дошёл бы до `.tmp/pending/`; плоский `Glob` разрешён.
+    """
+    if not dev:
+        if implicit:
+            return (
+                f"У {tool} нет `path`: без него поиск идёт от корня продукта и заденет лишнее. "
+                "Укажи `path`: `projects/<id>/` активного проекта или `knowledge/`."
+            )
+        active = svc.active()
+        for pl in places:
+            if pl.in_knowledge or (pl.project_id is not None and (active is None or pl.project_id == active)):
+                continue
+            return (
+                f"Поиск {tool} — только в папке активного проекта (`projects/<id>/`) или в `knowledge/`: "
+                "укажи `path` внутри них."
+            )
     for pl in places:
-        if pl.in_knowledge or (pl.project_id is not None and (active is None or pl.project_id == active)):
-            continue
-        return (
-            f"Поиск {tool} — только в папке активного проекта (`projects/<id>/`) или в `knowledge/`: "
-            "укажи `path` внутри них."
-        )
+        wide = pl.project_id is not None and pl.project_rel in ((), (TMP,))
+        if wide and (tool == "Grep" or not _flat_listing(tool, tin)):
+            return (
+                f"Поиск {tool} по всей папке проекта заденет `.tmp/pending/` (исходники до `add --confirm`). "
+                "Укажи `path`: `outputs/`, `sources/`, `inputs/` или файл."
+            )
     return None
 
 
@@ -441,7 +460,7 @@ def _check_file_tool(
             "затем `uv run strateg add '<путь>'`."
         )
     if tool in ("Grep", "Glob"):
-        return _check_search(tool, implicit, places, svc)
+        return _check_search(tool, tin, implicit, places, svc, ctx.dev)
     if writing and not ctx.dev:
         active = svc.active()
         if not all(_write_zone(pl, active) for pl in places):

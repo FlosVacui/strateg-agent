@@ -61,7 +61,10 @@ def test_main_agent_search_is_limited_to_the_active_project_and_knowledge(two):
     assert body["permissionDecision"] == "deny" and "path" in body["permissionDecisionReason"]
     body = pre("Glob", {"pattern": "**/*.md"})
     assert body["permissionDecision"] == "deny" and "path" in body["permissionDecisionReason"]
-    assert pre("Grep", {"pattern": "x", "path": p(two, "demo")}) is None
+    assert pre("Grep", {"pattern": "x", "path": p(two, "demo", "outputs")}) is None
+    body = pre("Grep", {"pattern": "x", "path": p(two, "demo")})
+    assert body["permissionDecision"] == "deny" and "sources" in body["permissionDecisionReason"]
+    assert pre("Grep", {"pattern": "x"}, e=env(STRATEG_DEV="1")) is None
     assert pre("Grep", {"pattern": "x", "path": str(REPO / "knowledge")}) is None
     for path in (p(two, "other"), str(REPO / "docs"), str(REPO)):
         assert pre("Grep", {"pattern": "x", "path": path})["permissionDecision"] == "deny"
