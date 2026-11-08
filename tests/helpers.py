@@ -101,11 +101,14 @@ def fixture_outputs(remap: dict[int, int] | None = None) -> dict[str, dict]:
 
 
 def tree_hashes(root: Path) -> dict[str, str]:
-    """sha256 всех файлов папки: по ним проверяют, что после отказа папка такая же, как до команды."""
+    """sha256 всех файлов папки: по ним проверяют, что после отказа папка такая же, как до команды.
+
+    Файл блокировки `.tmp/lock` не в счёт: он пуст по смыслу и появляется при любом открытии проекта.
+    """
     return {
         p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
         for p in sorted(root.rglob("*"))
-        if p.is_file()
+        if p.is_file() and p.relative_to(root).as_posix() != ".tmp/lock"
     }
 
 

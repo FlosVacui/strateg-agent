@@ -19,6 +19,7 @@ from typing import Any
 from pydantic import BaseModel, ValidationError
 
 from strateg import project as proj
+from strateg import storage
 from strateg.models import (
     MAX_FRAME_VERSION,
     SCHEMA_VERSION,
@@ -227,9 +228,7 @@ def apply_change(p: Project, ch: Change, started: float, by: str) -> None:
     if ch.history is not None and ch.old is not None:
         dest = p.root / ch.history
         dest.parent.mkdir(parents=True, exist_ok=True)
-        tmp = dest.with_name(dest.name + ".tmp")
-        tmp.write_bytes(ch.old)  # байт в байт, как лежал
-        tmp.replace(dest)
+        storage.atomic_write_bytes(dest, ch.old)  # байт в байт, как лежал
     proj.write_text(p.root / ch.kind.file, ch.text)
     message = f"{ch.kind.file}: {ch.note}"
     p.add_event(

@@ -971,15 +971,17 @@ def test_agents_md_has_the_roles_table_and_rules():
     for needle in (
         "| Роль | Когда | Получает | Возвращает |",
         "**Весь веб — у исследователя.** Пока он доступен, ты сам не ищешь и не делаешь `fetch`",
-        "встроенные субагенты среды (`general-purpose`, `Explore`, `Plan`) не зовёшь",
+        "`statusline-setup`, `claude-code-guide`) не зовёшь",
         "**Перед вызовом роли.**",
         "**Запасной путь.**",
     ):
         assert needle in text, needle
     assert "проверка не независимая" in text
-    # честно: хуков в этой версии нет, граница прав не активна в любой среде
-    assert "граница прав не активна" in text and "хуков нет" in text
-    assert "границу прав держат хуки" not in text
+    # честно: граница прав активна в Claude Code с хуками, в других средах и без хуков — «не активна»
+    assert "В Claude Code с хуками граница прав активна" in text
+    assert "В других средах границу прав не держит ничто" in text
+    assert "граница прав не активна" in text and "STRATEG_HOOKS=0" in text
+    assert "хуков нет" not in text and "её позже включат хуки" not in text
     table = [x for x in text.splitlines() if x.startswith("| `researcher`") or x.startswith("| `critic`")]
     assert len(table) == 4 and any("пре-мортем" in x for x in table), table
 

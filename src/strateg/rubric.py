@@ -19,6 +19,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from strateg import project as proj
+from strateg import storage
 from strateg.commands import _norm_step, _open, _read_input
 from strateg.models import (
     SCHEMA_VERSION,
@@ -345,9 +346,7 @@ def cmd_rubric_record(args: argparse.Namespace) -> int:
         if history is not None and old_bytes is not None:
             dest = p.root / history
             dest.parent.mkdir(parents=True, exist_ok=True)
-            tmp = dest.with_name(dest.name + ".tmp")
-            tmp.write_bytes(old_bytes)
-            tmp.replace(dest)
+            storage.atomic_write_bytes(dest, old_bytes)
         proj.write_text(path, text)
         p.add_event(
             p.event(

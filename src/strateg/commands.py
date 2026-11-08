@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import re
 import sys
 import time
@@ -25,6 +26,7 @@ from strateg import fetch as fetchlib
 from strateg import pack as packlib
 from strateg import project as proj
 from strateg import quote as quotelib
+from strateg.hooks import flags as hookflags
 from strateg.models import (
     LOCATOR_KINDS,
     SCHEMA_VERSION,
@@ -51,7 +53,7 @@ from strateg.models import (
     norm,
 )
 from strateg.models import Source as SourceModel
-from strateg.project import CliError, Project, UsageError
+from strateg.project import CliError, NoActiveProject, Project, UsageError
 from strateg.project_check import (
     _PLAN_LIKE,
     _PLAN_REF,
@@ -2094,6 +2096,9 @@ def _brief(args: argparse.Namespace, p: Project, *, peek: bool) -> int:
     lines.append(
         "Файлы выхода: " + (", ".join(f"{k}{frame_note if k == 'frame' else ''}" for k in present) or "нет")
     )
+    env_notes = hookflags.notes(os.environ)
+    if env_notes:
+        lines.append("Внимание: " + "; ".join(env_notes))
     data = {
         "project": d["project"],
         "mode": d["mode"],
@@ -2109,14 +2114,24 @@ def _brief(args: argparse.Namespace, p: Project, *, peek: bool) -> int:
         "frame_version": frame_version,
         "frame_draft": "frame" in present and not outputs.b1_answered(p.journal),
         "budget": d["budget"],
+        "env_notes": env_notes,
     }
     return emit(args, data, lines)
 
 
+NO_PROJECT_LINE = "Стратег: проекта нет"
+
+
 def cmd_status(args: argparse.Namespace) -> int:
-    p = _open(args)
     if getattr(args, "peek", False) and not getattr(args, "brief", False):
         raise UsageError("--peek задаётся вместе с --brief")
+    try:
+        p = _open(args)
+    except NoActiveProject:
+        if not getattr(args, "line", False):
+            raise
+        # строка статуса стоит в окне всегда, и без проекта она не ошибка
+        return emit(args, {"line": NO_PROJECT_LINE, "project": None}, [NO_PROJECT_LINE])
     if getattr(args, "brief", False):
         return _brief(args, p, peek=getattr(args, "peek", False))
     d = _status_data(p)
