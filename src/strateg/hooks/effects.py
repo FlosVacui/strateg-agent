@@ -19,6 +19,7 @@ from strateg.hooks import paths
 from strateg.hooks.rules import Choice, Ctx, EventSpec, HookError, Pick, ProjectView, RoutingView, Services
 
 ACTOR = "хук"
+ONCE_PER_SESSION = "граница прав не активна"  # пишется раз за сессию: имя события — номер сессии
 MAX_ERROR_CHARS = 500
 HIDDEN_LINE = "[строка скрыта: похожа на ключ]"
 PROJECT_ID = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
@@ -107,7 +108,7 @@ class LiveServices:
         root = active_project_root(self.ctx)
         if root is None:
             return None
-        p = proj.Project.load(root)
+        p = proj.Project.load(root, timeout=storage.lock_timeout(storage.HOOK_LOCK_TIMEOUT))
         picks = tuple(
             Pick(role=e.role, model=e.model, step=e.step, name=e.name or "")
             for e in p.journal
@@ -202,7 +203,9 @@ def append_event(root: Path, spec: EventSpec) -> bool:
     """
     import yaml
 
-    def build(state_bytes: bytes) -> bytes | None:
+    def build(state_bytes: bytes, journal: bytes) -> bytes | None:
+        if spec.kind == ONCE_PER_SESSION and _noted(journal, spec):
+            return None  # проверка под блокировкой: параллельные хуки одной сессии пишут событие один раз
         try:
             state = yaml.safe_load(state_bytes.decode("utf-8-sig"))
         except (UnicodeDecodeError, yaml.YAMLError):
@@ -225,17 +228,15 @@ def append_event(root: Path, spec: EventSpec) -> bool:
     return storage.append_journal(root, build, storage.lock_timeout(storage.HOOK_LOCK_TIMEOUT))
 
 
-def _already_noted(root: Path, spec: EventSpec) -> bool:
-    try:
-        text = (root / JOURNAL).read_bytes().decode("utf-8")
-    except (OSError, UnicodeDecodeError):
-        return False
-    for raw in text.split("\n"):
-        if spec.kind not in raw:
+def _noted(journal: bytes, spec: EventSpec) -> bool:
+    """В журнале уже есть событие того же вида с тем же именем (номер сессии)."""
+    kind = spec.kind.encode("utf-8")
+    for raw in journal.split(b"\n"):
+        if kind not in raw:
             continue
         try:
             e = json.loads(raw)
-        except json.JSONDecodeError:
+        except ValueError:
             continue
         if e.get("kind") == spec.kind and e.get("name") == spec.name:
             return True
@@ -253,8 +254,6 @@ def record_events(events: tuple[EventSpec, ...], ctx: Ctx) -> None:
     if root is None:
         return
     for spec in events:
-        if spec.kind == "граница прав не активна" and _already_noted(root, spec):
-            continue
         if spec.kind == "задание исследователю":
             spec = EventSpec(spec.kind, redact(spec.message), spec.name, spec.role)
         append_event(root, spec)

@@ -17,7 +17,9 @@
 from __future__ import annotations
 
 import contextlib
+import datetime as dt
 import hashlib
+import json
 import os
 import random
 import re
@@ -34,7 +36,6 @@ HOOK_LOCK_TIMEOUT = 5.0
 LOCK_TIMEOUT_ENV = "STRATEG_LOCK_TIMEOUT"  # секунды; для тестов и для разбора зависшей блокировки
 STATE_FILE, JOURNAL_FILE = "state.yaml", "journal.jsonl"
 _JOURNAL_HASH = re.compile(r"(?m)^(  journal\.jsonl: )([0-9a-f]{64})$")
-_REPLACE_TRIES = 40
 
 
 def lock_timeout(default: float = LOCK_TIMEOUT) -> float:
@@ -54,6 +55,18 @@ class LockTimeout(Exception):
             "проверь, что не завис другой процесс `strateg`"
         )
         self.root = root
+        self.seconds = seconds
+
+
+class FileBusy(Exception):
+    """Файл не удалось заменить: его держит другая программа (на Windows — антивирус, редактор)."""
+
+    def __init__(self, path: Path, seconds: float) -> None:
+        super().__init__(
+            f"файл «{path.name}» занят другой программой больше {seconds:g} с (антивирус, индексатор, "
+            "редактор): замена не удалась. Закрой программу, которая держит файл, и повтори"
+        )
+        self.path = path
         self.seconds = seconds
 
 
@@ -166,24 +179,29 @@ def temp_name(path: Path) -> Path:
     return path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
 
 
-def replace_file(tmp: Path, path: Path) -> None:
-    """`os.replace` с повторами: на Windows замену на миг задерживает читатель, открывший файл."""
-    for attempt in range(_REPLACE_TRIES):
+def replace_file(tmp: Path, path: Path, timeout: float | None = None) -> None:
+    """`os.replace` с повторами до `timeout`: на Windows замену задерживает читатель, открывший файл.
+
+    Не вышло — `FileBusy` с понятным текстом (временный файл убран).
+    """
+    seconds = lock_timeout() if timeout is None else timeout
+    deadline = time.monotonic() + seconds
+    while True:
         try:
             os.replace(tmp, path)
             return
-        except PermissionError:
-            if attempt == _REPLACE_TRIES - 1:
+        except PermissionError as exc:
+            if time.monotonic() >= deadline:
                 tmp.unlink(missing_ok=True)
-                raise
+                raise FileBusy(path, seconds) from exc
             time.sleep(0.025)
 
 
-def atomic_write_bytes(path: Path, data: bytes) -> None:
+def atomic_write_bytes(path: Path, data: bytes, timeout: float | None = None) -> None:
     tmp = temp_name(path)
     try:
         tmp.write_bytes(data)
-        replace_file(tmp, path)
+        replace_file(tmp, path, timeout)
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
@@ -211,26 +229,64 @@ def with_journal_hash(state_bytes: bytes, new_hash: str) -> bytes | None:
     return new_text.replace("\r\n", "\n").encode("utf-8")
 
 
-def append_journal(root: Path, build: Callable[[bytes], bytes | None], timeout: float | None = None) -> bool:
+def last_event_time(journal: bytes) -> dt.datetime | None:
+    """Время последней строки журнала; None — журнал пуст или последняя строка не разбирается."""
+    lines = journal.rstrip(b"\n").rsplit(b"\n", 1)
+    try:
+        value = json.loads(lines[-1].decode("utf-8")).get("time")
+        return dt.datetime.fromisoformat(value) if isinstance(value, str) else None
+    except (ValueError, AttributeError):
+        return None
+
+
+def clamp_time(when: dt.datetime, journal: bytes) -> dt.datetime:
+    """Время события не меньше времени последней строки журнала: время в журнале не убывает."""
+    floor = last_event_time(journal)
+    try:
+        return when if floor is None or when >= floor else floor
+    except TypeError:  # время без пояса против времени с поясом: ничего не угадываем
+        return when
+
+
+def _clamp_line(line: bytes, journal: bytes) -> bytes:
+    try:
+        event = json.loads(line.decode("utf-8"))
+        when = dt.datetime.fromisoformat(event["time"])
+    except (ValueError, KeyError, TypeError):
+        return line
+    clamped = clamp_time(when, journal)
+    if clamped == when:
+        return line
+    event["time"] = clamped.isoformat()
+    return json.dumps(event, ensure_ascii=False).encode("utf-8")
+
+
+def append_journal(
+    root: Path, build: Callable[[bytes, bytes], bytes | None], timeout: float | None = None
+) -> bool:
     """Дописывает строку в `journal.jsonl` и, если журнал не правили руками, хеш журнала в `state.yaml`.
 
-    `build` получает байты `state.yaml` и возвращает строку журнала (без перевода строки) либо None
-    («писать нечего»). Всё под блокировкой папки проекта. Хеши других файлов не трогаются: правку человека
-    принимает только команда CLI, записав «изменено вне агента». Если журнал сейчас длиннее записанного хеша
-    (идущая команда CLI уже дописала свои события, а `state.yaml` ещё не сохранила), хеш не трогается:
-    команда пересчитает его при сохранении. Возвращает False, если проект не удалось прочитать.
+    `build` получает байты `state.yaml` и журнала (под блокировкой) и возвращает строку журнала без перевода
+    строки либо None («писать нечего»). Время строки приводится под той же блокировкой: не меньше времени
+    последней строки журнала. Хеши других файлов не трогаются: правку человека принимает только команда CLI,
+    записав «изменено вне агента». Если журнал сейчас длиннее записанного хеша (идущая команда CLI уже
+    дописала свои события, а `state.yaml` ещё не сохранила), хеш не трогается: команда пересчитает его при
+    сохранении. `state.yaml` заменяется с повторами до таймаута; не вышло — журнал возвращается к прежней
+    длине и бросается `FileBusy`, чтобы событие и хеш не разошлись. Возвращает False, если проект не удалось
+    прочитать или писать нечего.
     """
     state_path, journal_path = root / STATE_FILE, root / JOURNAL_FILE
-    with project_lock(root, timeout):
+    seconds = lock_timeout() if timeout is None else timeout
+    with project_lock(root, seconds):
         try:
             state_bytes = state_path.read_bytes()
             journal_before = journal_path.read_bytes()
         except OSError:
             return False
-        line = build(state_bytes)
+        line = build(state_bytes, journal_before)
         if line is None:
             return False
-        line += b"\n"
+        line = _clamp_line(line, journal_before) + b"\n"
         append_bytes(journal_path, line)
         try:
             recorded = recorded_journal_hash(state_bytes.decode("utf-8-sig"))
@@ -239,5 +295,10 @@ def append_journal(root: Path, build: Callable[[bytes], bytes | None], timeout: 
         if recorded == sha256(journal_before):
             new_state = with_journal_hash(state_bytes, sha256(journal_before + line))
             if new_state is not None:
-                atomic_write_bytes(state_path, new_state)
+                try:
+                    atomic_write_bytes(state_path, new_state, seconds)
+                except BaseException:
+                    with journal_path.open("r+b") as f:
+                        f.truncate(len(journal_before))
+                    raise
     return True

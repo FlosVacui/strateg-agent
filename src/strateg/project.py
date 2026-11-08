@@ -45,6 +45,7 @@ from strateg.project_check import (
     check_project,
 )
 
+ROLLBACK_LOCK_TIMEOUT = 30.0  # откат ждёт блокировку дольше обычного
 HOOK_ACTOR = "хук"  # исполнитель событий, которые пишут хуки Claude Code
 ACTIVE_FILE = ".active"
 PROJECTS_ENV = "STRATEG_PROJECTS_DIR"  # где лежат проекты (по умолчанию — projects/ репозитория)
@@ -187,7 +188,10 @@ def set_active(project_id: str) -> None:
 
 def write_text(path: Path, text: str) -> None:
     """UTF-8 без BOM, окончания LF, замена файла целиком."""
-    storage.atomic_write_bytes(path, text.replace("\r\n", "\n").encode("utf-8"))
+    try:
+        storage.atomic_write_bytes(path, text.replace("\r\n", "\n").encode("utf-8"))
+    except storage.FileBusy as exc:
+        raise CliError(str(exc)) from exc
 
 
 def dump_yaml(model: BaseModel) -> str:
@@ -221,12 +225,12 @@ def read_jsonl(path: Path, model: type[BaseModel]) -> list[Any]:
 
 
 @contextlib.contextmanager
-def locked(root: Path) -> Iterator[None]:
+def locked(root: Path, timeout: float | None = None) -> Iterator[None]:
     """Папка проекта занята на время блока (CLI и хуки пишут журнал и `state.yaml` по очереди)."""
     try:
-        with storage.project_lock(root):
+        with storage.project_lock(root, timeout):
             yield
-    except storage.LockTimeout as exc:
+    except (storage.LockTimeout, storage.FileBusy) as exc:
         raise CliError(str(exc)) from exc
 
 
@@ -254,8 +258,9 @@ class Project:
 
     # --- чтение ---
     @classmethod
-    def load(cls, root: Path) -> Project:
-        with locked(root):  # хук не допишет журнал между чтением журнала и сверкой его хеша
+    def load(cls, root: Path, timeout: float | None = None) -> Project:
+        """Открывает проект. `timeout` — сколько ждать блокировку папки (хук ждёт меньше CLI)."""
+        with locked(root, timeout):  # хук не допишет журнал между чтением журнала и сверкой его хеша
             return cls._load(root)
 
     @classmethod
@@ -320,13 +325,20 @@ class Project:
 
     def add_event(self, event: JournalEvent) -> None:
         """Дописывает событие в журнал; хеш журнала в `state.yaml` остаётся верным (хук пишет так же)."""
-        line = json.dumps(event.model_dump(mode="json", exclude_none=True), ensure_ascii=False).encode(
-            "utf-8"
-        )
+        written = [event]
+
+        def build(_state: bytes, journal: bytes) -> bytes:
+            # время ставится под блокировкой и не меньше времени последней строки: хук мог дописать позже
+            when = storage.clamp_time(event.time, journal)
+            if when != event.time:
+                written[0] = event.model_copy(update={"time": when})
+            data = written[0].model_dump(mode="json", exclude_none=True)
+            return json.dumps(data, ensure_ascii=False).encode("utf-8")
+
         with locked(self.root):
-            if not storage.append_journal(self.root, lambda _state: line):
+            if not storage.append_journal(self.root, build):
                 append_jsonl(self.root / JOURNAL_FILE, event)  # state.yaml ещё нет: проект создаётся
-        self.journal.append(event)
+        self.journal.append(written[0])
 
     def add_cost(self, record: CostRecord) -> None:
         with locked(self.root):
@@ -466,6 +478,16 @@ def _rehash_journal(root: Path, journal_before: bytes, journal_now: bytes) -> No
             storage.atomic_write_bytes(state_path, new_state)
 
 
+def _changed_files(root: Path, before: dict[Path, bytes | None]) -> list[str]:
+    """Отслеживаемые файлы, которые сейчас отличаются от снимка `before` (новые, изменённые, удалённые)."""
+    changed = []
+    for p in sorted({*before, *_tracked_files(root)}):
+        current = p.read_bytes() if p.is_file() else None
+        if current != before.get(p):
+            changed.append(p.relative_to(root).as_posix())
+    return changed
+
+
 @contextlib.contextmanager
 def transaction(
     root: Path,
@@ -486,28 +508,41 @@ def transaction(
         baseline = set(check_project(root))
     history_existed = (root / HISTORY_DIR).is_dir()
 
-    def restore() -> None:
-        with locked(root):
-            journal = root / JOURNAL_FILE
-            foreign = _hook_lines_after(journal, before.get(journal))
-            for p in _tracked_files(root):
-                if p not in before:
-                    p.unlink(missing_ok=True)
-            for p, data in before.items():
-                if data is None:
-                    p.unlink(missing_ok=True)
-                else:
-                    storage.atomic_write_bytes(p, data)
-            if foreign:  # события хука, записанные за время команды, откат не трогает
-                kept = (before[journal] or b"") + foreign
-                storage.append_bytes(journal, foreign)
-                _rehash_journal(root, before[journal] or b"", kept)
-            _drop_empty_history(root, keep_root=history_existed)
+    def restore_files() -> None:
+        journal = root / JOURNAL_FILE
+        foreign = _hook_lines_after(journal, before.get(journal))
+        for p in _tracked_files(root):
+            if p not in before:
+                p.unlink(missing_ok=True)
+        for p, data in before.items():
+            if data is None:
+                p.unlink(missing_ok=True)
+            else:
+                storage.atomic_write_bytes(p, data)
+        if foreign:  # события хука, записанные за время команды, откат не трогает
+            kept = (before[journal] or b"") + foreign
+            storage.append_bytes(journal, foreign)
+            _rehash_journal(root, before[journal] or b"", kept)
+        _drop_empty_history(root, keep_root=history_existed)
+
+    def restore(why: str = "") -> None:
+        try:
+            with locked(root, storage.lock_timeout(ROLLBACK_LOCK_TIMEOUT)):
+                restore_files()
+        except CliError as exc:
+            if not isinstance(exc.__cause__, storage.LockTimeout):
+                raise
+            left = ", ".join(_changed_files(root, before)) or "нет"
+            raise CliError(
+                "откат не выполнен: папка проекта занята другим процессом, изменения команды остались "
+                f"записанными. Остались записанными: {left}. Проверь `strateg check`, когда папку отпустят."
+                + (f" Исходная ошибка: {why}" if why else "")
+            ) from exc
 
     try:
         yield
-    except BaseException:
-        restore()
+    except BaseException as original:
+        restore(str(original))
         raise
     if rollback:
         with locked(root):  # не читаем журнал в момент дозаписи хука
@@ -518,7 +553,7 @@ def transaction(
             if (e not in baseline or (block and block(e))) and not (tolerate and tolerate(e))
         ]
         if new:
-            restore()
+            restore("проверка проекта нашла ошибки: " + "; ".join(new))
             raise CliError("проверка проекта нашла ошибки, изменения не записаны", new)
 
 

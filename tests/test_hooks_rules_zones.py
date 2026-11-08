@@ -442,7 +442,6 @@ BASH_WRITE_CLOSED = [
     "Remove-Item -Recurse src",
     "Copy-Item a.txt src/x.py",
     "Move-Item a.txt knowledge/x.md",
-    "echo x > projects/demo/state.yaml",
     "echo x > projects/demo/inputs/a.txt",
     "echo x > projects/other/outputs/a.md",
     "uv run strateg status > src/x.py",

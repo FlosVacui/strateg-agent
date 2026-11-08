@@ -205,6 +205,9 @@ def _split(command: str) -> tuple[list[Segment], bool]:
             elif c in "<>":
                 subst = True
                 cur.append(c)
+                if c == ">" and command[i + 1 : i + 2] == "|":  # `>|` — перенаправление, а не конвейер
+                    i += 1
+                    cur.append("|")
                 end_word()
             elif c.isspace():
                 cur.append(c)
@@ -393,21 +396,56 @@ def sensitive_mention(command: str, *, evals: bool = True) -> str | None:
 
 # --- Запись через Bash: куда пишет команда (где это распознаётся) ------------------------------------------
 
-NO_FILE = frozenset({"/dev/null", "/dev/stdout", "/dev/stderr", "nul", "$null", "-"})
+NO_FILE = frozenset(
+    {
+        "/dev/null",
+        "/dev/stdout",
+        "/dev/stderr",
+        "/dev/tty",
+        "/dev/fd/1",
+        "/dev/fd/2",
+        "nul",
+        "con",
+        "$null",
+        "-",
+    }
+)
 CD_COMMANDS = frozenset({"cd", "pushd", "popd", "chdir", "set-location", "sl"})
-# Все нефлаговые аргументы — пишутся (создаются, правятся, удаляются).
-WRITES_ALL_ARGS = frozenset({"tee", "mv", "rm", "rmdir", "touch", "mkdir", "unlink", "shred", "md", "rd"})
+# Все нефлаговые аргументы — пишутся (создаются, правятся, удаляются). Значение — флаги со значением.
+WRITES_ALL_ARGS: dict[str, frozenset[str]] = {
+    "tee": frozenset(),
+    "mv": frozenset({"-t", "--target-directory"}),
+    "rm": frozenset(),
+    "rmdir": frozenset(),
+    "touch": frozenset({"-d", "-t", "-r", "--date", "--reference"}),
+    "mkdir": frozenset({"-m", "--mode"}),
+    "unlink": frozenset(),
+    "shred": frozenset({"-n", "-s", "--iterations", "--size"}),
+    "truncate": frozenset({"-s", "-r", "--size", "--reference"}),
+    "md": frozenset(),
+    "rd": frozenset(),
+}
 # Пишется последний нефлаговый аргумент.
-WRITES_LAST_ARG = frozenset({"cp", "ln", "install", "truncate"})
+WRITES_LAST_ARG: dict[str, frozenset[str]] = {
+    "cp": frozenset({"-t", "--target-directory"}),
+    "ln": frozenset({"-t", "--target-directory"}),
+    "install": frozenset({"-m", "-o", "-g", "--mode", "--owner", "--group"}),
+}
+WIN_COPY = frozenset({"copy", "xcopy"})  # cmd: `copy a b`, `xcopy a b /y`: пишется последний путь
+WIN_FLAG = re.compile(r"^/[A-Za-z?](?::.*)?$")  # `/y`, `/E`, `/D:01-01-2020`; `/tmp` — не флаг
+RENAME = frozenset({"ren", "rename"})  # `ren старое новое`: меняется первый путь
+GIT_WHOLE_TREE = frozenset({"reset", "clean"})  # затрагивают дерево целиком
+GIT_PATHS = frozenset({"checkout", "restore"})  # пути после `--` или все слова
+GIT_ALL_ARGS = frozenset({"rm", "mv"})
 # PowerShell: имя командлета (и псевдоним) -> путь берётся из -Path/-FilePath/-LiteralPath или первого слова.
 PS_WRITES = frozenset(
     {
         "set-content", "sc", "add-content", "ac", "out-file", "new-item", "ni", "remove-item", "ri", "del",
-        "erase", "clear-content", "clc", "set-itemproperty", "tee-object",
+        "erase", "clear-content", "clc", "set-itemproperty", "tee-object", "rename-item", "rni",
     }
 )  # fmt: skip
-PS_COPY = frozenset({"copy-item", "copy", "cpi"})
-PS_MOVE = frozenset({"move-item", "move", "mi"})
+PS_COPY = frozenset({"copy-item", "cpi"})
+PS_MOVE = frozenset({"move-item", "mi"})
 PS_PATH_PARAMS = frozenset({"-path", "-filepath", "-literalpath"})
 PS_VALUE_PARAMS = frozenset(
     {
@@ -415,6 +453,8 @@ PS_VALUE_PARAMS = frozenset(
         "-delimiter", "-inputobject", "-newname", "-credential", "-variable",
     }
 )  # fmt: skip
+SED_SCRIPT_FLAGS = frozenset({"-e", "-f", "--expression", "--file"})
+SED_IN_PLACE = re.compile(r"^-[A-Za-z]*i")  # `-i`, `-i.bak`, `-Ei`, `-ni`: буква `i` среди склеенных флагов
 
 
 def _tokens(text: str) -> tuple[list[str], list[str]]:
@@ -474,8 +514,59 @@ def _tokens(text: str) -> tuple[list[str], list[str]]:
     return words, targets
 
 
-def _non_flags(args: list[str]) -> list[str]:
-    return [a for a in args if not a.startswith("-")]
+def _positional(
+    args: list[str], value_flags: frozenset[str] = frozenset(), *, slash_flags: bool = False
+) -> list[str]:
+    """Слова-не-флаги; значение флага из `value_flags` (`touch -d 2020-01-01`) путём не считается."""
+    out: list[str] = []
+    skip = False
+    for a in args:
+        if skip:
+            skip = False
+        elif a in value_flags:
+            skip = True
+        elif a.startswith("-") or (slash_flags and WIN_FLAG.match(a)):
+            continue
+        else:
+            out.append(a)
+    return out
+
+
+def _sed_files(args: list[str]) -> list[str]:
+    """Файлы `sed -i`: слова после скрипта; скрипт — первое слово или значения `-e` и `-f`."""
+    has_script = False
+    positional: list[str] = []
+    skip = False
+    for a in args:
+        if skip:
+            skip = False
+        elif a in SED_SCRIPT_FLAGS:
+            has_script = skip = True
+        elif a.startswith(("-e", "--expression=", "--file=")) and a != "-e":
+            has_script = True  # `-es/a/b/`, `--expression=…`
+        elif a.startswith("-"):
+            continue
+        else:
+            positional.append(a)
+    return positional if has_script else positional[1:]
+
+
+def _git_targets(args: list[str]) -> list[str]:
+    """Пути, которые меняет `git checkout|restore|reset|clean|rm|mv`; без путей — дерево целиком (`.`)."""
+    rest = list(args)
+    while rest and rest[0].startswith("-"):  # `git -C dir`, `git -c k=v`
+        rest = rest[2:] if rest[0] in ("-C", "-c") else rest[1:]
+    if not rest:
+        return []
+    sub, rest = rest[0], rest[1:]
+    if sub in GIT_WHOLE_TREE:
+        return ["."]
+    if sub in GIT_ALL_ARGS:
+        return _positional(rest)
+    if sub in GIT_PATHS:
+        paths = rest[rest.index("--") + 1 :] if "--" in rest else _positional(rest)
+        return paths or ["."]
+    return []
 
 
 def _powershell_targets(prog: str, args: list[str]) -> list[str]:
@@ -504,37 +595,62 @@ def _powershell_targets(prog: str, args: list[str]) -> list[str]:
     return paths or positional[:1]
 
 
-def write_targets(command: str) -> list[str]:
-    """Пути, в которые команда пишет, как их видно по тексту: перенаправления, `tee`, `sed -i`, `cp`, `mv`,
-    `rm`, `touch`, `mkdir` и командлеты PowerShell (`Set-Content`, `Out-File`, `Remove-Item` …).
+def _command_words(seg_text: str) -> tuple[list[str], list[str], int]:
+    words, redirects = _tokens(seg_text)
+    i = _command_index(tuple(words))
+    while i < len(words) and _program(words[i]) in WRAPPERS:
+        i += 1 + _command_index(tuple(words[i + 1 :]))
+    return words, redirects, i
 
-    Разбор неполный, как и весь разбор Bash: он ловит явные записи и не гарантирует защиту. Команда со сменой
-    папки (`cd`) или с незакрытой кавычкой не разбирается: относительные пути в ней нельзя привести.
+
+def changes_directory(command: str) -> bool:
+    """В команде есть смена папки (`cd`, `pushd`, `Set-Location`): пути после неё не привести."""
+    segments, _ = _split(command)
+    for seg in segments:
+        words, _, i = _command_words(seg.text)
+        if i < len(words) and _program(words[i]) in CD_COMMANDS:
+            return True
+    return False
+
+
+def write_targets(command: str) -> list[str]:
+    """Пути, в которые команда пишет, как их видно по тексту.
+
+    Перенаправления (`>`, `>>`, `>|`), `tee`, `sed -i` (в том числе `-Ei`), `cp`, `mv`, `rm`, `touch`,
+    `mkdir`, `ln`, `dd of=`, `copy`, `xcopy`, `ren`, `git checkout|restore|reset|clean|rm|mv` и командлеты
+    PowerShell (`Set-Content`, `Out-File`, `Remove-Item`, `Rename-Item` …).
+
+    Разбор неполный, как и весь разбор Bash: он ловит явные записи и не гарантирует защиту (скрипты
+    интерпретаторов, архиваторы, `robocopy`, `git apply` не разбираются). Незакрытая кавычка — не разбираем.
     """
     segments, ok = _split(command)
     if not ok:
         return []
     found: list[str] = []
     for seg in segments:
-        words, redirects = _tokens(seg.text)
+        words, redirects, i = _command_words(seg.text)
         found += redirects
-        i = _command_index(tuple(words))
-        while i < len(words) and _program(words[i]) in WRAPPERS:
-            i += 1 + _command_index(tuple(words[i + 1 :]))
         if i >= len(words):
             continue
         prog = _program(words[i])
-        if prog in CD_COMMANDS:
-            return []
         args = words[i + 1 :]
-        flat = _non_flags(args)
         if prog in WRITES_ALL_ARGS:
-            found += flat
+            found += _positional(args, WRITES_ALL_ARGS[prog])
         elif prog in WRITES_LAST_ARG:
+            flat = _positional(args, WRITES_LAST_ARG[prog])
             found += flat[-1:] if len(flat) > 1 else []
+        elif prog in WIN_COPY:
+            flat = _positional(args, slash_flags=True)
+            found += flat[-1:] if len(flat) > 1 else []
+        elif prog in RENAME:
+            found += _positional(args, slash_flags=True)[:1]
+        elif prog == "dd":
+            found += [a[3:] for a in args if a.startswith("of=")]
         elif prog == "sed":
-            if any(a == "--in-place" or a.startswith(("-i", "--in-place=")) for a in args):
-                found += flat[1:]
+            if any(a == "--in-place" or a.startswith("--in-place=") or SED_IN_PLACE.match(a) for a in args):
+                found += _sed_files(args)
+        elif prog == "git":
+            found += _git_targets(args)
         elif prog in PS_WRITES | PS_COPY | PS_MOVE:
             found += _powershell_targets(prog, args)
     return [t for t in found if t and t.lower() not in NO_FILE]

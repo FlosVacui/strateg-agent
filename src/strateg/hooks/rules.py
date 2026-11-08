@@ -221,7 +221,10 @@ def _target(tool: str, tin: Mapping[str, Any], cwd: str) -> tuple[str | None, bo
     if tool == "Glob":
         pattern = tin.get("pattern")
         if isinstance(pattern, str) and pattern:
-            return paths.glob_target(pattern, path, cwd), path is None and not pattern.startswith(("/", "~"))
+            absolute = pattern.replace("\\", "/").startswith(("/", "~", "%", "$")) or bool(
+                re.match(r"^[A-Za-z]:", pattern)
+            )
+            return paths.glob_target(pattern, path, cwd), path is None and not absolute
     if path is None:
         return (cwd, True) if tool in ("Grep", "Glob") else (None, False)
     return path, False
@@ -244,10 +247,16 @@ def _cli_owned(rel: tuple[str, ...]) -> str | None:
         return head + "/"
     if len(rel) == 1 and (head in CLI_STATE_FILES or head.endswith(CLI_STATE_SUFFIXES)):
         return head
+    if head == TMP and (len(rel) == 1 or rel[1] == LOCK_NAME):
+        return (
+            LOCK_OWNED  # файл блокировки папки проекта и папка `.tmp/` целиком (с ней удаляется блокировка)
+        )
     return None
 
 
 def _cli_hint(name: str) -> str:
+    if name == LOCK_OWNED:
+        return "это файл блокировки папки проекта; `.tmp/` целиком не трогай, лишние файлы убирай по одному"
     if name == "claims.yaml":
         return "утверждения — `uv run strateg claim add|replace|revoke`"
     if name in ("sources.yaml", "sources/"):
@@ -260,6 +269,7 @@ def _cli_hint(name: str) -> str:
 
 PATTERN_SEPARATORS = re.compile(r"[/\\{},]")
 OUTPUTS, TMP = "outputs", ".tmp"
+LOCK_NAME, LOCK_OWNED = "lock", ".tmp/lock"
 CRITIC_CLOSED_DIRS = {
     "inputs": "там материалы человека",
     TMP: "там рабочие файлы агента",
@@ -516,22 +526,39 @@ def _decide_shell(
     mention = shell.sensitive_mention(command)
     if mention:
         return f"Доступ к {mention} закрыт всем ролям: {SENSITIVE_WHY[mention]}."
-    if not ctx.dev:
-        return _bash_write_reason(command, cwd, ctx, svc)
-    return None
+    return _bash_write_reason(command, cwd, ctx, svc)
 
 
 def _bash_write_reason(command: str, cwd: str, ctx: Ctx, svc: Services) -> str | None:
-    """Запись через Bash (перенаправление, `tee`, `sed -i`, `cp`, `rm`, `Set-Content` …) вне зоны записи."""
+    """Запись через Bash (перенаправление, `tee`, `sed -i`, `cp`, `rm`, `Set-Content` …).
+
+    Файлы состояния CLI и `.tmp/lock` закрыты всегда; вне `outputs/` и `.tmp/` активного проекта — без
+    `STRATEG_DEV=1`. Смена папки в команде с записью без `STRATEG_DEV=1` — отказ: относительные пути после
+    неё не привести.
+    """
     targets = shell.write_targets(command)
     if not targets:
         return None
+    if not ctx.dev and shell.changes_directory(command):
+        return (
+            "Запись и смена папки (`cd`, `pushd`, `Set-Location`) в одной команде закрыты: "
+            "куда пишет команда, "
+            "после смены папки не определить. Пиши без `cd`, пути от корня репозитория: "
+            f"{WRITE_ZONE_HINT}."
+        )
     active = svc.active()
     for raw in targets:
         found = paths.places(raw, ctx.penv, cwd=cwd)
         if found is None:
             continue  # переменная или другая запись, которую нельзя привести: Bash разбирается лишь отчасти
-        if not all(_write_zone(pl, active) for pl in found):
+        for pl in found:
+            owned = _cli_owned(pl.project_rel) if pl.project_id and pl.project_rel is not None else None
+            if owned:
+                return (
+                    f"Состояние проекта пишет только CLI, а не Bash: {owned} («{raw}») — через `strateg`. "
+                    f"Подсказка: {_cli_hint(owned)}."
+                )
+        if not ctx.dev and not all(_write_zone(pl, active) for pl in found):
             return (
                 f"Запись в «{raw}» через Bash закрыта: только `outputs/` и `.tmp/` активного проекта — "
                 f"{WRITE_ZONE_HINT}."
