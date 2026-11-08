@@ -254,8 +254,37 @@ def parse_answers(raw: Any, rubric: Rubric) -> list[PartBAnswer]:
 
 
 def _same(a: CompletenessFile, b: CompletenessFile) -> bool:
-    drop = {"checked_at"}
+    drop = {"checked_at", "critic_call"}  # повтор тех же ответов не требует нового вызова критика
     return a.model_dump(mode="json", exclude=drop) == b.model_dump(mode="json", exclude=drop)
+
+
+CRITIC_ROLE = "critic"
+RECORD_ACTION = "strateg rubric record"
+ROLE_DONE = "роль выполнена"
+
+
+def critic_call(p: Project) -> str:
+    """«подтверждён», если критик на этом шаге выполнился после прошлой записи проверки полноты.
+
+    След оставляет хук `SubagentStop`: событие «роль выполнена» с именем роли в `role`. Прошлая запись
+    проверки (`strateg rubric record`) — граница: для новой записи нужен новый вызов критика. Без хуков
+    (другая среда) события нет, и проверка, которую агент сделал сам, не выдаётся за независимую.
+    """
+    confirmed = False
+    for e in p.journal:  # журнал только дописывается: порядок строк и есть порядок событий
+        if e.kind == "действие" and e.name == RECORD_ACTION and e.status == "выполнено":
+            confirmed = False  # прошлая запись проверки: для новой нужен новый вызов критика
+        elif e.kind == ROLE_DONE and e.role == CRITIC_ROLE and e.step == p.state.step:
+            confirmed = True
+    return "подтверждён" if confirmed else "не подтверждён"
+
+
+def _unconfirmed_line(step: str) -> str:
+    return (
+        f"Вызов критика не подтверждён: в журнале нет события «{ROLE_DONE}» для критика на шаге {step} "
+        f"после прошлой записи проверки. Проверка не считается независимой: запустите критика "
+        "(`critic`) и запишите ответы заново."
+    )
 
 
 def _build(
@@ -331,13 +360,20 @@ def cmd_rubric_record(args: argparse.Namespace) -> int:
             old = CompletenessFile.model_validate(proj.read_yaml(path), by_name=False)
         except (CliError, ValidationError):
             old = None
-    data = _record_data(rubric, new)
-    if old is not None and _same(old, new):
+    call = critic_call(p) if by == "критик" else None
+    upgraded = call == "подтверждён" and old is not None and old.critic_call != "подтверждён"
+    if (
+        old is not None and _same(old, new) and not upgraded
+    ):  # новый вызов критика — запись не «без изменений»
+        same = new.model_copy(update={"critic_call": old.critic_call})
         return _emit_record(
             args,
-            {"changed": False, **data},
-            [f"{COMPLETENESS_FILE}: без изменений", *_summary_lines(rubric, new)],
+            {"changed": False, **_record_data(rubric, same)},
+            [f"{COMPLETENESS_FILE}: без изменений", *_summary_lines(rubric, same)],
         )
+    if call is not None:
+        new = new.model_copy(update={"critic_call": call})
+    data = _record_data(rubric, new)
 
     text = proj.dump_yaml(new)
     history = _history_path(p) if old_bytes is not None else None
@@ -357,6 +393,7 @@ def cmd_rubric_record(args: argparse.Namespace) -> int:
                 duration_s=round(time.monotonic() - started, 2),
                 message=(
                     f"Проверка полноты: {new.result}; нет: {', '.join(new.failed) or '—'}; проверял: {by}"
+                    + ("; вызов критика не подтверждён" if new.critic_call == "не подтверждён" else "")
                 ),
             )
         )
@@ -374,7 +411,8 @@ def _record_data(rubric: Rubric, comp: CompletenessFile) -> dict[str, Any]:
     return {
         "result": comp.result,
         "by": comp.by,
-        "independent": comp.by == "критик",
+        "independent": comp.by == "критик" and comp.critic_call == "подтверждён",
+        "critic_call": comp.critic_call,
         "step": comp.step,
         "failed": comp.failed,
         "part_a": [r.model_dump(mode="json", exclude_none=True) for r in comp.part_a],
@@ -391,6 +429,8 @@ def _summary_lines(rubric: Rubric, comp: CompletenessFile) -> list[str]:
     ]
     if comp.by == "агент":
         lines.append("Проверка не независимая: ответы части Б дал сам агент (в файле by: агент).")
+    if comp.critic_call == "не подтверждён":
+        lines.append(_unconfirmed_line(comp.step))
     for r in a_no:
         lines.append(f"  {r.id}: нет — {r.message}")
     means = {q.id: q.no_means for q in rubric.part_b}

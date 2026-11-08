@@ -223,6 +223,13 @@ def _min(x: float) -> str:
     return f"{x:.1f}".replace(".", ",")
 
 
+def summary_text(m: Measure) -> str:
+    """«деньги: потрачено $5,12 из $5,00; время: 61,0 из 60 мин» — для отказа и события журнала."""
+    spent = "неизвестно" if m.spent_usd is None else _usd(m.spent_usd)
+    limit = "без лимита" if m.limit_usd is None else _usd(m.limit_usd)
+    return f"деньги: потрачено {spent} из {limit}; время: {_min(m.spent_minutes)} из {m.limit_minutes:g} мин"
+
+
 def remaining_text(m: Measure) -> str:
     """«осталось $3,30 из $5 и 45,0 из 60 мин»; без стоимости — только время."""
     time_part = f"{_min(m.left_minutes)} из {m.limit_minutes:g} мин"

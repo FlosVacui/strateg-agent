@@ -83,8 +83,8 @@ def test_broken_defaults_are_a_clear_error(cli, home, tmp_path, monkeypatch):
 
 def test_prices_file_is_valid_dated_and_complete():
     prices = budgetlib.load_prices()
-    assert prices.accessed == "2026-11-07" and prices.source.endswith("/about-claude/pricing")
-    for model in ("claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"):
+    assert prices.accessed == "2026-11-08" and prices.source.endswith("/about-claude/pricing")
+    for model in ("claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"):
         assert model in prices.models, model
     assert prices.web_search_usd_per_1000 == 10
     assert prices.batch_multiplier == 0.5 and prices.us_data_residency_multiplier == 1.1

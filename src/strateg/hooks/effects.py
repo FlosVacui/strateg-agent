@@ -20,6 +20,10 @@ from strateg.hooks.rules import Choice, Ctx, EventSpec, HookError, Pick, Project
 
 ACTOR = "хук"
 ONCE_PER_SESSION = "граница прав не активна"  # пишется раз за сессию: имя события — номер сессии
+# События, которые пишутся один раз на своё имя: у «учёт недоступен» имя — номер сессии или «нет цены:
+# модель»,
+# у «роль выполнена» — id субагента. Проверка под блокировкой: параллельные хуки пишут событие один раз.
+ONCE_KINDS = frozenset({ONCE_PER_SESSION, "учёт недоступен", "роль выполнена"})
 MAX_ERROR_CHARS = 500
 HIDDEN_LINE = "[строка скрыта: похожа на ключ]"
 PROJECT_ID = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
@@ -204,7 +208,7 @@ def append_event(root: Path, spec: EventSpec) -> bool:
     import yaml
 
     def build(state_bytes: bytes, journal: bytes) -> bytes | None:
-        if spec.kind == ONCE_PER_SESSION and _noted(journal, spec):
+        if spec.kind in ONCE_KINDS and _noted(journal, spec):
             return None  # проверка под блокировкой: параллельные хуки одной сессии пишут событие один раз
         try:
             state = yaml.safe_load(state_bytes.decode("utf-8-sig"))

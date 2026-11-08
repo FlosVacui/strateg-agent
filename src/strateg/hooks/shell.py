@@ -336,6 +336,32 @@ def _rest(command: str) -> tuple[list[Segment], bool]:
     return rest, False
 
 
+@dataclass(frozen=True)
+class StrategCalls:
+    """Из чего состоит команда: только ли из вызовов `strateg` и есть ли среди них `strateg fetch`."""
+
+    only: bool  # каждый сегмент — вызов CLI, без подстановок, перенаправлений и незакрытых кавычек
+    fetch: bool  # `strateg fetch` есть в какой-либо части команды
+
+
+def strateg_calls(command: str) -> StrategCalls:
+    """Бюджет (ADR-0010): `uv run strateg …` не платный, кроме `fetch`, и остаётся доступным при исчерпании.
+
+    «Только вызовы» требует, чтобы вся команда была вызовами `strateg`: `uv run strateg status; ls` и
+    `uv run strateg status | head` — уже чужая команда. Разбор снижает риск, а не гарантирует защиту (как и
+    остальной разбор Bash в этом модуле).
+    """
+    segments, closed = _split(command)
+    if not closed:
+        return StrategCalls(False, _rest(command)[1])
+    subs = [strateg_call(seg.words) for seg in segments]
+    fetch = any(sub is not None and sub.lower() == "fetch" for sub in subs)
+    only = bool(segments) and all(
+        sub is not None and not seg.subst for seg, sub in zip(segments, subs, strict=True)
+    )
+    return StrategCalls(only, fetch)
+
+
 def network_reason(command: str, *, _depth: int = 0) -> str | None:
     """Почему команда основного агента — сетевая: что нашли. None — не нашли (это не гарантия защиты)."""
     rest, fetch = _rest(command)

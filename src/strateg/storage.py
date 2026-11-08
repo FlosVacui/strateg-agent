@@ -35,7 +35,7 @@ LOCK_TIMEOUT = 10.0  # CLI; хук берёт меньше: его собств�
 HOOK_LOCK_TIMEOUT = 5.0
 LOCK_TIMEOUT_ENV = "STRATEG_LOCK_TIMEOUT"  # секунды; для тестов и для разбора зависшей блокировки
 STATE_FILE, JOURNAL_FILE = "state.yaml", "journal.jsonl"
-_JOURNAL_HASH = re.compile(r"(?m)^(  journal\.jsonl: )([0-9a-f]{64})$")
+COST_FILE = "cost.jsonl"
 
 
 def lock_timeout(default: float = LOCK_TIMEOUT) -> float:
@@ -215,18 +215,32 @@ def append_bytes(path: Path, data: bytes) -> None:
 # --- Журнал и его хеш в state.yaml -------------------------------------------------------------------------
 
 
-def recorded_journal_hash(state_text: str) -> str | None:
-    m = _JOURNAL_HASH.search(state_text)
+def _file_hash(rel: str) -> re.Pattern[str]:
+    return re.compile(rf"(?m)^(  {re.escape(rel)}: )([0-9a-f]{{64}})$")
+
+
+def recorded_file_hash(state_text: str, rel: str) -> str | None:
+    """Хеш файла `rel`, записанный в `state.yaml` (`files:`); None — строки с хешем нет."""
+    m = _file_hash(rel).search(state_text)
     return m.group(2) if m else None
+
+
+def recorded_journal_hash(state_text: str) -> str | None:
+    return recorded_file_hash(state_text, JOURNAL_FILE)
+
+
+def with_file_hash(state_bytes: bytes, rel: str, new_hash: str) -> bytes | None:
+    """`state.yaml` с новым хешем файла `rel`; None — в файле нет ровно одной строки с его хешем."""
+    text = state_bytes.decode("utf-8-sig")
+    new_text, n = _file_hash(rel).subn(lambda m: m.group(1) + new_hash, text)
+    if n != 1:
+        return None
+    return new_text.replace("\r\n", "\n").encode("utf-8")
 
 
 def with_journal_hash(state_bytes: bytes, new_hash: str) -> bytes | None:
     """`state.yaml` с новым хешем журнала; None — в файле нет ровно одной строки с хешем журнала."""
-    text = state_bytes.decode("utf-8-sig")
-    new_text, n = _JOURNAL_HASH.subn(lambda m: m.group(1) + new_hash, text)
-    if n != 1:
-        return None
-    return new_text.replace("\r\n", "\n").encode("utf-8")
+    return with_file_hash(state_bytes, JOURNAL_FILE, new_hash)
 
 
 def last_event_time(journal: bytes) -> dt.datetime | None:
@@ -261,44 +275,62 @@ def _clamp_line(line: bytes, journal: bytes) -> bytes:
     return json.dumps(event, ensure_ascii=False).encode("utf-8")
 
 
-def append_journal(
-    root: Path, build: Callable[[bytes, bytes], bytes | None], timeout: float | None = None
+def append_tracked(
+    root: Path,
+    rel: str,
+    build: Callable[[bytes, bytes], bytes | None],
+    timeout: float | None = None,
+    *,
+    clamp_lines: bool = False,
 ) -> bool:
-    """Дописывает строку в `journal.jsonl` и, если журнал не правили руками, хеш журнала в `state.yaml`.
+    """Дописывает строки в файл проекта `rel` (JSONL) и, если файл не правили руками, его хеш в `state.yaml`.
 
-    `build` получает байты `state.yaml` и журнала (под блокировкой) и возвращает строку журнала без перевода
-    строки либо None («писать нечего»). Время строки приводится под той же блокировкой: не меньше времени
-    последней строки журнала. Хеши других файлов не трогаются: правку человека принимает только команда CLI,
-    записав «изменено вне агента». Если журнал сейчас длиннее записанного хеша (идущая команда CLI уже
-    дописала свои события, а `state.yaml` ещё не сохранила), хеш не трогается: команда пересчитает его при
-    сохранении. `state.yaml` заменяется с повторами до таймаута; не вышло — журнал возвращается к прежней
-    длине и бросается `FileBusy`, чтобы событие и хеш не разошлись. Возвращает False, если проект не удалось
-    прочитать или писать нечего.
+    `build` получает байты `state.yaml` и файла (под блокировкой) и возвращает одну или несколько строк,
+    разделённых переводом строки, без завершающего перевода, либо None («писать нечего»). С `clamp_lines`
+    время каждой строки приводится под той же блокировкой: не меньше времени последней строки файла (так
+    пишется журнал). Хеши других файлов не трогаются: правку человека принимает только команда CLI, записав
+    «изменено вне агента». Если файл сейчас длиннее записанного хеша (идущая команда CLI уже дописала свои
+    строки, а `state.yaml` ещё не сохранила), хеш не трогается: команда пересчитает его при сохранении.
+    `state.yaml` заменяется с повторами до таймаута; не вышло — файл возвращается к прежней длине и
+    бросается `FileBusy`, чтобы строки и хеш не разошлись. Возвращает False, если проект не удалось прочитать
+    или писать нечего.
     """
-    state_path, journal_path = root / STATE_FILE, root / JOURNAL_FILE
+    state_path, path = root / STATE_FILE, root / rel
     seconds = lock_timeout() if timeout is None else timeout
     with project_lock(root, seconds):
         try:
             state_bytes = state_path.read_bytes()
-            journal_before = journal_path.read_bytes()
+            before = path.read_bytes()
         except OSError:
             return False
-        line = build(state_bytes, journal_before)
-        if line is None:
+        data = build(state_bytes, before)
+        if data is None:
             return False
-        line = _clamp_line(line, journal_before) + b"\n"
-        append_bytes(journal_path, line)
+        if clamp_lines:
+            data = b"\n".join(_clamp_line(line, before) for line in data.split(b"\n"))
+        data += b"\n"
+        append_bytes(path, data)
         try:
-            recorded = recorded_journal_hash(state_bytes.decode("utf-8-sig"))
+            recorded = recorded_file_hash(state_bytes.decode("utf-8-sig"), rel)
         except UnicodeDecodeError:
             return True
-        if recorded == sha256(journal_before):
-            new_state = with_journal_hash(state_bytes, sha256(journal_before + line))
+        if recorded == sha256(before):
+            new_state = with_file_hash(state_bytes, rel, sha256(before + data))
             if new_state is not None:
                 try:
                     atomic_write_bytes(state_path, new_state, seconds)
                 except BaseException:
-                    with journal_path.open("r+b") as f:
-                        f.truncate(len(journal_before))
+                    with path.open("r+b") as f:
+                        f.truncate(len(before))
                     raise
     return True
+
+
+def append_journal(
+    root: Path, build: Callable[[bytes, bytes], bytes | None], timeout: float | None = None
+) -> bool:
+    """Дописывает строку в `journal.jsonl` и хеш журнала в `state.yaml` (см. `append_tracked`).
+
+    Время строки приводится под блокировкой: не меньше времени последней строки журнала.
+    """
+    return append_tracked(root, JOURNAL_FILE, build, timeout, clamp_lines=True)
