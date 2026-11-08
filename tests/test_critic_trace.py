@@ -168,3 +168,39 @@ def test_subagent_stop_hook_leaves_the_trace_that_the_command_looks_for(cli, pro
     code, data, _ = record(cli, proj, answers(), "--by", "критик")
     assert data["critic_call"] == "подтверждён" and data["independent"] is True
     assert check_project(proj) == []
+
+
+def test_a_resumed_critic_leaves_a_new_trace_with_the_same_agent_id(cli, proj, clock):
+    """Критика возобновили сообщением: тот же `agent_id`, второе завершение. Без нового события вторая
+    запись проверки считалась бы сделанной без критика."""
+    role_done(proj, agent_id="a1")
+    assert record(cli, proj, answers(), "--by", "критик")[1]["critic_call"] == "подтверждён"
+    clock.advance(60)
+    code, data, _ = record(cli, proj, answers(Б_1="нет"), "--by", "критик")
+    assert data["critic_call"] == "не подтверждён"
+    clock.advance(60)
+    role_done(proj, agent_id="a1")  # то же имя агента, новое завершение
+    code, data, _ = record(cli, proj, answers(Б_1="нет"), "--by", "критик")
+    assert data["critic_call"] == "подтверждён" and data["independent"] is True
+    names = [e["name"] for e in journal_of(proj) if e["kind"] == "роль выполнена"]
+    assert names == ["a1", "a1#2"]
+    assert check_project(proj) == []
+
+
+def test_the_same_completion_delivered_twice_in_one_moment_is_one_trace(proj, clock):
+    assert effects.append_event(
+        proj, EventSpec("роль выполнена", "роль critic завершила работу", "a1", "critic")
+    )
+    assert not effects.append_event(
+        proj, EventSpec("роль выполнена", "роль critic завершила работу", "a1", "critic")
+    )
+    clock.advance(1)
+    assert not effects.append_event(
+        proj, EventSpec("роль выполнена", "роль critic завершила работу", "a1", "critic")
+    )
+    clock.advance(10)
+    assert effects.append_event(
+        proj, EventSpec("роль выполнена", "роль critic завершила работу", "a1", "critic")
+    )
+    names = [e["name"] for e in journal_of(proj) if e["kind"] == "роль выполнена"]
+    assert names == ["a1", "a1#2"]

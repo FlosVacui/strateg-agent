@@ -68,6 +68,7 @@ def _group(records: list[CostRecord], key: Any) -> dict[str, Bucket]:
 
 
 def _row(name_key: str, name: str, b: Bucket, total: float) -> dict[str, Any]:
+    nothing = b.calls > 0 and b.unpriced_calls == b.calls  # ни у одного вызова группы нет цены
     return {
         name_key: name,
         "models": sorted(b.models),
@@ -78,9 +79,9 @@ def _row(name_key: str, name: str, b: Bucket, total: float) -> dict[str, Any]:
         "cache_write_1h_tokens": b.cache_write_1h_tokens,
         "cache_read_tokens": b.cache_read_tokens,
         "web_searches": b.web_searches,
-        "usd": round(b.usd, 6),
+        "usd": None if nothing else round(b.usd, 6),  # нет цены нигде в группе: не «0 долларов»
         "unpriced_calls": b.unpriced_calls,
-        "share": round(b.usd / total, 4) if total > 0 else None,
+        "share": None if nothing or total <= 0 else round(b.usd / total, 4),
     }
 
 
@@ -147,6 +148,14 @@ def _usd(x: float | None) -> str:
     return "нет цены" if x is None else f"${x:.4f}".replace(".", ",")
 
 
+def _sum(row: dict[str, Any]) -> str:
+    """Сумма группы: «нет цены», если цены нет ни у одного вызова; частичная — с числом вызовов без цены."""
+    text = _usd(row["usd"])
+    if row["usd"] is not None and row["unpriced_calls"]:
+        text += f" (вызовов без цены: {row['unpriced_calls']})"
+    return text
+
+
 def _share(x: float | None) -> str:
     return "—" if x is None else f"{x * 100:.0f} %".replace(".", ",")
 
@@ -183,15 +192,13 @@ def report_lines(d: dict[str, Any]) -> list[str]:
         for row in d[key]:
             models = ", ".join(row["models"])
             lines.append(
-                f"  {row[name]}: {_usd(row['usd'])}, {_share(row['share'])}, вызовов {row['calls']}; "
+                f"  {row[name]}: {_sum(row)}, {_share(row['share'])}, вызовов {row['calls']}; "
                 f"{models}; {_tokens(row)}"
             )
     if d["models"]:
         lines.append("По моделям:")
         for row in d["models"]:
-            lines.append(
-                f"  {row['model']}: {_usd(row['usd'])}, {_share(row['share'])}, вызовов {row['calls']}"
-            )
+            lines.append(f"  {row['model']}: {_sum(row)}, {_share(row['share'])}, вызовов {row['calls']}")
     if d["unpriced_models"]:
         names = ", ".join(f"{u['model']} ({u['calls']})" for u in d["unpriced_models"])
         lines.append(f"Модели без цены в config/prices.yaml: {names}; токены записаны, сумма «нет цены».")

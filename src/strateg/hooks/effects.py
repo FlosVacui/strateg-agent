@@ -21,9 +21,13 @@ from strateg.hooks.rules import Choice, Ctx, EventSpec, HookError, Pick, Project
 ACTOR = "хук"
 ONCE_PER_SESSION = "граница прав не активна"  # пишется раз за сессию: имя события — номер сессии
 # События, которые пишутся один раз на своё имя: у «учёт недоступен» имя — номер сессии или «нет цены:
-# модель»,
-# у «роль выполнена» — id субагента. Проверка под блокировкой: параллельные хуки пишут событие один раз.
-ONCE_KINDS = frozenset({ONCE_PER_SESSION, "учёт недоступен", "роль выполнена"})
+# модель». Проверка под блокировкой: параллельные хуки пишут событие один раз.
+ONCE_KINDS = frozenset({ONCE_PER_SESSION, "учёт недоступен"})
+# «Роль выполнена» — след завершения субагента (`SubagentStop`). Имя — id субагента; возобновлённый
+# субагент завершается снова с тем же id, и это новое событие (`<id>#2`, `<id>#3`). Повтор того же хука
+# (параллельный или повторная доставка) приходит в ту же секунду и события не добавляет.
+ROLE_DONE = "роль выполнена"
+ROLE_DONE_REPEAT_SECONDS = 3.0
 MAX_ERROR_CHARS = 500
 HIDDEN_LINE = "[строка скрыта: похожа на ключ]"
 PROJECT_ID = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
@@ -196,20 +200,26 @@ def now() -> Any:
     return dt.datetime.now().astimezone().replace(microsecond=0)
 
 
-def append_event(root: Path, spec: EventSpec) -> bool:
+def append_event(root: Path, spec: EventSpec, timeout: float | None = None) -> bool:
     """Добавляет событие в `journal.jsonl` проекта и обновляет в `state.yaml` только хеш журнала.
 
     Запись идёт тем же кодом, что и у CLI (`strateg.storage`): под блокировкой папки проекта, поэтому
     параллельные хуки и команда CLI не теряют событий и не дают ложного «изменено вне агента». Хеши других
     файлов не трогаются: правку человека принимает только команда CLI. Модели проекта не подключаются: хук
     на отказе должен отвечать быстро; правильность строки проверяют тесты (`check_project`). Возвращает
-    False, если проект не удалось прочитать. Папка занята дольше таймаута — `storage.LockTimeout`.
+    False, если проект не удалось прочитать. Папка занята дольше таймаута (`timeout`, по умолчанию
+    `storage.HOOK_LOCK_TIMEOUT`) — `storage.LockTimeout`.
     """
     import yaml
 
     def build(state_bytes: bytes, journal: bytes) -> bytes | None:
         if spec.kind in ONCE_KINDS and _noted(journal, spec):
             return None  # проверка под блокировкой: параллельные хуки одной сессии пишут событие один раз
+        name = spec.name
+        if spec.kind == ROLE_DONE:
+            name = _role_done_name(journal, spec)
+            if name is None:
+                return None
         try:
             state = yaml.safe_load(state_bytes.decode("utf-8-sig"))
         except (UnicodeDecodeError, yaml.YAMLError):
@@ -224,12 +234,45 @@ def append_event(root: Path, spec: EventSpec) -> bool:
             "step": state["step"],
         }
         for key in ("name", "message", "role", "model", "level", "effort"):
-            value = getattr(spec, key)
+            value = name if key == "name" else getattr(spec, key)
             if value is not None:
                 event[key] = value
         return json.dumps(event, ensure_ascii=False).encode("utf-8")
 
-    return storage.append_journal(root, build, storage.lock_timeout(storage.HOOK_LOCK_TIMEOUT))
+    seconds = storage.lock_timeout(storage.HOOK_LOCK_TIMEOUT) if timeout is None else timeout
+    return storage.append_journal(root, build, seconds)
+
+
+def _role_done_name(journal: bytes, spec: EventSpec) -> str | None:
+    """Имя нового события «роль выполнена»: `<id>`, `<id>#2`, …; None — это повтор того же завершения."""
+    import datetime as dt
+
+    base = spec.name or ""
+    last: dict[str, Any] | None = None
+    count = 0
+    for raw in journal.split(b"\n"):
+        if spec.kind.encode("utf-8") not in raw:
+            continue
+        try:
+            e = json.loads(raw)
+        except ValueError:
+            continue
+        name = e.get("name")
+        if (
+            e.get("kind") == spec.kind
+            and isinstance(name, str)
+            and (name == base or name.startswith(base + "#"))
+        ):
+            last, count = e, count + 1
+    if last is None:
+        return base
+    try:
+        ago = (now() - dt.datetime.fromisoformat(last["time"])).total_seconds()
+    except (KeyError, TypeError, ValueError):
+        ago = ROLE_DONE_REPEAT_SECONDS  # время не прочитать: считаем новым завершением
+    if 0 <= ago < ROLE_DONE_REPEAT_SECONDS:
+        return None
+    return f"{base}#{count + 1}"
 
 
 def _noted(journal: bytes, spec: EventSpec) -> bool:

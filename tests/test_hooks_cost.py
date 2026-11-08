@@ -339,7 +339,7 @@ def test_what_stays_open_when_the_budget_is_exhausted(small, tx, home):
     spend(main, 100_000)
     outputs = str(home / "demo" / "outputs" / "report.md")
     assert pre_tx(main, "Bash", {"command": "uv run strateg status"}) is None
-    assert pre_tx(main, "Bash", {"command": "uv run strateg budget set --usd 5"}) is None
+    assert pre_tx(main, "Bash", {"command": "uv run strateg budget set --usd 0.5"}) is None  # лимит не растёт
     assert pre_tx(main, "Bash", {"command": "uv run strateg budget check --action выпуск"}) is None
     assert pre_tx(main, "Bash", {"command": "uv run strateg cost report --json"}) is None
     assert pre_tx(main, "Read", {"file_path": str(home / "demo" / "journal.jsonl")}) is None
@@ -555,3 +555,317 @@ def test_paid_calls_are_agents_web_search_playwright_and_fetch():
         ("Skill", {}),
     ):
         assert not cost.is_paid(tool, tin), tool
+
+
+# --- срок бюджетной части, сообщение «учёт недоступен», шаг, повышение лимита, частота пересчёта ----------
+
+
+@pytest.fixture
+def wall(monkeypatch):
+    """Часы пересчёта (секунды Unix) под управлением теста."""
+    from strateg import offsets
+
+    now = [1_000_000.0]
+    monkeypatch.setattr(offsets, "wall", lambda: now[0])
+    return now
+
+
+def test_gate_hands_what_is_left_of_one_deadline_to_every_wait(small, tx, monkeypatch):
+    """Единый срок на всю бюджетную часть: пересчёт и чтение проекта делят остаток, а не берут по 5 с."""
+    import time
+
+    from strateg import accounting
+    from strateg.hooks import cost
+
+    main, _ = tx
+    monkeypatch.delenv("STRATEG_LOCK_TIMEOUT", raising=False)
+    seen = {}
+
+    def slow_account(root, session, sources, *, prices=None, timeout=None):
+        seen["account"] = timeout
+        time.sleep(0.3)
+        return accounting.Result()
+
+    real_load = proj.Project.load
+
+    def load(root, timeout=None):
+        seen["load"] = timeout
+        return real_load(root, timeout=timeout)
+
+    monkeypatch.setattr(accounting, "account", slow_account)
+    monkeypatch.setattr(proj.Project, "load", staticmethod(load))
+    assert pre_tx(main, "Bash", {"command": "ls"}) is None
+    assert seen["account"] <= cost.GATE_SECONDS
+    assert seen["load"] <= seen["account"] - 0.25
+
+
+def test_busy_project_in_the_recount_lets_the_call_through_with_one_short_event(small, tx, monkeypatch):
+    from strateg import accounting, storage
+    from strateg.hooks import cost
+
+    main, _ = tx
+    notes = []
+    real = effects.append_event
+
+    def spy(root, spec, timeout=None):
+        if spec.kind == "учёт недоступен":
+            notes.append(timeout)
+        return real(root, spec, timeout)
+
+    def busy(root, session, sources, *, prices=None, timeout=None):
+        raise storage.LockTimeout(root, 5)
+
+    def busy_load(root, timeout=None):
+        raise storage.LockTimeout(root, 5)
+
+    monkeypatch.setattr(accounting, "account", busy)
+    monkeypatch.setattr(
+        proj.Project, "load", staticmethod(busy_load)
+    )  # папка занята и дальше: событие всё равно одно
+    monkeypatch.setattr(effects, "append_event", spy)
+    for _ in range(2):
+        assert pre_tx(main, "WebSearch", {"query": "x"}, "researcher") is None
+    assert notes == [cost.NOTE_SECONDS, cost.NOTE_SECONDS]  # по одной записи на вызов, не дольше 0,5 с
+    assert len(down_events(small)) == 1 and "LockTimeout" in down_events(small)[0]["message"]
+
+
+def test_busy_project_on_reading_it_writes_one_short_event_not_two(small, tx, monkeypatch):
+    from strateg import storage
+    from strateg.hooks import cost
+
+    main, _ = tx
+    notes = []
+    real = effects.append_event
+
+    def spy(root, spec, timeout=None):
+        notes.append((spec.kind, timeout))
+        return real(root, spec, timeout)
+
+    def busy(root, timeout=None):
+        raise storage.LockTimeout(root, 5)
+
+    monkeypatch.setattr(proj.Project, "load", staticmethod(busy))
+    monkeypatch.setattr(effects, "append_event", spy)
+    assert pre_tx(main, "Bash", {"command": "ls"}) is None
+    assert notes == [("учёт недоступен", cost.NOTE_SECONDS)]
+
+
+def test_accounting_down_event_has_the_kind_of_error_but_no_path_and_no_text(demo, tx, monkeypatch):
+    """У `OSError` в тексте полный путь: в журнале (он уходит в архив) ему не место."""
+    from strateg import accounting
+
+    main, _ = tx
+    write(main, assistant("m1", out=10))
+    (demo / "cost.jsonl").unlink()  # настоящий сбой: файла учёта нет
+    run_stop(main)
+    secret = chr(92).join(["C:", "Users", "Иван", "AppData", "cost.jsonl"])
+
+    def boom(*args, **kwargs):
+        raise PermissionError(13, "Отказано в доступе", secret)
+
+    monkeypatch.setattr(accounting, "account", boom)
+    runner.run_stop(stop_event(main, session_id="sess-2"), env())
+    pre_tx(main, "WebSearch", {"query": "x"}, "researcher", session_id="sess-3")
+    events = down_events(demo)
+    assert len(events) == 3
+    assert "FileNotFoundError" in events[0]["message"] and "PermissionError" in events[1]["message"]
+    for e in events:
+        for leak in (str(demo), str(demo.parent), "cost.jsonl", "Иван", "Users", "Отказано", chr(92), "/"):
+            assert leak not in e["message"], (leak, e["message"])
+
+
+def test_budget_events_hold_numbers_and_the_tool_but_no_paths(small, tx, home):
+    main, _ = tx
+    spend(main, 100_000)
+    pre_tx(main, "WebSearch", {"query": "x"}, "researcher")
+    (event,) = [e for e in journal_of(small) if e["kind"] == "бюджет" and e["actor"] == "хук"]
+    assert str(home) not in event["message"] and chr(92) not in event["message"]
+
+
+def test_cost_before_a_step_command_stays_on_the_old_step(small, tx, cli):
+    """`strateg step …` не платная и открыта, но расход до неё принадлежит прежнему шагу."""
+    main, _ = tx
+    write(main, *[assistant(f"a{i}", out=10) for i in range(5)])
+    assert pre_tx(main, "Bash", {"command": "uv run strateg step start 2а"}) is None
+    assert cli("step", "start", "2а")[0] == 0
+    append(main, *[assistant(f"b{i}", out=10) for i in range(3)])
+    run_stop(main)
+    got = [(r["step"], r["message_id"][0]) for r in costs(small)]
+    assert got == [("1", "a")] * 5 + [("2а", "b")] * 3
+    assert_clean(small)
+
+
+def test_a_status_command_does_not_recount(small, tx):
+    main, _ = tx
+    spend(main, 10)
+    assert pre_tx(main, "Bash", {"command": "uv run strateg status"}) is None
+    assert costs(small) == []
+
+
+EXHAUSTED_SETS = [
+    "uv run strateg budget set --usd 100",
+    "uv run strateg budget set --usd=100",
+    "uv run strateg budget set --us 100",
+    "uv run strateg budget set --minutes 999",
+    "uv run strateg budget set --usd 0.5 --minutes 999",
+    "uv run strateg budget set --usd 100 --json",
+    "uv run strateg budget set --usd много",
+    "uv run strateg budget set --usd 100 --project demo",
+    "uv run strateg status && uv run strateg budget set --usd 100",
+    "python -m strateg.cli budget set --usd 100",
+]
+
+
+@pytest.mark.parametrize("command", EXHAUSTED_SETS)
+def test_raising_the_limit_when_exhausted_asks_the_human(small, tx, command):
+    main, _ = tx
+    spend(main, 100_000)
+    body = pre_tx(main, "Bash", {"command": command})
+    assert body["permissionDecision"] == "ask", command
+    text = body["permissionDecisionReason"]
+    assert "Бюджет исчерпан" in text and "человек" in text and "--action выпуск" in text
+
+
+def test_asking_about_a_raise_is_written_once_and_the_cost_is_fresh(small, tx):
+    main, _ = tx
+    spend(main, 100_000)
+    assert costs(small) == []
+    for _ in range(2):
+        pre_tx(main, "Bash", {"command": "uv run strateg budget set --usd 100"})
+    assert len(costs(small)) == 1  # расход дочитан этим же вызовом: без него исчерпания не видно
+    events = [e for e in journal_of(small) if e["kind"] == "бюджет" and e["actor"] == "хук"]
+    assert len(events) == 1 and "хук спросил человека" in events[0]["message"]
+    assert_clean(small)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "uv run strateg budget set --usd 1",
+        "uv run strateg budget set --usd 0.5",
+        "uv run strateg budget set --us 0.5",
+        "uv run strateg budget set --minutes 30 --usd 1",
+        "uv run strateg budget check",
+        "uv run strateg budget check --action выпуск",
+    ],
+)
+def test_not_raising_the_limit_when_exhausted_is_not_asked(small, tx, command):
+    main, _ = tx
+    spend(main, 100_000)
+    assert pre_tx(main, "Bash", {"command": command}) is None, command
+
+
+def test_raising_the_limit_before_the_budget_runs_out_is_not_asked(small, tx):
+    main, _ = tx
+    spend(main, 50_000)
+    assert pre_tx(main, "Bash", {"command": "uv run strateg budget set --usd 100"}) is None
+
+
+def test_after_the_human_raised_the_limit_the_command_is_not_asked_again(cli, small, tx):
+    main, _ = tx
+    spend(main, 100_000)
+    assert cli("budget", "set", "--usd", "5")[0] == 0  # человек вне хука
+    assert pre_tx(main, "Bash", {"command": "uv run strateg budget set --usd 100"}) is None
+
+
+def test_the_question_comes_in_the_hook_answer_for_powershell_too(small, tx):
+    main, _ = tx
+    spend(main, 100_000)
+    raw = json.dumps(
+        {
+            "hook_event_name": "PreToolUse",
+            "session_id": SESSION,
+            "transcript_path": str(main),
+            "tool_name": "PowerShell",
+            "tool_input": {"command": "uv run strateg budget set --usd 100"},
+        }
+    ).encode("utf-8")
+    out = json.loads(runner.run_pre_tool_use(raw, env()).stdout)["hookSpecificOutput"]
+    assert out["permissionDecision"] == "ask" and out["hookEventName"] == "PreToolUse"
+
+
+@pytest.mark.parametrize(
+    ("command", "step", "sets"),
+    [
+        ("uv run strateg step start 2а", True, ()),
+        ("uv run strateg status && uv run strateg step done 1", True, ()),
+        ("uv run strateg status", False, ()),
+        ("uv run strateg budget set --usd 5 --minutes 9", False, (("--usd", "5", "--minutes", "9"),)),
+        ("uv run strateg budget check", False, ()),
+        ("python -m strateg.cli budget set --usd=5", False, (("--usd=5",),)),
+        ("ls", False, ()),
+        ("echo uv run strateg step done 1", False, ()),
+    ],
+)
+def test_strateg_calls_find_step_and_budget_set(command, step, sets):
+    from strateg.hooks import shell
+
+    got = shell.strateg_calls(command)
+    assert (got.step, got.budget_sets) == (step, sets), command
+
+
+def test_non_paid_calls_are_recounted_not_more_often_than_every_five_seconds(small, tx, wall):
+    main, _ = tx
+    spend(main, 1000)
+    assert pre_tx(main, "Bash", {"command": "ls"}) is None
+    assert [r["message_id"] for r in costs(small)] == ["m1"]
+    append(main, assistant("m2", SONNET, out=1000))
+    wall[0] += 4.9
+    assert pre_tx(main, "Bash", {"command": "ls"}) is None
+    assert [r["message_id"] for r in costs(small)] == ["m1"]  # меньше 5 с: транскрипт не читали
+    wall[0] += 0.2
+    assert pre_tx(main, "Bash", {"command": "ls"}) is None
+    assert [r["message_id"] for r in costs(small)] == ["m1", "m2"]
+
+
+def test_paid_call_is_always_recounted(small, tx, wall):
+    main, _ = tx
+    spend(main, 50_000)
+    assert pre_tx(main, "Bash", {"command": "ls"}) is None
+    append(main, assistant("m2", SONNET, out=50_000))
+    assert pre_tx(main, "WebSearch", {"query": "x"}, "researcher")["permissionDecision"] == "deny"
+    assert [r["message_id"] for r in costs(small)] == ["m1", "m2"]
+
+
+def test_exhaustion_recorded_before_is_still_refused_inside_the_five_seconds(small, tx, wall):
+    main, _ = tx
+    spend(main, 100_000)
+    assert pre_tx(main, "WebSearch", {"query": "x"}, "researcher")["permissionDecision"] == "deny"
+    wall[0] += 1
+    assert pre_tx(main, "Bash", {"command": "ls"})["permissionDecision"] == "deny"
+
+
+def test_the_time_of_the_last_recount_and_the_budget_state_are_kept_in_the_offsets_file(small, tx, wall):
+    from strateg import accounting, offsets
+
+    main, _ = tx
+    assert offsets.recount_state(small) == (None, None)
+    run_stop(main)
+    wall[0] += 3
+    assert offsets.recount_state(small) == (pytest.approx(3), False)
+    wall[0] -= 10  # часы ушли назад: пересчёта «не было»
+    assert offsets.recount_state(small) == (None, None)
+    data = json.loads(accounting.offsets_path(small).read_text(encoding="utf-8"))
+    assert data["recounted_at"] == 1_000_000.0 and data["exhausted"] is False and "files" in data
+    wall[0] += 10
+    spend(main, 100_000)
+    run_stop(main)
+    assert offsets.recount_state(small)[1] is True
+
+
+def test_inside_the_window_a_budget_that_was_enough_is_not_read_again(small, tx, wall, monkeypatch):
+    """Недавний пересчёт и «бюджета хватало»: проект заново не читается (задержка вызова)."""
+    main, _ = tx
+    spend(main, 1000)
+    assert pre_tx(main, "Bash", {"command": "ls"}) is None
+    loads = []
+    real = proj.Project.load
+    monkeypatch.setattr(
+        proj.Project, "load", staticmethod(lambda root, timeout=None: loads.append(1) or real(root, timeout))
+    )
+    wall[0] += 1
+    assert pre_tx(main, "Bash", {"command": "ls"}) is None
+    assert loads == []
+    wall[0] += 5
+    assert pre_tx(main, "Bash", {"command": "ls"}) is None
+    assert loads  # окно вышло: пересчёт и чтение проекта

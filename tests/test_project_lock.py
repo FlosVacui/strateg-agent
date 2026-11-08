@@ -20,6 +20,7 @@ from strateg import storage
 from strateg.hooks import effects, rules
 from strateg.models import CostRecord
 from strateg.project_check import check_project
+from transcripts import assistant
 
 ROOT = Path(__file__).resolve().parent.parent
 HOOK = ROOT / ".claude" / "hooks" / "pre_tool_use.py"
@@ -593,6 +594,27 @@ def test_hook_with_a_busy_folder_answers_faster_than_the_environment_timeout(hel
     out = json.loads(proc.stdout)["hookSpecificOutput"]
     assert out["permissionDecision"] == "deny" and "5 с" in out["permissionDecisionReason"]
     assert elapsed < 9  # а не 11 с: хук Claude Code не дожидается больше 15 с и пропустил бы вызов
+
+
+def test_budget_part_of_pre_tool_use_gives_up_within_its_deadline_when_the_folder_is_busy(
+    held, projects, tmp_path
+):
+    """Занятая папка не должна держать Bash дольше срока бюджетной части: хук блокирует вызов по таймауту."""
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(assistant("m1", out=10) + chr(10), encoding="utf-8")
+    event = {
+        "hook_event_name": "PreToolUse",
+        "session_id": "s-busy",
+        "cwd": "",
+        "transcript_path": str(transcript),
+        "tool_name": "Bash",
+        "tool_input": {"command": "ls"},
+    }
+    start = time.monotonic()
+    proc = run_hook(projects, event)
+    elapsed = time.monotonic() - start
+    assert proc.returncode == 0 and proc.stdout == b"", proc.stdout  # вызов пропущен, а не отказан
+    assert elapsed < 8  # срок бюджетной части 2 с и запись события до 0,5 с; было 4 ожидания по 5 с
 
 
 # --- блокировку отпускает система --------------------

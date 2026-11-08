@@ -10,6 +10,8 @@ from strateg import budget, pricing
 from strateg import transcript as tr
 from transcripts import HAIKU, OPUS, SONNET, append, assistant, user_line, write
 
+NL = chr(10)
+
 # --- разбор -------------------------------------------------------------------------------------------------
 
 
@@ -45,6 +47,23 @@ def test_the_same_message_is_counted_once_even_when_it_repeats():
     assert parsed.messages["m1"].output_tokens == 250  # выше не бывает меньше: берётся большее
 
 
+def test_repeat_of_a_message_keeps_the_largest_usage_in_any_order():
+    """Вывод растёт по ходу ответа, но устаревшая копия строки не должна уменьшать счёт."""
+    for outs in ((10, 250, 100), (250, 100), (100, 250)):
+        lines = [assistant("m1", out=n) for n in outs]
+        parsed = tr.parse(NL.join(lines).encode("utf-8"))
+        assert parsed.messages["m1"].output_tokens == 250, outs
+
+
+def test_synthetic_messages_of_the_environment_are_not_counted_as_skipped():
+    """Ответ об ошибке API (`<synthetic>`) денег не стоит и повреждением транскрипта не считается."""
+    for usage in ({"input_tokens": 0, "output_tokens": 0}, "нет", None):
+        message = {"id": "e1", "model": "<synthetic>", "usage": usage}
+        line = json.dumps({"type": "assistant", "message": message})
+        parsed = tr.parse(NL.join([line, assistant("m1", out=1)]).encode("utf-8"))
+        assert list(parsed.messages) == ["m1"] and parsed.skipped == 0, usage
+
+
 def test_broken_lines_are_skipped_and_counted_and_never_raise():
     good = assistant("m1", out=1)
     data = "\n".join(
@@ -70,7 +89,6 @@ def test_broken_lines_are_skipped_and_counted_and_never_raise():
         {"id": "m1", "model": SONNET, "usage": "много"},
         {"model": SONNET, "usage": {"input_tokens": 1, "output_tokens": 1}},  # нет id
         {"id": "m1", "usage": {"input_tokens": 1, "output_tokens": 1}},  # нет модели
-        {"id": "m1", "model": "<synthetic>", "usage": {"input_tokens": 0, "output_tokens": 0}},
         {"id": "m1", "model": SONNET, "usage": {"output_tokens": 1}},  # нет input_tokens
         {"id": "m1", "model": SONNET, "usage": {"input_tokens": "5", "output_tokens": 1}},
         {"id": "m1", "model": SONNET, "usage": {"input_tokens": -1, "output_tokens": 1}},
@@ -152,6 +170,23 @@ def test_truncated_file_is_read_from_the_start(tmp_path):
     write(path, assistant("m1", out=1))  # короче прежнего смещения
     chunk = tr.read_new(path, cursor)
     assert chunk.restarted and list(tr.parse(chunk.data).messages) == ["m1"]
+
+
+def long_line(mid: str, out: int) -> str:
+    """Строка настоящего размера: в живых транскриптах строка длиннее отпечатка начала файла (1024 байта)."""
+    record = json.loads(assistant(mid, out=out))
+    record["message"]["content"] = [{"type": "text", "text": "я" * 2000}]
+    return json.dumps(record, ensure_ascii=False)
+
+
+def test_truncated_file_with_long_lines_is_read_from_the_start_though_its_head_is_unchanged(tmp_path):
+    """Обрезка после первых строк: первые 1024 байта прежние, отличить файл можно только по размеру."""
+    path = write(tmp_path / "t.jsonl", *[long_line(f"m{i}", i) for i in range(1, 6)])
+    cursor = tr.read_new(path, tr.Cursor()).cursor
+    assert cursor.head_len == tr.HEAD_BYTES and cursor.offset > 5 * tr.HEAD_BYTES
+    write(path, long_line("m1", 1), long_line("m2", 2))  # то же начало, размер меньше смещения
+    chunk = tr.read_new(path, cursor)
+    assert chunk.restarted and list(tr.parse(chunk.data).messages) == ["m1", "m2"]
 
 
 def test_rewritten_file_of_the_same_size_is_read_from_the_start(tmp_path):

@@ -10,7 +10,9 @@
    сессии (ответвление, продолжение) расход не удваивают;
 4. для новых сообщений считает цену по `config/prices.yaml` (`strateg.pricing`); модели нет в таблице —
    токены записываются, цена «нет данных»;
-5. дописывает записи в `cost.jsonl` тем же кодом, что журнал (`storage.append_tracked`), и сохраняет смещения.
+5. дописывает записи в `cost.jsonl` тем же кодом, что журнал (`storage.append_tracked`), и сохраняет смещения,
+   время пересчёта и сведение, исчерпан ли бюджет (`strateg.offsets`): по ним хук решает, пересчитывать ли
+   расход перед вызовом, который платным не бывает.
 
 В `cost.jsonl` идут только числа, id сообщения, модель, роль и шаг: текст разговора не читается и не хранится.
 Хеш `cost.jsonl` в `state.yaml` обновляется вместе с записью, поэтому «изменено вне агента» не возникает.
@@ -28,17 +30,15 @@ from typing import Any
 
 import yaml
 
-from strateg import budget, pricing, storage
+from strateg import budget, offsets, pricing, storage
 from strateg import project as proj
 from strateg import transcript as tr
 from strateg.models import SCHEMA_VERSION, CostRecord
+from strateg.offsets import load_offsets, offsets_path
 
-SERVICE_DIR = ".tmp/cost"
-OFFSETS_FILE = "offsets.json"
 ENVIRONMENT = "claude-code"
 MAIN_ROLE = "основной"
 INTERNAL_ROLE = "служебный"  # внутренние агенты среды (подсказки, `/btw`): `agent_type` пуст
-OFFSETS_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -60,23 +60,7 @@ class Result:
     unpriced: list[str] = field(default_factory=list)  # модели без цены среди добавленных, по разу
 
 
-# --- Смещения -----------------------------------------------------------------------------------------------
-
-
-def offsets_path(root: Path) -> Path:
-    return root / SERVICE_DIR / OFFSETS_FILE
-
-
-def load_offsets(root: Path) -> dict[str, Any]:
-    """Файл смещений; нет файла или он не читается — пустые смещения (разбор начнётся с начала)."""
-    try:
-        data = json.loads(offsets_path(root).read_bytes().decode("utf-8"))
-    except (OSError, ValueError):
-        return {"version": OFFSETS_VERSION, "files": {}}
-    files = data.get("files") if isinstance(data, dict) else None
-    if not isinstance(files, dict) or data.get("version") != OFFSETS_VERSION:
-        return {"version": OFFSETS_VERSION, "files": {}}
-    return {"version": OFFSETS_VERSION, "files": files}
+# --- Смещения (лёгкая часть — `strateg.offsets`: её читает хук без тяжёлых модулей) -------------------------
 
 
 def skipped_total(root: Path) -> int:
@@ -89,8 +73,17 @@ def skipped_total(root: Path) -> int:
     return total
 
 
+def _exhausted(root: Path, seconds: float) -> bool | None:
+    """Исчерпан ли бюджет после этого пересчёта; None — проект не прочитать (хук тогда проверит сам)."""
+    try:
+        p = proj.Project.load(root, timeout=seconds)
+        return bool(budget.exhausted_reasons(budget.measure(p)))
+    except Exception:  # noqa: BLE001 - подсказка для хука необязательна: учёт от неё не зависит
+        return None
+
+
 def _save_offsets(root: Path, data: Mapping[str, Any], timeout: float) -> None:
-    folder = root / SERVICE_DIR
+    folder = root / offsets.SERVICE_DIR
     folder.mkdir(parents=True, exist_ok=True)
     text = json.dumps(data, ensure_ascii=False, sort_keys=True, indent=1) + "\n"
     storage.atomic_write_bytes(offsets_path(root), text.encode("utf-8"), timeout)
@@ -165,7 +158,7 @@ def account(
     with storage.project_lock(root, seconds):
         state_bytes = (root / storage.STATE_FILE).read_bytes()
         step = _step_of(state_bytes)
-        offsets = load_offsets(root)
+        saved = load_offsets(root)
         seen = recorded_ids((root / storage.COST_FILE).read_bytes())
         when = proj.now()
         lines: list[bytes] = []
@@ -174,7 +167,7 @@ def account(
                 if src.required:
                     raise FileNotFoundError(f"транскрипт не найден: {src.key}")
                 continue
-            entry = offsets["files"].get(src.key)
+            entry = saved["files"].get(src.key)
             old_skipped = entry.get("skipped", 0) if isinstance(entry, dict) else 0
             chunk = tr.read_new(src.path, tr.Cursor.from_dict(entry))
             parsed = tr.parse(chunk.data)
@@ -194,11 +187,17 @@ def account(
                     _record_line(usage, usd, session_id=session_id, role=src.role, step=step, when=when)
                 )
             keep = 0 if chunk.restarted else (old_skipped if isinstance(old_skipped, int) else 0)
-            offsets["files"][src.key] = {**chunk.cursor.as_dict(), "skipped": keep + parsed.skipped}
+            saved["files"][src.key] = {**chunk.cursor.as_dict(), "skipped": keep + parsed.skipped}
         if lines:
             storage.append_tracked(root, storage.COST_FILE, lambda _s, _c: b"\n".join(lines), seconds)
             result.added = len(lines)
-        _save_offsets(root, offsets, seconds)
+        saved[offsets.RECOUNTED_KEY] = offsets.wall()
+        exhausted = _exhausted(root, seconds)
+        if exhausted is not None:
+            saved[offsets.EXHAUSTED_KEY] = exhausted
+        else:
+            saved.pop(offsets.EXHAUSTED_KEY, None)
+        _save_offsets(root, saved, seconds)
     return result
 
 

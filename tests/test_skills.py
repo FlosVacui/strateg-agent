@@ -991,3 +991,10 @@ def test_frame_puts_the_question_of_the_decision_not_the_answer():
     text = (SKILLS / "frame" / "SKILL.md").read_text(encoding="utf-8")
     assert "рекомендуемый вариант" not in text
     assert "Ответ на само решение до сбора данных не предлагай" in text
+
+
+def test_package_takes_cost_and_critic_trace_from_cli():
+    """Стоимость и подтверждение вызова критика в отчёте о прогоне — из CLI, а не по памяти."""
+    text = (SKILLS / "package" / "SKILL.md").read_text(encoding="utf-8")
+    assert "uv run strateg cost report" in text
+    assert "вызов критика не подтверждён" in text

@@ -76,9 +76,9 @@ def test_report_sums_roles_steps_and_models_from_the_cost_file(cli, busy):
     assert roles["основной"]["models"] == [OPUS, SONNET]
     assert roles["основной"]["output_tokens"] == 80_000
     assert roles["researcher"]["web_searches"] == 2 and roles["researcher"]["models"] == [HAIKU]
-    assert roles["critic"]["usd"] == 0 and roles["critic"]["unpriced_calls"] == 1
+    assert roles["critic"]["usd"] is None and roles["critic"]["unpriced_calls"] == 1
     assert roles["critic"]["output_tokens"] == 500  # токены записаны, хотя цены нет
-    assert sum(r["share"] for r in d["roles"]) == pytest.approx(1.0, abs=1e-3)
+    assert sum(r["share"] or 0 for r in d["roles"]) == pytest.approx(1.0, abs=1e-3)
     assert roles["основной"]["share"] == pytest.approx(0.9 / total, abs=1e-3)
 
     steps = by(d["steps"], "step")
@@ -173,3 +173,34 @@ def test_report_breaks_down_by_messages_when_the_session_total_is_measured(cli, 
     assert d["breakdown_usd"] == pytest.approx(0.1)
     text = report(cli)
     assert "Разбивка ниже — оценка по транскриптам ($0,1000), итог проекта — измерено ($0,5000)." in text
+
+
+def test_model_without_a_price_is_not_shown_as_zero_dollars(cli, busy):
+    """Сумма группы без цены — «нет цены», а не «$0,0000, 0 %»."""
+    d = report(cli, "--json")
+    future = by(d["models"], "model")["claude-future-9"]
+    assert future["usd"] is None and future["share"] is None and future["unpriced_calls"] == 1
+    assert by(d["roles"], "role")["critic"]["usd"] is None
+    assert by(d["models"], "model")[SONNET]["usd"] is not None
+    text = report(cli)
+    assert "  claude-future-9: нет цены, —, вызовов 1" in text
+    assert "  critic: нет цены, —, вызовов 1" in text
+    assert "$0,0000" not in text
+
+
+def test_partly_priced_group_says_how_many_calls_have_no_price(cli, busy, tmp_path):
+    main, _ = session_files(tmp_path / "c", "s4")
+    write(main, assistant("p1", SONNET, out=1000), assistant("p2", "claude-future-9", out=5))
+    accounting.account(busy, "s4", [src("main", main, "основной")])
+    text = report(cli)
+    assert "(вызовов без цены: 1)" in text
+
+
+def test_synthetic_messages_do_not_show_up_as_skipped_records(cli, busy, tmp_path):
+    main, _ = session_files(tmp_path / "c", "s5")
+    fake = json.dumps({"type": "assistant", "message": {"id": "e", "model": "<synthetic>", "usage": {}}})
+    write(main, fake, fake, assistant("z1", out=1))
+    accounting.account(busy, "s5", [src("main", main, "основной")])
+    d = report(cli, "--json")
+    assert d["skipped_records"] == 0
+    assert "Пропущено при разборе" not in report(cli)

@@ -35,17 +35,21 @@ def parse_event(raw: bytes) -> dict[str, Any]:
     return data
 
 
-def deny_output(reason: str) -> str:
+def decision_output(decision: str, reason: str) -> str:
     return json.dumps(
         {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
+                "permissionDecision": decision,
                 "permissionDecisionReason": reason,
             }
         },
         ensure_ascii=False,
     )
+
+
+def deny_output(reason: str) -> str:
+    return decision_output("deny", reason)
 
 
 def crash_output(exc: BaseException) -> str:
@@ -96,7 +100,9 @@ def budget_output(event: Mapping[str, Any], ctx: rules.Ctx, decision: rules.Deci
         if not rules.is_claude_code(event):
             return decision.output()  # транскрипт чужой среды не разбираем: бюджет держат скилл и CLI
         verdict = cost.gate(event, ctx)
-        return deny_output(verdict.reason) if verdict.reason else decision.output()
+        if not verdict.reason:
+            return decision.output()
+        return decision_output("ask" if verdict.ask else "deny", verdict.reason)
     except Exception:  # noqa: BLE001 - бюджет необязателен для работы
         return decision.output()
 

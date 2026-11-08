@@ -1,7 +1,8 @@
 """Разбор транскрипта Claude Code для учёта стоимости (ADR-0010): чистые функции без файлов и сети.
 
 Транскрипт — JSONL: на каждую строку один объект. Формат внутренний и меняется между версиями среды, поэтому
-разбор берёт только то, что нужно учёту, и ничего не делает с текстом разговора. Из сообщения ассистента
+разбор берёт только то, что нужно учёту, и ничего не делает с текстом разговора. Служебные сообщения среды
+(`model: <synthetic>`) не стоят денег и в пропуски не входят. Из сообщения ассистента
 (`type: assistant`) берутся:
 
 - `message.id` — ключ против удвоения: сообщение с несколькими блоками (мысль, текст, вызов инструмента)
@@ -151,6 +152,8 @@ def parse(data: bytes) -> Parsed:
         if not isinstance(record, dict) or record.get("type") != "assistant":
             continue
         message = record.get("message")
+        if isinstance(message, dict) and message.get("model") == SYNTHETIC_MODEL:
+            continue  # служебное сообщение среды (ошибка API, прерывание): не деньги и не повреждение
         found = usage_of(message) if isinstance(message, dict) else None
         if found is None:
             out.skipped += 1
