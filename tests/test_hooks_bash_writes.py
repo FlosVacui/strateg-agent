@@ -1,4 +1,4 @@
-"""Запись через Bash: `cd`, git, dd, copy, ren, `sed -Ei`, `>|`, флаги, файлы состояния, блокировка."""
+"""Запись через Bash: `cd`, git, dd, copy, ren, `sed -Ei`, `>|`, флаги, файлы состояния, блокировка, учёт."""
 
 from __future__ import annotations
 
@@ -251,3 +251,68 @@ def test_other_files_in_tmp_stay_writable_and_removable():
             "Write", {"file_path": "projects/demo/.tmp/lock.yaml", "content": "x"}, svc=with_active("demo")
         )
     )
+
+
+# --- .tmp/cost/ ---
+
+
+@pytest.mark.parametrize("env", [None, DEV])
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo '{}' > projects/demo/.tmp/cost/offsets.json",
+        "rm projects/demo/.tmp/cost/offsets.json",
+        "rm -rf projects/demo/.tmp/cost",
+        "mv projects/demo/.tmp/cost /tmp/x",
+        "cp /tmp/x.json projects/demo/.tmp/cost/offsets.json",
+        "Set-Content projects/demo/.tmp/cost/offsets.json x",
+        "Remove-Item -Recurse projects/demo/.tmp/cost",
+    ],
+)
+def test_cost_service_folder_cannot_be_written_or_removed_through_bash(command, env):
+    """Иначе агент перепишет `exhausted` или `recounted_at` и обойдёт бюджет на неплатных вызовах."""
+    refused(bash(command, env=env), ".tmp/cost/", "учёт стоимости")
+
+
+@pytest.mark.parametrize("env", [None, DEV])
+@pytest.mark.parametrize("agent", [None, "critic", "researcher"])
+@pytest.mark.parametrize("tool", ["Write", "Edit", "MultiEdit"])
+def test_cost_service_file_cannot_be_written_by_file_tools(tool, agent, env):
+    tin = {
+        "file_path": "projects/demo/.tmp/cost/offsets.json",
+        "content": "{}",
+        "old_string": "a",
+        "new_string": "b",
+    }
+    d = decide(tool, tin, agent, env=env, svc=with_active("demo"))
+    # критику и исследователю запись закрыта целиком — отказ по роли раньше проверки файлов CLI
+    refused(d, *((".tmp/cost/",) if agent is None else ()))
+
+
+def test_cost_service_folder_closed_on_windows_in_any_case():
+    refused(
+        decide(
+            "Write",
+            {"file_path": r"projects\demo\.TMP\Cost\offsets.json", "content": "{}"},
+            penv=NT,
+            svc=with_active("demo"),
+        ),
+        ".tmp/cost/",
+    )
+
+
+def test_files_next_to_cost_service_folder_stay_writable():
+    allowed(bash("echo x > projects/demo/.tmp/cost.yaml"))
+    allowed(bash("echo x > projects/demo/.tmp/costs/a.yaml"))
+    allowed(
+        decide(
+            "Write", {"file_path": "projects/demo/.tmp/cost-note.md", "content": "x"}, svc=with_active("demo")
+        )
+    )
+
+
+def test_cost_service_folder_name_matches_the_offsets_module():
+    from strateg.hooks import rules
+    from strateg.offsets import SERVICE_DIR
+
+    assert rules.COST_OWNED == SERVICE_DIR + "/"

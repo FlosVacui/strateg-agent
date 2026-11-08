@@ -251,12 +251,19 @@ def _cli_owned(rel: tuple[str, ...]) -> str | None:
         return (
             LOCK_OWNED  # файл блокировки папки проекта и папка `.tmp/` целиком (с ней удаляется блокировка)
         )
+    if head == TMP and rel[1] == COST_NAME:
+        return COST_OWNED  # учёт стоимости: смещения разбора транскриптов и сведение «бюджета хватает»
     return None
 
 
 def _cli_hint(name: str) -> str:
     if name == LOCK_OWNED:
         return "это файл блокировки папки проекта; `.tmp/` целиком не трогай, лишние файлы убирай по одному"
+    if name == COST_OWNED:
+        return (
+            "это учёт стоимости, его пишут хуки и CLI; расход — `uv run strateg cost report`, "
+            "лимит — `uv run strateg budget check`"
+        )
     if name == "claims.yaml":
         return "утверждения — `uv run strateg claim add|replace|revoke`"
     if name in ("sources.yaml", "sources/"):
@@ -270,6 +277,7 @@ def _cli_hint(name: str) -> str:
 PATTERN_SEPARATORS = re.compile(r"[/\\{},]")
 OUTPUTS, TMP = "outputs", ".tmp"
 LOCK_NAME, LOCK_OWNED = "lock", ".tmp/lock"
+COST_NAME, COST_OWNED = "cost", ".tmp/cost/"  # = `strateg.offsets.SERVICE_DIR`: модуль не грузим ради имени
 CRITIC_CLOSED_DIRS = {
     "inputs": "там материалы человека",
     TMP: "там рабочие файлы агента",
@@ -532,9 +540,9 @@ def _decide_shell(
 def _bash_write_reason(command: str, cwd: str, ctx: Ctx, svc: Services) -> str | None:
     """Запись через Bash (перенаправление, `tee`, `sed -i`, `cp`, `rm`, `Set-Content` …).
 
-    Файлы состояния CLI и `.tmp/lock` закрыты всегда; вне `outputs/` и `.tmp/` активного проекта — без
-    `STRATEG_DEV=1`. Смена папки в команде с записью без `STRATEG_DEV=1` — отказ: относительные пути после
-    неё не привести.
+    Файлы состояния CLI, `.tmp/lock` и `.tmp/cost/` закрыты всегда; вне `outputs/` и `.tmp/` активного
+    проекта — без `STRATEG_DEV=1`. Смена папки в команде с записью без `STRATEG_DEV=1` — отказ: относительные
+    пути после неё не привести.
     """
     targets = shell.write_targets(command)
     if not targets:
