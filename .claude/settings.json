@@ -67,6 +67,50 @@
         ]
       }
     ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv",
+            "args": [
+              "run",
+              "--frozen",
+              "--project",
+              "${CLAUDE_PROJECT_DIR}",
+              "python",
+              "-X",
+              "utf8",
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/stop.py"
+            ],
+            "timeout": 15,
+            "onFailure": "continue"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv",
+            "args": [
+              "run",
+              "--frozen",
+              "--project",
+              "${CLAUDE_PROJECT_DIR}",
+              "python",
+              "-X",
+              "utf8",
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/subagent_stop.py"
+            ],
+            "timeout": 15,
+            "onFailure": "continue"
+          }
+        ]
+      }
+    ],
     "PostToolUseFailure": [
       {
         "hooks": [

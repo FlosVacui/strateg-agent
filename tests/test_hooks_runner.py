@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+from pathlib import Path
 
 import pytest
 
@@ -14,6 +15,7 @@ from strateg.hooks import effects, rules, runner
 from strateg.project_check import check_project
 
 SESSION = "sess-1"
+EMPTY_TRANSCRIPT = str(Path(__file__).parent / "fixtures" / "transcripts" / "empty.jsonl")
 
 
 def env(**extra) -> dict[str, str]:
@@ -25,7 +27,13 @@ def env(**extra) -> dict[str, str]:
 
 
 def event(tool, tin=None, agent=None, name="PreToolUse", session=SESSION, **extra):
-    data = {"hook_event_name": name, "session_id": session, "tool_name": tool, "tool_input": tin or {}}
+    data = {
+        "hook_event_name": name,
+        "session_id": session,
+        "transcript_path": EMPTY_TRANSCRIPT,  # платный вызов дочитывает транскрипт: он должен быть
+        "tool_name": tool,
+        "tool_input": tin or {},
+    }
     if agent:
         data["agent_type"] = agent
         data["agent_id"] = "a-1"

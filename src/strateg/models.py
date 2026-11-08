@@ -333,6 +333,7 @@ EventKind = Literal[
     "отказ хука",
     "граница прав не активна",
     "задание исследователю",
+    "роль выполнена",
 ]
 ActionStatus = Literal["начато", "выполнено", "ошибка", "пропущено", "прервано"]
 
@@ -819,7 +820,7 @@ class JournalEvent(_Model):
     duration_s: Number | None = Field(None, ge=0, description="Длительность действия, секунды")
     gate: GateEvent | None = None
     mode: Mode | None = Field(None, description="Для смены режима")
-    role: Text | None = Field(None, description="Для выбора модели")
+    role: Text | None = Field(None, description="Для выбора модели и «роль выполнена»: имя роли")
     model: Text | None = Field(None, description="Для выбора модели")
     level: Text | None = Field(None, description="Для выбора модели: уровень (сильная, средняя, дешёвая)")
     effort: Text | None = Field(None, description="Для выбора модели: effort роли")
@@ -866,6 +867,7 @@ class JournalEvent(_Model):
             "отказ хука",
             "граница прав не активна",
             "задание исследователю",
+            "роль выполнена",
         )
         if k in needs_message and self.message is None:
             p.append(f"у события «{k}» нет пояснения (message)")
@@ -1534,6 +1536,7 @@ class DecisionsFile(_Model):
 
 CheckedBy = Literal["критик", "агент"]
 CompletenessResult = Literal["пройдено", "не пройдено"]
+CriticCall = Literal["подтверждён", "не подтверждён"]
 RubricAnswer = Literal["да", "нет"]
 PartAId = Annotated[str, Field(pattern=r"^А-[1-9][0-9]*$")]
 PartBId = Annotated[str, Field(pattern=r"^Б-[1-9][0-9]*$")]
@@ -1577,10 +1580,20 @@ class CompletenessFile(_Model):
     part_b: list[PartBAnswer] = Field(description="Ответы критика на вопросы части Б")
     result: CompletenessResult = Field(description="Итог по pass_rule рубрики")
     failed: list[str] = Field(default_factory=list, description="Номера признаков и вопросов с ответом «нет»")
+    critic_call: CriticCall | None = Field(
+        None,
+        description=(
+            "Только при by: критик. «подтверждён» — в журнале есть событие «роль выполнена» для критика "
+            "на этом шаге после прошлой записи проверки; «не подтверждён» — такого события нет, "
+            "и проверка не считается независимой"
+        ),
+    )
 
     @model_validator(mode="after")
     def _rules(self) -> Self:
         p: list[str] = []
+        if self.critic_call is not None and self.by != "критик":
+            p.append("critic_call бывает только у проверки by: критик")
         ids = [r.id for r in self.part_a] + [r.id for r in self.part_b]
         for dup in sorted({i for i in ids if ids.count(i) > 1}):
             p.append(f"номер {dup} встречается больше одного раза")

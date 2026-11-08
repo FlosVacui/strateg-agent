@@ -421,9 +421,11 @@ def test_by_is_required_there_is_no_default(cli, proj):
     assert tree_hashes(proj) == before and not (proj / "completeness.yaml").exists()
 
 
-def test_by_critic_is_recorded_as_independent(cli, proj):
+def test_by_critic_without_a_trace_of_the_critic_is_not_independent(cli, proj):
+    """Слово «критик» в `--by` ещё не вызов критика: след оставляет хук (см. test_critic_trace)."""
     code, data, _ = record(cli, proj, answers(), "--by", "критик")
-    assert code == 0 and data["independent"] is True and saved(proj)["by"] == "критик"
+    assert code == 0 and data["independent"] is False and data["critic_call"] == "не подтверждён"
+    assert saved(proj)["by"] == "критик" and saved(proj)["critic_call"] == "не подтверждён"
 
 
 def test_unknown_executor_is_a_usage_error(cli, proj):

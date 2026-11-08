@@ -612,19 +612,18 @@ def work_seconds(events: list[JournalEvent], at: dt.datetime | None = None) -> f
     return total
 
 
-def cost_total(records: list[CostRecord]) -> tuple[float | None, str, bool]:
-    """Стоимость проекта: (сумма USD или None, точность, полнота).
+def counted_costs(records: list[CostRecord]) -> tuple[list[CostRecord], bool]:
+    """Записи, из которых складывается стоимость проекта, и признак полноты.
 
-    По каждой сессии берётся последний «итог сессии», а если его нет — сумма записей «по сообщению»;
-    сессии складываются (ADR-0010). Точность — «измерено», только если все записи измерены.
+    По каждой сессии берётся последний «итог сессии», а если его нет — записи «по сообщению»; у итога
+    сверху остаются записи «по сообщению» после него. Сессии складываются (ADR-0010). Полнота пропадает,
+    если у сессии только итог без цены или у учтённой записи нет цены.
     """
     by_session: dict[str, list[CostRecord]] = {}
     for r in records:
         by_session.setdefault(r.session_id, []).append(r)
-    total = 0.0
-    known = False
+    counted_all: list[CostRecord] = []
     complete = True
-    sources: set[str] = set()
     for recs in by_session.values():
         priced_totals = [i for i, r in enumerate(recs) if r.entry == "итог сессии" and r.cost_usd is not None]
         messages = [r for r in recs if r.entry == "по сообщению"]
@@ -635,14 +634,21 @@ def cost_total(records: list[CostRecord]) -> tuple[float | None, str, bool]:
             counted = messages
         if not counted:
             complete = False  # у сессии только итог без цены
-        for r in counted:
-            if r.cost_usd is None:
-                complete = False
-            else:
-                known = True
-                total += r.cost_usd
-                sources.add(r.cost_source)
-    if not known:
+        if any(r.cost_usd is None for r in counted):
+            complete = False
+        counted_all += counted
+    return counted_all, complete
+
+
+def cost_total(records: list[CostRecord]) -> tuple[float | None, str, bool]:
+    """Стоимость проекта: (сумма USD или None, точность, полнота).
+
+    Что складывается — см. `counted_costs`. Точность — «измерено», только если все записи измерены.
+    """
+    counted, complete = counted_costs(records)
+    priced = [r for r in counted if r.cost_usd is not None]
+    if not priced:
         return None, "нет данных", False
-    precision = "измерено" if sources == {"измерено"} else "оценка"
+    total = sum(r.cost_usd for r in priced if r.cost_usd is not None)
+    precision = "измерено" if {r.cost_source for r in priced} == {"измерено"} else "оценка"
     return round(total, 6), precision, complete

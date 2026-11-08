@@ -1,7 +1,10 @@
 # Цены Anthropic API (ADR-0010): USD за миллион токенов, абсолютные, не множители.
 # Ключи — id моделей, как они пишутся в транскрипте и в «Claude API ID» на странице моделей.
 # Взято только со страницы цен; число, которого на странице нет, в файл не пишется.
-accessed: "2026-11-07"
+# В таблице все модели из таблицы цен, которые не сняты с API и выбираются в Claude Code. Не вошли: Claude Opus 4.1,
+# Opus 4 и Sonnet 4 (сняты с API), Claude Mythos 5 и 5.1 (ограниченный доступ; id на странице цен не назван).
+# Суффикс даты в id (claude-sonnet-4-5-20250929) и суффикс окна контекста ([1m]) при поиске отбрасываются.
+accessed: "2026-11-08"
 source: https://platform.claude.com/docs/en/about-claude/pricing
 
 models:
@@ -11,18 +14,72 @@ models:
     cache_write_5m: 12.5
     cache_write_1h: 20
     cache_read: 0.25 # 0,025 от цены ввода
+  claude-fable-5:
+    input: 10
+    output: 50
+    cache_write_5m: 12.5
+    cache_write_1h: 20
+    cache_read: 1
   claude-opus-5-5:
     input: 4
     output: 20
     cache_write_5m: 5
     cache_write_1h: 8
     cache_read: 0.2 # 0,05 от цены ввода
+  claude-opus-5:
+    input: 5
+    output: 25
+    cache_write_5m: 6.25
+    cache_write_1h: 10
+    cache_read: 0.5
+  claude-opus-4-8:
+    input: 5
+    output: 25
+    cache_write_5m: 6.25
+    cache_write_1h: 10
+    cache_read: 0.5
+  claude-opus-4-7:
+    input: 5
+    output: 25
+    cache_write_5m: 6.25
+    cache_write_1h: 10
+    cache_read: 0.5
+  claude-opus-4-6:
+    input: 5
+    output: 25
+    cache_write_5m: 6.25
+    cache_write_1h: 10
+    cache_read: 0.5
+  claude-opus-4-5:
+    input: 5
+    output: 25
+    cache_write_5m: 6.25
+    cache_write_1h: 10
+    cache_read: 0.5
   claude-sonnet-5-5:
     input: 2
     output: 10
     cache_write_5m: 2.5
     cache_write_1h: 4
     cache_read: 0.1 # 0,05 от цены ввода
+  claude-sonnet-5:
+    input: 2 # цена при запуске стала обычной; повышения до $3/$15 не будет
+    output: 10
+    cache_write_5m: 2.5
+    cache_write_1h: 4
+    cache_read: 0.2
+  claude-sonnet-4-6:
+    input: 3
+    output: 15
+    cache_write_5m: 3.75
+    cache_write_1h: 6
+    cache_read: 0.3
+  claude-sonnet-4-5:
+    input: 3
+    output: 15
+    cache_write_5m: 3.75
+    cache_write_1h: 6
+    cache_read: 0.3
   claude-haiku-5-5:
     # Для запроса до 100 000 токенов ввода. В ввод входят и токены чтения и записи кэша; каждый запрос
     # оценивается отдельно: длиннее порога — цены из long_prompt.
@@ -38,15 +95,29 @@ models:
       cache_write_5m: 0.625
       cache_write_1h: 1
       cache_read: 0.05
+  claude-haiku-4-5:
+    input: 1
+    output: 5
+    cache_write_5m: 1.25
+    cache_write_1h: 2
+    cache_read: 0.1
 
 # Веб-поиск: $10 за 1000 поисков сверх токенов.
 web_search_usd_per_1000: 10
 # Пакетный режим: скидка 50 % на ввод и вывод.
 batch_multiplier: 0.5
-# Ответ только из США (inference_geo: "us"): ×1,1 на все цены, включая кэш.
+# Ответ только из США (inference_geo: "us"; для моделей 4.6 и новее): ×1,1 на все цены токенов, включая кэш.
+# На цену веб-поиска множитель не действует.
 us_data_residency_multiplier: 1.1
-# Быстрый режим: цены ввода и вывода выше обычных, множители кэша и региона применяются сверху.
+# Быстрый режим (Opus 5.5; Opus 5 и Opus 4.8 — в исследовательском просмотре): цены ввода и вывода выше обычных,
+# множители кэша и региона применяются сверху. Пакетного режима с быстрым нет.
 fast_mode:
   claude-opus-5-5:
     input: 8
     output: 40
+  claude-opus-5:
+    input: 10
+    output: 50
+  claude-opus-4-8:
+    input: 10
+    output: 50

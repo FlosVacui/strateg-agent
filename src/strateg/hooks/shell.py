@@ -251,29 +251,28 @@ def _program_like(word: str) -> bool:
     )
 
 
-def _after_strateg(words: tuple[str, ...], start: int, *, scan: bool) -> str | None:
-    """Слово после `strateg` в `words[start:]`; `scan=False` — только на первом месте (без `uv run`)."""
+def _tail_after_strateg(words: tuple[str, ...], start: int, *, scan: bool) -> tuple[str, ...] | None:
+    """Слова после `strateg` в `words[start:]`; `scan=False` — только на первом месте (без `uv run`)."""
     for k in range(start, len(words)):
         prog = _program(words[k])
         if prog == "strateg":
-            return words[k + 1] if k + 1 < len(words) else ""
+            return words[k + 1 :]
         if PYTHON_NAME.match(prog):
             for j in range(k + 1, len(words) - 1):
                 if words[j] == "-m" and _program(words[j + 1]) in ("strateg", "strateg.cli"):
-                    return words[j + 2] if j + 2 < len(words) else ""
+                    return words[j + 2 :]
             return None
         if not scan or _program_like(words[k]):
             return None  # другая программа: `strateg` дальше по строке — её аргумент
     return None
 
 
-def strateg_call(words: tuple[str, ...]) -> str | None:
-    """Подкоманда `strateg`, если сегмент — вызов CLI (`uv run strateg …`, `python -m strateg.cli …`).
+def strateg_tail(words: tuple[str, ...]) -> tuple[str, ...] | None:
+    """Слова после `strateg`, если сегмент — вызов CLI (`uv run strateg …`, `python -m strateg.cli …`).
 
     После `uv run` стоят флаги uv, любые, в том числе неизвестные нам, поэтому слово `strateg` ищется среди
     слов сегмента, а не после списка флагов. Чужая программа раньше него отменяет вызов
-    (`uv run curl x strateg`).
-    Возвращает слово после `strateg` (или пустую строку, если его нет); None — это не вызов `strateg`.
+    (`uv run curl x strateg`). None — это не вызов `strateg`.
     """
     i = _command_index(words)
     while i < len(words) and _program(words[i]) in WRAPPERS:
@@ -285,8 +284,17 @@ def strateg_call(words: tuple[str, ...]) -> str | None:
         rest = words[i + 1 :]
         if "run" not in rest:
             return None
-        return _after_strateg(rest, rest.index("run") + 1, scan=True)
-    return _after_strateg(words, i, scan=False)
+        return _tail_after_strateg(rest, rest.index("run") + 1, scan=True)
+    return _tail_after_strateg(words, i, scan=False)
+
+
+def strateg_call(words: tuple[str, ...]) -> str | None:
+    """Подкоманда `strateg`, если сегмент — вызов CLI. Слово после `strateg` (пустая строка, если его нет);
+    None — это не вызов `strateg`."""
+    tail = strateg_tail(words)
+    if tail is None:
+        return None
+    return tail[0] if tail else ""
 
 
 def _network_word(words: tuple[str, ...], *, loose: bool = False) -> str | None:
@@ -334,6 +342,41 @@ def _rest(command: str) -> tuple[list[Segment], bool]:
                 continue
         rest.append(seg)
     return rest, False
+
+
+@dataclass(frozen=True)
+class StrategCalls:
+    """Из чего состоит команда: только ли из вызовов `strateg` и есть ли среди них `strateg fetch`."""
+
+    only: bool  # каждый сегмент — вызов CLI, без подстановок, перенаправлений и незакрытых кавычек
+    fetch: bool  # `strateg fetch` есть в какой-либо части команды
+    step: bool = False  # есть `strateg step …`: команда меняет шаг, расход до неё надо отнести к старому шагу
+    budget_sets: tuple[tuple[str, ...], ...] = ()  # аргументы каждого `strateg budget set …` (не `check`)
+
+
+def strateg_calls(command: str) -> StrategCalls:
+    """Бюджет (ADR-0010): `uv run strateg …` не платный, кроме `fetch`, и остаётся доступным при исчерпании.
+
+    «Только вызовы» требует, чтобы вся команда была вызовами `strateg`: `uv run strateg status; ls` и
+    `uv run strateg status | head` — уже чужая команда. Разбор снижает риск, а не гарантирует защиту (как и
+    остальной разбор Bash в этом модуле).
+    """
+    segments, closed = _split(command)
+    if not closed:
+        return StrategCalls(False, _rest(command)[1])
+    tails = [strateg_tail(seg.words) for seg in segments]
+    subs = [None if t is None else (t[0] if t else "") for t in tails]
+    fetch = any(sub is not None and sub.lower() == "fetch" for sub in subs)
+    only = bool(segments) and all(
+        sub is not None and not seg.subst for seg, sub in zip(segments, subs, strict=True)
+    )
+    step = any(sub is not None and sub.lower() == "step" for sub in subs)
+    sets = tuple(
+        t[2:]
+        for t in tails
+        if t is not None and len(t) >= 2 and t[0].lower() == "budget" and t[1].lower() != "check"
+    )
+    return StrategCalls(only, fetch, step, sets)
 
 
 def network_reason(command: str, *, _depth: int = 0) -> str | None:

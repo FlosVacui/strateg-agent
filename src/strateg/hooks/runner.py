@@ -2,7 +2,7 @@
 
 Ответ хука — один объект JSON в стандартном выводе и больше ничего: всё, что печатают вызываемые команды
 CLI, перехватывается. Сбой хука прав — отказ с текстом «хук прав не сработал: …». Сбой остальных хуков
-вызов не блокирует.
+вызов не блокирует; бюджет после прав тоже: сбой учёта — вызов пропускается и пишется «учёт недоступен».
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from strateg.hooks import effects, flags, rules
+from strateg.hooks import cost, effects, flags, rules
 
 NO_PROJECT_TEXT = "Проекта нет, начни с `strateg new`."
 MAX_REASON_CHARS = 300
@@ -35,17 +35,21 @@ def parse_event(raw: bytes) -> dict[str, Any]:
     return data
 
 
-def deny_output(reason: str) -> str:
+def decision_output(decision: str, reason: str) -> str:
     return json.dumps(
         {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
+                "permissionDecision": decision,
                 "permissionDecisionReason": reason,
             }
         },
         ensure_ascii=False,
     )
+
+
+def deny_output(reason: str) -> str:
+    return decision_output("deny", reason)
 
 
 def crash_output(exc: BaseException) -> str:
@@ -65,7 +69,7 @@ def run_pre_tool_use(
     ctx: rules.Ctx | None = None,
     services: rules.Services | None = None,
 ) -> HookResult:
-    """Права и модель роли. `ctx` и `services` подставляют тесты; на деле их собирает `effects`."""
+    """Права, модель роли, затем бюджет (ADR-0009, ADR-0010). `ctx` и `services` подставляют тесты."""
     if flags.hooks_off(env):
         return HookResult()
     try:
@@ -83,9 +87,24 @@ def run_pre_tool_use(
             note = "хук: событие «отказ хука» не записано в журнал: " + effects.clip(
                 str(exc), MAX_REASON_CHARS
             )
-        return HookResult(decision.output(), stderr=note)
+        if decision.denied:
+            return HookResult(decision.output(), stderr=note)
     except Exception as exc:
         return HookResult(crash_output(exc))
+    return HookResult(budget_output(event, ctx, decision), stderr=note)
+
+
+def budget_output(event: Mapping[str, Any], ctx: rules.Ctx, decision: rules.Decision) -> str:
+    """Ответ после бюджета: отказ с текстом либо прежнее решение о правах. Сбой бюджет не блокирует."""
+    try:
+        if not rules.is_claude_code(event):
+            return decision.output()  # транскрипт чужой среды не разбираем: бюджет держат скилл и CLI
+        verdict = cost.gate(event, ctx)
+        if not verdict.reason:
+            return decision.output()
+        return decision_output("ask" if verdict.ask else "deny", verdict.reason)
+    except Exception:  # noqa: BLE001 - бюджет необязателен для работы
+        return decision.output()
 
 
 # --- SessionStart ------------------------------------------------------------------------------------------
@@ -167,4 +186,43 @@ def run_post_tool_use_failure(raw: bytes, env: Mapping[str, str]) -> HookResult:
         _run_cli(argv)
     except Exception:
         pass  # сбой учёта работу не блокирует
+    return HookResult()
+
+
+# --- Stop и SubagentStop -----------------------------------------------------------------------------------
+
+
+def _stop_context(raw: bytes, env: Mapping[str, str]) -> tuple[dict[str, Any], Any] | None:
+    """Событие и папка активного проекта; None — хук ничего не делает (выключен, чужая среда, нет проекта)."""
+    if flags.hooks_off(env):
+        return None
+    event = parse_event(raw)
+    if not rules.is_claude_code(event):
+        return None
+    root = effects.active_project_root(effects.make_ctx(event, env))
+    return (event, root) if root is not None else None
+
+
+def run_stop(raw: bytes, env: Mapping[str, str]) -> HookResult:
+    """Конец хода основного агента: стоимость новых сообщений основного транскрипта (ADR-0010)."""
+    try:
+        found = _stop_context(raw, env)
+        if found is not None:
+            event, root = found
+            cost.refresh(event, root, main=True, sweep=True)
+    except Exception:  # noqa: BLE001 - сбой учёта работу не блокирует
+        pass
+    return HookResult()
+
+
+def run_subagent_stop(raw: bytes, env: Mapping[str, str]) -> HookResult:
+    """Конец работы субагента: след роли в журнале и стоимость его транскрипта (ADR-0010)."""
+    try:
+        found = _stop_context(raw, env)
+        if found is not None:
+            event, root = found
+            cost.role_done(event, root)
+            cost.refresh(event, root, main=False, sweep=False, own_required=True)
+    except Exception:  # noqa: BLE001 - сбой учёта работу не блокирует
+        pass
     return HookResult()

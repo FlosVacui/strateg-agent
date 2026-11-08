@@ -218,6 +218,80 @@ def test_failure_script_never_blocks_on_garbage(product):
     assert proc.returncode == 0 and proc.stdout == b""
 
 
+def new_demo(product: Path) -> dict:
+    env = {
+        **os.environ,
+        "PYTHONPATH": str(product / "src"),
+        "PYTHONUTF8": "1",
+        "STRATEG_PROJECTS_DIR": str(product / "projects"),
+    }
+    cli = [sys.executable, "-X", "utf8", "-m", "strateg.cli"]
+    subprocess.run([*cli, "new", "demo"], env=env, cwd=product, capture_output=True, check=True)
+    return env
+
+
+def test_stop_script_writes_the_cost_and_prints_nothing(product, tmp_path):
+    new_demo(product)
+    transcript = tmp_path / "claude" / "sess.jsonl"
+    transcript.parent.mkdir()
+    usage = {"input_tokens": 3, "output_tokens": 1000}
+    record = {"type": "assistant", "message": {"id": "m1", "model": "claude-sonnet-5-5", "usage": usage}}
+    transcript.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    event = {
+        "hook_event_name": "Stop",
+        "session_id": "s",
+        "transcript_path": str(transcript),
+        "cwd": str(product),
+    }
+    proc = run_hook(product, "stop.py", event)
+    assert proc.returncode == 0 and proc.stdout == b"" and proc.stderr == b""
+    lines = (product / "projects" / "demo" / "cost.jsonl").read_text(encoding="utf-8").splitlines()
+    (row,) = [json.loads(line) for line in lines]
+    assert row["message_id"] == "m1" and row["role"] == "основной" and row["cost_source"] == "оценка"
+    assert run_hook(product, "stop.py", event).stdout == b""  # повтор не удваивает
+    again = (product / "projects" / "demo" / "cost.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(again) == 1
+
+
+def test_subagent_stop_script_writes_the_role_trace(product, tmp_path):
+    new_demo(product)
+    main = tmp_path / "claude" / "sess.jsonl"
+    agent = tmp_path / "claude" / "sess" / "subagents" / "agent-a1.jsonl"
+    agent.parent.mkdir(parents=True)
+    main.write_text("", encoding="utf-8")
+    usage = {"input_tokens": 1, "output_tokens": 10}
+    record = {"type": "assistant", "message": {"id": "s1", "model": "claude-haiku-5-5", "usage": usage}}
+    agent.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    event = {
+        "hook_event_name": "SubagentStop",
+        "session_id": "s",
+        "transcript_path": str(main),
+        "agent_id": "a1",
+        "agent_type": "critic",
+        "agent_transcript_path": str(agent),
+        "cwd": str(product),
+    }
+    proc = run_hook(product, "subagent_stop.py", event)
+    assert proc.returncode == 0 and proc.stdout == b"" and proc.stderr == b""
+    root = product / "projects" / "demo"
+    kinds = [
+        json.loads(line)["kind"] for line in (root / "journal.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert "роль выполнена" in kinds
+    assert json.loads((root / "cost.jsonl").read_text(encoding="utf-8"))["role"] == "critic"
+
+
+@pytest.mark.parametrize("script", ["stop.py", "subagent_stop.py"])
+def test_cost_scripts_never_block_and_never_print_on_garbage(product, script):
+    proc = subprocess.run(
+        [sys.executable, "-X", "utf8", str(product / ".claude" / "hooks" / script)],
+        input=b"\xff\xfe garbage",
+        capture_output=True,
+        env={**os.environ, "PYTHONPATH": str(product / "src")},
+    )
+    assert proc.returncode == 0 and proc.stdout == b"" and proc.stderr == b""
+
+
 # --- .claude/settings.json ----------------------------------------------------------------------------------
 
 
@@ -226,7 +300,13 @@ def hook_entries(event: str) -> list[dict]:
 
 
 def test_settings_cover_the_events_of_the_adr_table():
-    assert set(SETTINGS["hooks"]) == {"SessionStart", "PreToolUse", "PostToolUseFailure"}
+    assert set(SETTINGS["hooks"]) == {
+        "SessionStart",
+        "PreToolUse",
+        "Stop",
+        "SubagentStop",
+        "PostToolUseFailure",
+    }
     assert SETTINGS["hooks"]["SessionStart"][0]["matcher"] == "startup|resume|clear|compact|fork"
 
 
@@ -234,6 +314,8 @@ def test_settings_commands_are_exec_form_with_utf8_and_existing_scripts():
     for event, script in (
         ("SessionStart", "session_start.py"),
         ("PreToolUse", "pre_tool_use.py"),
+        ("Stop", "stop.py"),
+        ("SubagentStop", "subagent_stop.py"),
         ("PostToolUseFailure", "post_tool_use_failure.py"),
     ):
         (hook,) = hook_entries(event)
@@ -249,14 +331,14 @@ def test_settings_commands_are_exec_form_with_utf8_and_existing_scripts():
 
 
 def test_hook_timeouts_are_short_so_that_a_hang_does_not_hold_the_session():
-    for event in ("SessionStart", "PreToolUse", "PostToolUseFailure"):
+    for event in ("SessionStart", "PreToolUse", "Stop", "SubagentStop", "PostToolUseFailure"):
         assert hook_entries(event)[0]["timeout"] == 15
 
 
 def test_permission_hook_blocks_on_failure_others_do_not():
     assert hook_entries("PreToolUse")[0]["onFailure"] == "block"
-    assert hook_entries("SessionStart")[0]["onFailure"] == "continue"
-    assert hook_entries("PostToolUseFailure")[0]["onFailure"] == "continue"
+    for event in ("SessionStart", "Stop", "SubagentStop", "PostToolUseFailure"):
+        assert hook_entries(event)[0]["onFailure"] == "continue", event
 
 
 @pytest.mark.parametrize(

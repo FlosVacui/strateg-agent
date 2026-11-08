@@ -18,7 +18,7 @@ import tempfile
 from pathlib import Path
 from typing import NoReturn
 
-from strateg import __version__, commands, routing, rubric
+from strateg import __version__, commands, costreport, routing, rubric
 from strateg.hooks import flags as hookflags
 
 OK, WARN, ERR = "OK", "WARN", "ERR"
@@ -370,6 +370,12 @@ def build_parser() -> argparse.ArgumentParser:
         "иначе расход удвоится (без id запись всегда новая)",
     )
     p.add_argument("--environment", default="claude-code", help="среда (по умолчанию claude-code)")
+    p = cost_sub.add_parser(
+        "report",
+        parents=[common],
+        help="стоимость проекта по ролям, шагам и моделям; --json — машинный вывод",
+    )
+    p.set_defaults(func=commands.run, handler=costreport.cmd_cost_report)
     return parser
 
 
