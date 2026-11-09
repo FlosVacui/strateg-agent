@@ -1543,6 +1543,32 @@ class DecisionsFile(_Model):
 
 
 # ---------------------------------------------------------------------------
+# metrics.yaml — значения показателей, которые вносит человек (ADR-0016)
+# ---------------------------------------------------------------------------
+
+MetricUnit = Literal["%", "₽"]
+
+
+class MetricValue(_Model):
+    """Значение показателя строки плана проверки. Измерил и внёс человек: агент показатели не измеряет."""
+
+    row: RowId
+    value: Number
+    unit: MetricUnit | None = Field(None, description="Единица; пусто — число без единицы")
+    date: Day = Field(description="На какую дату значение")
+    note: Text | None = Field(None, description="Откуда значение")
+    origin: Literal["пользователь"]
+    recorded_at: Time = Field(description="Когда значение записано в файл")
+
+
+class MetricsFile(_Model):
+    """Файл `metrics.yaml`: значения показателей. Пишет только CLI."""
+
+    schema_version: SchemaVersion
+    values: list[MetricValue] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
 # completeness.yaml — итог проверки полноты (рубрика, ADR-0006)
 # ---------------------------------------------------------------------------
 
@@ -1634,5 +1660,6 @@ SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "promises": PromisesFile,
     "verification": VerificationFile,
     "decisions": DecisionsFile,
+    "metrics": MetricsFile,
     "completeness": CompletenessFile,
 }

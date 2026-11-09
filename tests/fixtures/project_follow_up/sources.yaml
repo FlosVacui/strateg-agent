@@ -1,0 +1,64 @@
+schema_version: 1
+sources:
+- id: И-1
+  kind: страница
+  url: https://example.com/protection/terms
+  access: получен
+  fetch:
+    accessed_at: '2026-11-06T10:12:00+03:00'
+    final_url: https://example.com/msk/protection/terms
+    region: RU-MOW
+    encoding: utf-8
+    extractor: trafilatura 2.0.0
+    raw_sha256: 8bae5605ac55e6b283a26db6f3453197458068beadafa9f8fa75999f40e8cd66
+  text_path: sources/i-1.txt
+  text_sha256: deb6df4405ae41f9142e96d68fd96b66a8ecab5c638f4d3d18ba03ef22e55a19
+  untrusted: true
+- id: И-2
+  kind: PDF
+  path: inputs/report.pdf
+  access: получен
+  text_path: inputs/report.txt
+  text_sha256: 46972da3ff07a4a3ed231c4e211af8fe100b43ce7e917ee463635aaf77152f56
+- id: И-3
+  kind: страница
+  url: https://shield.example.com/tariffs
+  access: получен
+  fetch:
+    accessed_at: '2026-03-01T12:00:00+03:00'
+    final_url: https://shield.example.com/tariffs
+    region: RU-MOW
+    encoding: utf-8
+    extractor: trafilatura 2.0.0
+    raw_sha256: 3ef02cab8b75e7f6c1f70c073ee0c42b6d0883aa7bb2b81629afbc7df18bad2f
+  text_path: sources/i-3.txt
+  text_sha256: 05d5eacb225ccfb0a67036e56bf70800d2db60e3810b4dd707127e36faf8420e
+  untrusted: true
+- id: И-4
+  kind: страница
+  url: https://barrier.example.com/offers
+  access: получен
+  fetch:
+    accessed_at: '2026-10-20T09:30:00+03:00'
+    final_url: https://barrier.example.com/offers
+    region: RU-MOW
+    encoding: utf-8
+    extractor: trafilatura 2.0.0
+    raw_sha256: a59999ec2804bbe9705760261cda67f30f14905de9095d1690649b0823937f42
+  text_path: sources/i-4.txt
+  text_sha256: b4773c63b2bb265aa9f32668ecafc371144ca4fb5422bb488c81e92a031c3483
+  untrusted: true
+- id: И-5
+  kind: страница
+  url: https://barrier.example.com/offers-nov
+  access: получен
+  fetch:
+    accessed_at: '2026-11-05T09:30:00+03:00'
+    final_url: https://barrier.example.com/offers-nov
+    region: RU-MOW
+    encoding: utf-8
+    extractor: trafilatura 2.0.0
+    raw_sha256: e05c0296e568842a94674e767771046dbcaa76056de10d26a347d3cca2648d12
+  text_path: sources/i-5.txt
+  text_sha256: 3502835f7a57d4f5110eb085b0152f162256e59469c7ef3cf8d333a2808f18ca
+  untrusted: true

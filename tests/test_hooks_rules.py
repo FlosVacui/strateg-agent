@@ -934,5 +934,6 @@ def test_cli_state_files_match_project_check():
         pc.JOURNAL_FILE,
         pc.COST_FILE,
         *pc.TRACKED_OUTPUTS,
+        pc.METRICS_FILE,
     }
     assert set(rules.CLI_STATE_FILES) == expected
