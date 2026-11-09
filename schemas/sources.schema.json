@@ -272,6 +272,51 @@
           "default": null,
           "description": "sha256 исходного файла материала: по нему повтор `add` отдаёт прежний номер",
           "title": "Material Sha256"
+        },
+        "other_urls": {
+          "anyOf": [
+            {
+              "items": {
+                "pattern": "^https?://[^\\s]+$",
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Другие адреса с тем же текстом снимка: `fetch` не заводит по ним новый источник",
+          "title": "Other Urls"
+        },
+        "rechecked_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Когда `fetch --refresh` подтвердил тот же текст; возраст источника — от этой даты",
+          "title": "Rechecked At"
+        },
+        "refreshes": {
+          "anyOf": [
+            {
+              "pattern": "^И-[1-9][0-9]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Источник, который этот снимок перепроверил: текст изменился, прежний снимок цел",
+          "title": "Refreshes"
         }
       },
       "required": [

@@ -325,6 +325,13 @@ def _accessed_day(s: Any) -> dt.date:
     return s.fetch.accessed_at.astimezone(proj.now().tzinfo).date()
 
 
+def _fresh_day(s: Any) -> dt.date:
+    """День, от которого считается возраст источника: перепроверка (`fetch --refresh`) или получение."""
+    if s.rechecked_at is not None:
+        return max(_accessed_day(s), s.rechecked_at.astimezone(proj.now().tzinfo).date())
+    return _accessed_day(s)
+
+
 def _stale_items(d: Decision, p: Project, today: dt.date, max_age: int) -> list[dict[str, Any]]:
     claims = {c.id: c for c in p.claims.claims}
     sources = {s.id: s for s in p.sources.sources}
@@ -363,7 +370,7 @@ def _stale_items(d: Decision, p: Project, today: dt.date, max_age: int) -> list[
                 s = sources.get(sid)
                 if s is None or s.fetch is None:
                     continue  # у материала из inputs/ даты обращения нет
-                got = _accessed_day(s)
+                got = _fresh_day(s)
                 age = (today - got).days
                 if age > max_age and len(path) == nearest[cid] and (cid, sid) not in said:
                     said.add((cid, sid))
@@ -371,7 +378,8 @@ def _stale_items(d: Decision, p: Project, today: dt.date, max_age: int) -> list[
                     out.append(
                         _item(
                             d,
-                            f"{d.id}: {holder} держится на источнике {sid}, полученном {got}: "
+                            f"{d.id}: {holder} держится на источнике {sid}, "
+                            f"{'перепроверенном' if s.rechecked_at is not None else 'полученном'} {got}: "
                             f"прошло {age} дн., допустимо {max_age}; перепроверьте.",
                             claim=cid,
                             role=role,
@@ -388,6 +396,8 @@ def _stale_items(d: Decision, p: Project, today: dt.date, max_age: int) -> list[
 def _commitment_items(d: Decision, today: dt.date, window: int) -> list[dict[str, Any]]:
     out = []
     for cm in d.commitments:
+        if cm.done is not None:
+            continue  # человек сказал «выполнено»: решать тут нечего
         delta = (_day(cm.due) - today).days
         if delta <= window:
             out.append(
@@ -419,7 +429,7 @@ def _next_event(
                 s = sources.get(sid)
                 if s is None or s.fetch is None:
                     continue
-                day = _accessed_day(s) + dt.timedelta(days=max_age + 1)
+                day = _fresh_day(s) + dt.timedelta(days=max_age + 1)
                 if day > today:
                     found.append(
                         (day, f"{d.id}: источник {sid} основания {c.id} станет старше {max_age} дн.")
@@ -433,7 +443,7 @@ def _next_event(
                     (_day(c.date), f"{d.id}: срок проверки показателя «{c.metric}» ({what}) {c.date}")
                 )
         for cm in d.commitments:
-            if _day(cm.due) - dt.timedelta(days=window) > today:
+            if cm.done is None and _day(cm.due) - dt.timedelta(days=window) > today:
                 found.append(
                     (
                         _day(cm.due) - dt.timedelta(days=window),
@@ -735,6 +745,13 @@ def compute_impact(p: Project, seed: str) -> dict[str, Any]:
             if c.id not in reached:
                 reached.add(c.id)
                 queue.append(c.id)
+        # Утверждение со спором задевает и оспоренное: прежнее сведение теперь под вопросом, как и всё на нём
+        disputed = claims[cur].dispute.claim if cur in claims and claims[cur].dispute else None
+        if disputed is not None and disputed in claims:
+            _add(dependents, disputed, f"оспаривается {cur}")
+            if disputed not in reached:
+                reached.add(disputed)
+                queue.append(disputed)
     if _CLAIM_REF.fullmatch(seed):
         dependents.pop(seed, None)  # само исходное утверждение в «задетых» не повторяется
     affected = set(seed_claims) | set(dependents)

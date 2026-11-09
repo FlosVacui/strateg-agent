@@ -189,6 +189,28 @@ def run_post_tool_use_failure(raw: bytes, env: Mapping[str, str]) -> HookResult:
     return HookResult()
 
 
+# --- UserPromptSubmit --------------------------------------------------------------------------------------
+
+HUMAN_ANSWER_TEXT = "человек ответил на внеплановую остановку (текст сообщения не записывается)"
+
+
+def run_user_prompt_submit(raw: bytes, env: Mapping[str, str]) -> HookResult:
+    """Сообщение человека: пока проект ждёт ответа на «внеплановую остановку», пишет событие «ответ человека».
+
+    Событие — ход проекта: оно кончает ожидание (ADR-0010). Текст сообщения в журнал не попадает,
+    только факт и время. Нет паузы, нет проекта, повторное сообщение, сбой — ничего не пишется. Хук ничего не
+    печатает: его вывод ушёл бы в контекст модели. Работу он не блокирует.
+    """
+    try:
+        found = _stop_context(raw, env)
+        if found is not None:
+            _, root = found
+            effects.append_event(root, rules.EventSpec(effects.HUMAN_ANSWER, HUMAN_ANSWER_TEXT))
+    except Exception:  # noqa: BLE001 - учёт необязателен
+        pass
+    return HookResult()
+
+
 # --- Stop и SubagentStop -----------------------------------------------------------------------------------
 
 

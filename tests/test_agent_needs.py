@@ -196,7 +196,7 @@ def test_fetch_output_shows_marks(cli, net, home):
     closed = (
         "<html><body><p>"
         + "Условия подписки описаны подробно. " * 6
-        + "Коммерческая тайна.</p></body></html>"
+        + "</p><p>Коммерческая тайна.</p><p>ООО «Ромашка», Москва</p></body></html>"
     )
     net.add("https://example.com/closed", closed)
     code, out, err = cli("fetch", "https://example.com/closed", "--json")

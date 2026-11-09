@@ -240,6 +240,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = add("fetch", commands.cmd_fetch, "скачать страницу или PDF и сохранить снимок")
     p.add_argument("url", help="адрес http или https")
     p.add_argument("--region", help="код региона, если содержание зависит от региона")
+    p.add_argument(
+        "--refresh",
+        action="store_true",
+        help="запросить страницу заново, минуя снимок проекта: тот же текст — отметка перепроверки, "
+        "другой — новый источник со ссылкой на прежний",
+    )
 
     p = add("add", commands.cmd_add, "зарегистрировать материал из inputs/ или подтвердить замены")
     p.add_argument("path", nargs="?", help="файл в папке inputs/ проекта")

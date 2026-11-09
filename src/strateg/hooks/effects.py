@@ -28,6 +28,10 @@ ONCE_KINDS = frozenset({ONCE_PER_SESSION, "учёт недоступен"})
 # (параллельный или повторная доставка) приходит в ту же секунду и события не добавляет.
 ROLE_DONE = "роль выполнена"
 ROLE_DONE_REPEAT_SECONDS = 3.0
+# «Ответ человека» — след ответа на «внеплановую остановку» (`UserPromptSubmit`). Пишется, пока проект ждёт
+# этого ответа (проверка под блокировкой): повторное сообщение человека второго события не даёт.
+HUMAN_ANSWER = "ответ человека"
+STOP_NAME = "внеплановая остановка"
 MAX_ERROR_CHARS = 500
 HIDDEN_LINE = "[строка скрыта: похожа на ключ]"
 PROJECT_ID = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
@@ -215,6 +219,8 @@ def append_event(root: Path, spec: EventSpec, timeout: float | None = None) -> b
     def build(state_bytes: bytes, journal: bytes) -> bytes | None:
         if spec.kind in ONCE_KINDS and _noted(journal, spec):
             return None  # проверка под блокировкой: параллельные хуки одной сессии пишут событие один раз
+        if spec.kind == HUMAN_ANSWER and not _waits_for_answer(journal):
+            return None
         name = spec.name
         if spec.kind == ROLE_DONE:
             name = _role_done_name(journal, spec)
@@ -241,6 +247,20 @@ def append_event(root: Path, spec: EventSpec, timeout: float | None = None) -> b
 
     seconds = storage.lock_timeout(storage.HOOK_LOCK_TIMEOUT) if timeout is None else timeout
     return storage.append_journal(root, build, seconds)
+
+
+def _waits_for_answer(journal: bytes) -> bool:
+    """Проект ждёт ответа на «внеплановую остановку»: последнее событие хода — она (`project.pause_kind`).
+
+    Быстрый путь: остановки в журнале нет — модели проекта не подключаются.
+    """
+    if STOP_NAME.encode("utf-8") not in journal:
+        return False
+    from strateg import project as proj
+    from strateg.models import JournalEvent
+
+    events = [JournalEvent.model_validate_json(raw) for raw in journal.split(b"\n") if raw.strip()]
+    return proj.pause_kind(events) == proj.PAUSE_STOP
 
 
 def _role_done_name(journal: bytes, spec: EventSpec) -> str | None:

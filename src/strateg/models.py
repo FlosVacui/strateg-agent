@@ -334,6 +334,7 @@ EventKind = Literal[
     "граница прав не активна",
     "задание исследователю",
     "роль выполнена",
+    "ответ человека",
 ]
 ActionStatus = Literal["начато", "выполнено", "ошибка", "пропущено", "прервано"]
 
@@ -465,6 +466,15 @@ class Source(_Model):
     material_sha256: Sha256 | None = Field(
         None, description="sha256 исходного файла материала: по нему повтор `add` отдаёт прежний номер"
     )
+    other_urls: list[Url] | None = Field(
+        None, description="Другие адреса с тем же текстом снимка: `fetch` не заводит по ним новый источник"
+    )
+    rechecked_at: Time | None = Field(
+        None, description="Когда `fetch --refresh` подтвердил тот же текст; возраст источника — от этой даты"
+    )
+    refreshes: SourceId | None = Field(
+        None, description="Источник, который этот снимок перепроверил: текст изменился, прежний снимок цел"
+    )
 
     @model_validator(mode="after")
     def _rules(self) -> Self:
@@ -513,6 +523,14 @@ class Source(_Model):
         # модель его допускает, `check_project` называет ошибкой, а цитировать такой материал нельзя.
         if self.material_sha256 is not None and not local:
             p.append("material_sha256 бывает только у материала из inputs/")
+        for name in ("other_urls", "rechecked_at", "refreshes"):
+            if getattr(self, name) is not None and not web:
+                p.append(f"{name} бывает только у веб-источника")
+        if self.refreshes == self.id:
+            p.append("источник перепроверяет сам себя (refreshes)")
+        others = self.other_urls or []
+        if self.url in others or len(set(others)) < len(others):
+            p.append("other_urls повторяет адрес источника или сам себя")
         _raise(p)
         return self
 
@@ -873,6 +891,7 @@ class JournalEvent(_Model):
             "граница прав не активна",
             "задание исследователю",
             "роль выполнена",
+            "ответ человека",
         )
         if k in needs_message and self.message is None:
             p.append(f"у события «{k}» нет пояснения (message)")
@@ -1498,6 +1517,16 @@ class Commitment(_Model):
     what: Text
     due: Day
     owner: Owner
+    done: Day | None = Field(
+        None, description="Дата, когда обязательство выполнено; только по слову человека, не позже сегодня"
+    )
+    done_note: Text | None = Field(None, description="Пояснение к отметке «выполнено» со слов человека")
+
+    @model_validator(mode="after")
+    def _rules(self) -> Self:
+        if self.done_note is not None and self.done is None:
+            raise ValueError("пояснение (done_note) есть, а даты «выполнено» (done) нет")
+        return self
 
 
 class Decision(_Model):
