@@ -270,3 +270,100 @@ def test_human_answer_is_a_hook_event_with_a_message_in_the_model():
     with pytest.raises(ValueError, match="пояснения"):
         JournalEvent.model_validate(base)
     assert JournalEvent.model_validate({**base, "message": "человек ответил"}).kind == "ответ человека"
+
+
+# --- Быстрый путь по хвосту журнала и нечитаемые строки ---------------------------------------------------
+
+
+def append_raw(root, line: bytes) -> None:
+    with (root / "journal.jsonl").open("ab") as f:
+        f.write(line + b"\n")
+
+
+def count_full_parses(monkeypatch) -> list[int]:
+    calls: list[int] = []
+    real = proj.pause_kind
+    monkeypatch.setattr(proj, "pause_kind", lambda events: calls.append(len(events)) or real(events))
+    return calls
+
+
+def test_a_tail_that_is_not_a_stop_is_decided_without_the_models(cli, demo, clock, monkeypatch):
+    """Остановка давно в журнале и отвечена; дальше идёт работа: полный разбор не нужен."""
+    stopped(cli, clock, demo, wait=10)
+    submit()
+    clock.advance(5)
+    assert cli("step", "done", "2б")[0] == 0
+    clock.advance(5)
+    assert cli("step", "start", "3")[0] == 0
+    calls = count_full_parses(monkeypatch)
+    before = journal_of(demo)
+    submit()
+    assert calls == [] and journal_of(demo) == before
+
+
+def test_a_hook_event_and_a_note_about_outside_changes_in_the_tail_do_not_hide_the_stop(
+    cli, demo, clock, monkeypatch
+):
+    stopped(cli, clock, demo, wait=10)
+    assert effects.append_event(demo, effects.EventSpec("учёт недоступен", "учёт не удался", name="s1"))
+    claims = demo / "claims.yaml"
+    claims.write_bytes(claims.read_bytes() + "# правка человека\n".encode())
+    cli("status", "--brief")  # сводка пишет «изменено вне агента»
+    calls = count_full_parses(monkeypatch)
+    submit()
+    assert len(answers(demo)) == 1 and len(calls) == 1  # хвост похож на остановку: полный разбор один раз
+
+
+def answer_count(root) -> int:
+    """Событий «ответ человека» в журнале: считается по байтам, журнал с мусором `journal_of` не читает."""
+    lines = (root / "journal.jsonl").read_bytes().split(b"\n")
+    return sum(
+        1 for line in lines if line.startswith(b"{") and b'"kind": "' + "ответ человека".encode() in line
+    )
+
+
+def test_an_unreadable_line_after_the_stop_does_not_turn_the_recording_off(cli, demo, clock):
+    stopped(cli, clock, demo)
+    append_raw(demo, "{это не JSON".encode())
+    submit()
+    assert answer_count(demo) == 1
+
+
+def test_a_line_that_fails_the_model_before_the_stop_does_not_turn_the_recording_off(cli, demo, clock):
+    stopped(cli, clock, demo)
+    path = demo / "journal.jsonl"
+    lines = path.read_bytes().split(b"\n")
+    at = next(i for i, line in enumerate(lines) if "внеплановая остановка".encode() in line)
+    bad = json.dumps({"kind": "несуществующий вид", "actor": "агент"}, ensure_ascii=False).encode("utf-8")
+    path.write_bytes(b"\n".join([*lines[:at], bad, *lines[at:]]))
+    submit()
+    assert answer_count(demo) == 1
+
+
+def test_an_unreadable_line_after_an_answered_stop_writes_nothing_more(cli, demo, clock):
+    stopped(cli, clock, demo)
+    submit()
+    append_raw(demo, b"\xff\xfe garbage")
+    clock.advance(5)
+    submit()
+    assert answer_count(demo) == 1
+
+
+def test_a_note_of_the_summary_in_the_tail_goes_to_the_full_parse(cli, demo, clock, monkeypatch):
+    """«Прервано» от сводки хода не двигает; хвост не решает сам, решает полный разбор."""
+    cli("step", "start", "2б")
+    clock.advance(30)
+    assert cli("stop", "--reason", "нужен ответ")[0] == 0
+    p = proj.Project.load(demo)
+    p.add_event(
+        p.event(
+            kind="действие",
+            name="strateg fetch",
+            idempotency_hash=proj.key_hash("fetch", "https://example.com/a"),
+            status="прервано",
+            message=proj.RESUME_NOTE,
+        )
+    )
+    calls = count_full_parses(monkeypatch)
+    submit()
+    assert len(calls) == 1 and len(answers(demo)) == 1

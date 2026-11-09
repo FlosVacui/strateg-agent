@@ -325,16 +325,40 @@ def _accessed_day(s: Any) -> dt.date:
     return s.fetch.accessed_at.astimezone(proj.now().tzinfo).date()
 
 
-def _fresh_day(s: Any) -> dt.date:
-    """День, от которого считается возраст источника: перепроверка (`fetch --refresh`) или получение."""
-    if s.rechecked_at is not None:
-        return max(_accessed_day(s), s.rechecked_at.astimezone(proj.now().tzinfo).date())
-    return _accessed_day(s)
+def _fresh_days(p: Project) -> dict[str, dt.date]:
+    """Для каждого веб-источника день последней проверки по всей цепочке перепроверок (`refreshes`).
+
+    Проверка — получение или перепроверка (`fetch --refresh`) любого звена цепочки: утверждения могут стоять
+    на старом снимке, а страницу уже сверили позже. Решение «заменить или оставить» агент принимает по ответу
+    `fetch --refresh`, `due` после перепроверки не напоминает.
+    """
+    web = [s for s in p.sources.sources if s.fetch is not None]
+    parent = {s.id: s.id for s in web}
+
+    def root(x: str) -> str:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for s in web:
+        if s.refreshes in parent:
+            parent[root(s.id)] = root(s.refreshes)
+    tz = proj.now().tzinfo
+    best: dict[str, dt.date] = {}
+    for s in web:
+        days = [_accessed_day(s)]
+        if s.rechecked_at is not None:
+            days.append(s.rechecked_at.astimezone(tz).date())
+        r = root(s.id)
+        best[r] = max(best.get(r, min(days)), *days)
+    return {s.id: best[root(s.id)] for s in web}
 
 
 def _stale_items(d: Decision, p: Project, today: dt.date, max_age: int) -> list[dict[str, Any]]:
     claims = {c.id: c for c in p.claims.claims}
     sources = {s.id: s for s in p.sources.sources}
+    fresh = _fresh_days(p)
     out = []
     walked = _walk(d, claims)
     # Устаревший источник факта называем один раз — по ближайшему пути: путей к факту бывает несколько.
@@ -370,7 +394,7 @@ def _stale_items(d: Decision, p: Project, today: dt.date, max_age: int) -> list[
                 s = sources.get(sid)
                 if s is None or s.fetch is None:
                     continue  # у материала из inputs/ даты обращения нет
-                got = _fresh_day(s)
+                got = fresh[sid]
                 age = (today - got).days
                 if age > max_age and len(path) == nearest[cid] and (cid, sid) not in said:
                     said.add((cid, sid))
@@ -379,7 +403,7 @@ def _stale_items(d: Decision, p: Project, today: dt.date, max_age: int) -> list[
                         _item(
                             d,
                             f"{d.id}: {holder} держится на источнике {sid}, "
-                            f"{'перепроверенном' if s.rechecked_at is not None else 'полученном'} {got}: "
+                            f"{'перепроверенном' if got != _accessed_day(s) else 'полученном'} {got}: "
                             f"прошло {age} дн., допустимо {max_age}; перепроверьте.",
                             claim=cid,
                             role=role,
@@ -421,6 +445,7 @@ def _next_event(
     found: list[tuple[dt.date, str]] = []
     claims = {c.id: c for c in p.claims.claims}
     sources = {s.id: s for s in p.sources.sources}
+    fresh = _fresh_days(p)
     for d in active:
         for _role, _root, c, _path in _walk(d, claims):
             if c.status != "действует" or c.type != "факт":
@@ -429,7 +454,7 @@ def _next_event(
                 s = sources.get(sid)
                 if s is None or s.fetch is None:
                     continue
-                day = _fresh_day(s) + dt.timedelta(days=max_age + 1)
+                day = fresh[sid] + dt.timedelta(days=max_age + 1)
                 if day > today:
                     found.append(
                         (day, f"{d.id}: источник {sid} основания {c.id} станет старше {max_age} дн.")

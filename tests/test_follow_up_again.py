@@ -247,3 +247,41 @@ def test_due_counts_the_age_of_a_source_from_the_last_recheck(cli, fu):
 def test_a_recheck_older_than_the_receipt_does_not_make_the_source_younger(cli, fu):
     recheck(fu, "И-3", "2026-01-01T10:00:00+03:00")
     assert STALE_SOURCE in keys(due(cli, "2026-09-01"))
+    item = next(i for i in due(cli, "2026-09-01")["groups"]["stale"] if i["source"] == "И-3")
+    assert (
+        item["accessed"] == "2026-03-01" and item["age_days"] == 184
+    )  # день получения, не старая перепроверка
+    assert "полученном 2026-03-01" in item["text"] and "перепроверенном" not in item["text"]
+    assert due(cli, "2026-08-01")["next_event"]["date"] == "2026-08-29"
+
+
+def add_refreshing_source(fu: Path, accessed: str, rechecked: str | None = None) -> None:
+    """Источник И-6 перепроверяет И-3 (новый снимок страницы); утверждения остаются на И-3."""
+
+    def put(d: dict) -> None:
+        new = json.loads(json.dumps(next(s for s in d["sources"] if s["id"] == "И-3")))
+        new.update(id="И-6", refreshes="И-3", text_path="sources/i-6.txt")
+        new["fetch"]["accessed_at"] = accessed
+        if rechecked:
+            new["rechecked_at"] = rechecked
+        d["sources"].append(new)
+
+    (fu / "sources" / "i-6.txt").write_bytes((fu / "sources" / "i-3.txt").read_bytes())
+    edit_yaml(fu, "sources.yaml", put)
+    rehash(fu)
+    assert check_project(fu) == []
+
+
+def test_a_newer_snapshot_in_the_chain_of_rechecks_keeps_due_quiet_about_the_old_one(cli, fu):
+    assert STALE_SOURCE in keys(due(cli, "2026-09-01"))
+    add_refreshing_source(fu, "2026-08-20T10:00:00+03:00")  # утверждения всё ещё на И-3
+    data = due(cli, "2026-09-01")
+    assert STALE_SOURCE not in keys(data)
+    stale = [i for i in due(cli, "2027-02-20")["groups"]["stale"] if i["source"] == "И-3"]
+    assert stale and stale[0]["accessed"] == "2026-08-20" and "перепроверенном 2026-08-20" in stale[0]["text"]
+
+
+def test_a_recheck_of_the_newer_snapshot_counts_for_the_whole_chain(cli, fu):
+    add_refreshing_source(fu, "2026-05-01T10:00:00+03:00", rechecked="2026-08-25T10:00:00+03:00")
+    assert STALE_SOURCE not in keys(due(cli, "2026-09-01"))
+    assert STALE_SOURCE in keys(due(cli, "2027-02-27"))  # 186 дней от 2026-08-25

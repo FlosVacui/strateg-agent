@@ -502,9 +502,13 @@ def cmd_fetch(args: argparse.Namespace) -> int:
         return _fetch_report(args, got, p, cached=True, warnings=[], extra={})
     # `--refresh` без прежнего снимка — обычная загрузка; недоступная прежде запись обновляется на месте
     prior = got if refresh else None
+    warnings: list[str] = []
+    if refresh and prior is None:
+        warnings.append(
+            "прежнего снимка нет, загружено как обычный fetch (адрес и регион те же, что в запросе)"
+        )
     h = _refresh_key(p, url, region) if prior is not None else proj.key_hash("fetch", url, region)
     started = time.monotonic()
-    warnings: list[str] = []
     extra: dict[str, Any] = {}
     with proj.transaction(p.root, rollback=False):
         if _find_open_action(p, h):
@@ -580,12 +584,13 @@ def _finish_event(p: Project, h: str, started: float, status: str, message: str 
 def _text_twin(
     p: Project, text_sha: str | None, region: str | None, skip: SourceModel | None = None
 ) -> SourceModel | None:
-    """Полученный источник с тем же текстом снимка и тем же регионом."""
+    """Полученный веб-источник с тем же текстом снимка и тем же регионом (материалы `inputs/` не в счёт)."""
     return next(
         (
             s
             for s in p.sources.sources
             if s is not skip
+            and s.url is not None
             and s.text_sha256 == text_sha
             and s.access == "получен"
             and (s.fetch.region if s.fetch else None) == region
@@ -638,6 +643,20 @@ def _store_result(
             _finish_event(p, h, started, "выполнено", f"{prior.id}: перепроверка, текст тот же")
             p.save_state()
             return prior
+        back = _text_twin(p, text_sha, region)
+        # страница вернулась к тексту другого снимка региона: второго источника с ним не заводим
+        if back is not None:
+            back.rechecked_at = proj.now()
+            p.save_sources()
+            extra["rechecked"] = True
+            extra["returned_to"] = back.id
+            extra["previous"] = prior.id
+            message = (
+                f"{back.id}: перепроверка {prior.id}, текст совпал со снимком {back.id}, нового источника нет"
+            )
+            _finish_event(p, h, started, "выполнено", message)
+            p.save_state()
+            return back
     elif snapshot is not None:
         twin = _text_twin(p, text_sha, region, skip=retry)
         if twin is not None and retry is None:
@@ -655,6 +674,20 @@ def _store_result(
             warnings.append(
                 f"текст совпадает с {twin.id} (другой адрес): запись обновлена, снимок повторяет {twin.id}"
             )
+
+    material = next(
+        (
+            s
+            for s in p.sources.sources
+            if s.url is None and s.access == "получен" and s.text_sha256 == text_sha
+        ),
+        None,
+    )
+    if snapshot is not None and material is not None:  # скачали то, что человек уже положил в inputs/
+        extra["same_text_material"] = material.id
+        warnings.append(
+            f"текст совпадает с материалом {material.id} (из inputs/): запись материала не менялась"
+        )
 
     number = int(retry.id.split("-")[1]) if retry is not None else _next_source_number(p)
     sid = f"И-{number}"
@@ -850,6 +883,10 @@ def _fetch_report(
     if same_text:
         data["same_text_as"] = same_text
         data["other_urls"] = s.other_urls or []
+    if extra.get("same_text_material"):
+        data["same_text_material"] = extra["same_text_material"]
+    if extra.get("returned_to"):
+        data["returned_to"] = extra["returned_to"]
     if getattr(args, "refresh", False):
         data["refresh"] = (
             "failed"
@@ -881,7 +918,13 @@ def _fetch_report(
     if closed:
         marks.append("признаки закрытых данных: " + ", ".join(closed))
     if s.access == "получен":
-        if extra.get("rechecked"):
+        if extra.get("returned_to"):
+            head = (
+                f"Источник {s.id}: страница вернулась к тексту этого снимка (запрос шёл по адресу "
+                f"{extra['previous']}); новый источник не создан, отметка перепроверки поставлена у {s.id} "
+                f"({s.rechecked_at})."
+            )
+        elif extra.get("rechecked"):
             head = f"Источник {s.id}: перепроверен, текст тот же (проверено {s.rechecked_at})."
         elif extra.get("refreshes"):
             head = (

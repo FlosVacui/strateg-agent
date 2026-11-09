@@ -32,6 +32,7 @@ ROLE_DONE_REPEAT_SECONDS = 3.0
 # этого ответа (проверка под блокировкой): повторное сообщение человека второго события не даёт.
 HUMAN_ANSWER = "ответ человека"
 STOP_NAME = "внеплановая остановка"
+TASK_KIND = "задание исследователю"
 MAX_ERROR_CHARS = 500
 HIDDEN_LINE = "[строка скрыта: похожа на ключ]"
 PROJECT_ID = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
@@ -249,17 +250,54 @@ def append_event(root: Path, spec: EventSpec, timeout: float | None = None) -> b
     return storage.append_journal(root, build, seconds)
 
 
+def _tail_verdict(journal: bytes) -> bool | None:
+    """Хвост журнала без моделей: последнее событие хода — остановка (True), другое (False) или неясно (None).
+
+    Идём с конца и пропускаем то, что хода не двигает: нечитаемые строки, «изменено вне агента» и события
+    хуков, кроме «задания исследователю» и «ответа человека». «Прервано» может быть заметкой сводки
+    (она ход не двигает) — это решает полный разбор.
+    """
+    for raw in reversed(journal.split(b"\n")):
+        if not raw.strip():
+            continue
+        try:
+            e = json.loads(raw)
+        except ValueError:
+            continue
+        if not isinstance(e, dict):
+            continue
+        kind = e.get("kind")
+        if kind == "изменено вне агента" or (
+            e.get("actor") == ACTOR and kind not in (TASK_KIND, HUMAN_ANSWER)
+        ):
+            continue
+        if kind == "действие" and e.get("status") == "прервано":
+            return None
+        return kind == "действие" and e.get("name") == STOP_NAME
+    return False
+
+
 def _waits_for_answer(journal: bytes) -> bool:
     """Проект ждёт ответа на «внеплановую остановку»: последнее событие хода — она (`project.pause_kind`).
 
-    Быстрый путь: остановки в журнале нет — модели проекта не подключаются.
+    Быстрый путь: остановки в журнале нет или хвост до последнего события хода не похож на остановку —
+    модели проекта не подключаются. Полный разбор нужен, только когда хвост похож на остановку; строка,
+    которую не разобрать, в нём пропускается и записи не отключает.
     """
-    if STOP_NAME.encode("utf-8") not in journal:
+    if STOP_NAME.encode("utf-8") not in journal or _tail_verdict(journal) is False:
         return False
+    from pydantic import ValidationError
+
     from strateg import project as proj
     from strateg.models import JournalEvent
 
-    events = [JournalEvent.model_validate_json(raw) for raw in journal.split(b"\n") if raw.strip()]
+    events = []
+    for raw in journal.split(b"\n"):
+        if raw.strip():
+            try:
+                events.append(JournalEvent.model_validate_json(raw))
+            except ValidationError:
+                continue
     return proj.pause_kind(events) == proj.PAUSE_STOP
 
 
