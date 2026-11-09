@@ -1159,3 +1159,107 @@ def test_research_gives_the_full_path_estimate_guide():
     text = (SKILLS / "research" / "SKILL.md").read_text(encoding="utf-8")
     assert "около $5–6,5 и 25–30 минут работы" in text
     assert "Оценка ниже ориентира — с причиной" in text
+
+
+# ---------------------------------------------------------------------------
+# Сопровождение после выпуска: скиллы `follow-up` и `update` (ADR-0016)
+# ---------------------------------------------------------------------------
+
+FOLLOW_UP = SKILLS / "follow-up" / "SKILL.md"
+UPDATE = SKILLS / "update" / "SKILL.md"
+MAX_FOLLOW_UP_SKILL_BYTES = 7000  # скилл читается целиком на каждом шаге: каждая строка стоит денег
+
+
+def test_follow_up_skills_exist_with_the_right_frontmatter():
+    for path, name in ((FOLLOW_UP, "follow-up"), (UPDATE, "update")):
+        assert path.is_file(), f"нет {rel(path)}"
+        meta, _ = split_skill(path)
+        assert meta["name"] == name and set(meta) == {"name", "description"}
+        assert len(meta["description"]) <= MAX_DESCRIPTION
+    assert "/follow-up" in (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+    assert "/update" in (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "`/follow-up`" in readme and "`/update`" in readme
+
+
+def test_follow_up_skills_are_short():
+    for path in (FOLLOW_UP, UPDATE):
+        size = len(path.read_bytes())
+        assert size <= MAX_FOLLOW_UP_SKILL_BYTES, f"{rel(path)}: {size} Б, предел {MAX_FOLLOW_UP_SKILL_BYTES}"
+
+
+def test_follow_up_skill_calls_due_and_metric_add_and_leaves_the_decision_to_the_human():
+    text = FOLLOW_UP.read_text(encoding="utf-8")
+    for needle in ("uv run strateg due --json", "uv run strateg metric add", "--value", "--date", "--note"):
+        assert needle in text, needle
+    for group in ("fired", "review", "check", "manual", "stale", "commitments"):
+        assert f"`{group}`" in text, f"не разобрана группа due: {group}"
+    assert "Решаете вы" in text and "«Сравните вручную»" in text
+    assert "нет отметки «выполнено»" in text  # просроченное обязательство висит в due
+    assert "Значения не выдумывай" in text and "не додумывай" in text
+    assert "прежний снимок того же адреса" in text  # перепроверка по тому же адресу — не перепроверка
+    assert "Пересмотр без нового сведения" in text
+    assert "`update`" in text
+    # агент не меняет решение и не пишет файлы показателей сам; сводка — только в strateg
+    assert "decisions.yaml" not in text and "status --brief" not in text
+
+
+def test_update_skill_keeps_the_order_claim_impact_stop_recalculation_diff():
+    text = UPDATE.read_text(encoding="utf-8")
+    order = [
+        "uv run strateg step start 8",
+        "claim replace",
+        "claim add",
+        "claim revoke",
+        "uv run strateg impact",
+        "--json",
+        "uv run strateg stop --reason",
+        "uv run strateg write",
+        "uv run strateg diff",
+        "uv run strateg step done 8",
+    ]
+    positions = [text.find(x) for x in order]
+    assert all(p >= 0 for p in positions), dict(zip(order, positions, strict=True))
+    assert positions == sorted(positions), (
+        "порядок: step start 8, claim, impact, stop, write, diff, step done 8"
+    )
+    assert "uv run strateg impact <новое У-n> --json" in text
+    assert "dispute: {claim: У-n" in text and "под замену не подгоняй" in text
+    assert "ещё `impact` по прежнему" in text and "выводы не задеты" in text
+    assert "uv run strateg budget check" in text and "## Бюджет исчерпан" in text
+    assert text.index("uv run strateg budget check") < text.index("claim replace")
+    assert "## Пересмотр без нового сведения" in text and "`replaces`" in text
+    assert "не `package`" in text and "шаги 6–7" in text
+    assert "прежний снимок" in text and "inputs/" in text
+    assert text.splitlines()[2].startswith('description: "Только после выпуска (шаг 7 выполнен)')
+    assert (
+        text.count("uv run strateg stop") == 2
+    )  # выбор или рамка; бюджет. Остальные случаи — вопрос без stop
+    assert "без `stop`" in text and "одна на пересмотр" in text
+    assert "только по слову человека" in text and "write --by пользователь" in text
+    assert "Ориентир" in text and "K из N" in text and "верхн" not in text and "«Нет данных»" in text
+    assert "`choice.affected`" in text and "«Решение затронуто»" in text  # объясняются по-разному
+    assert "claim list --step 8 --json" in text and "uv run strateg check" in text
+
+
+def test_the_agents_md_names_the_follow_up_skills_and_no_longer_says_there_is_no_follow_up():
+    agents = AGENTS.read_text(encoding="utf-8")
+    assert "Пересмотра после выпуска в этой версии нет" not in agents
+    row = next(x for x in agents.splitlines() if x.startswith("| `8` |"))
+    assert "`follow-up`" in row and "`update`" in row and "без шага" in row
+    phrase = next(x for x in agents.splitlines() if x.startswith("| «вот новые данные: …»"))
+    assert "До выпуска" in phrase and "После выпуска — скилл `update`" in phrase
+    ask = next(x for x in agents.splitlines() if x.startswith("| «что решать сейчас»"))
+    assert "`follow-up`" in ask and "«вот значение показателя: …»" in ask
+
+
+def test_package_and_strateg_route_to_the_follow_up_skills():
+    package = (SKILLS / "package" / "SKILL.md").read_text(encoding="utf-8")
+    strateg = (SKILLS / "strateg" / "SKILL.md").read_text(encoding="utf-8")
+    assert "в следующих версиях" not in package and "в следующих версиях" not in strateg
+    assert "„что решать сейчас“ или „вот новые данные“" in package
+    row = next(x for x in strateg.splitlines() if x.startswith("| Шаг 7 или 8 выполнен"))
+    assert "`follow-up`" in row and "`update`" in row
+    assert any("Прервано: шаг 8" in x and "`update`" in x for x in strateg.splitlines())
+    for path in all_texts():
+        assert "в следующих версиях" not in path.read_text(encoding="utf-8"), rel(path)
