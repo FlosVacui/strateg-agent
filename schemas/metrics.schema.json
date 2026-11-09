@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "MetricValue": {
+      "additionalProperties": false,
+      "description": "Значение показателя строки плана проверки. Измерил и внёс человек: агент показатели не измеряет.",
+      "properties": {
+        "row": {
+          "pattern": "^ПП-[1-9][0-9]*$",
+          "title": "Row",
+          "type": "string"
+        },
+        "value": {
+          "title": "Value",
+          "type": "number"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "enum": [
+                "%",
+                "₽"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Единица; пусто — число без единицы",
+          "title": "Unit"
+        },
+        "date": {
+          "description": "На какую дату значение",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+          "title": "Date",
+          "type": "string"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Откуда значение",
+          "title": "Note"
+        },
+        "origin": {
+          "const": "пользователь",
+          "title": "Origin",
+          "type": "string"
+        },
+        "recorded_at": {
+          "description": "Когда значение записано в файл",
+          "format": "date-time",
+          "title": "Recorded At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "row",
+        "value",
+        "date",
+        "origin",
+        "recorded_at"
+      ],
+      "title": "MetricValue",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Файл `metrics.yaml`: значения показателей. Пишет только CLI.",
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "values": {
+      "items": {
+        "$ref": "#/$defs/MetricValue"
+      },
+      "title": "Values",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version"
+  ],
+  "title": "MetricsFile",
+  "type": "object"
+}

@@ -40,9 +40,10 @@ def test_doc_mentions_step_and_attempt():
 
 
 def test_doc_lists_every_file_of_the_project_and_its_schema():
-    for name in ("frame", "plan", "gaps", "options", "promises", "verification", "decisions"):
+    for name in ("frame", "plan", "gaps", "options", "promises", "verification", "decisions", "metrics"):
         assert f"`{name}.yaml`" in DOC and f"`{name}.schema.json`" in DOC, name
     assert "history/frame.v1.yaml" in DOC and "history/outputs/options.v2.md" in DOC
+    assert "history/release-1/" in DOC
 
 
 def test_doc_describes_the_rules_the_main_part_lacked():

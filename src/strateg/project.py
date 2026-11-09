@@ -38,6 +38,7 @@ from strateg.project_check import (
     COST_FILE,
     HISTORY_DIR,
     JOURNAL_FILE,
+    METRICS_FILE,
     SOURCES_FILE,
     STATE_FILE,
     TRACKED_OUTPUTS,
@@ -296,7 +297,7 @@ class Project:
                 found.append((rel, "хеш файла не совпал с записанным"))
         found += [
             (rel, "файл есть, а его хеша в state.yaml нет")
-            for rel in TRACKED_OUTPUTS
+            for rel in (*TRACKED_OUTPUTS, METRICS_FILE)
             if rel not in self.state.files and (self.root / rel).is_file()
         ]
         return found
@@ -346,7 +347,7 @@ class Project:
         self.costs.append(record)
 
     def _hashes(self) -> dict[str, str]:
-        rels = [SOURCES_FILE, CLAIMS_FILE, JOURNAL_FILE, COST_FILE, *TRACKED_OUTPUTS]
+        rels = [SOURCES_FILE, CLAIMS_FILE, JOURNAL_FILE, COST_FILE, *TRACKED_OUTPUTS, METRICS_FILE]
         rels += [s.text_path for s in self.sources.sources if s.text_path]
         history = self.root / HISTORY_DIR
         if history.is_dir():
@@ -420,7 +421,7 @@ def create_project(project_id: str, mode: str, region: str | None) -> Project:
 
 
 def _tracked_files(root: Path) -> list[Path]:
-    names = [STATE_FILE, SOURCES_FILE, CLAIMS_FILE, JOURNAL_FILE, COST_FILE, *TRACKED_OUTPUTS]
+    names = [STATE_FILE, SOURCES_FILE, CLAIMS_FILE, JOURNAL_FILE, COST_FILE, *TRACKED_OUTPUTS, METRICS_FILE]
     files = [root / n for n in names]
     sources = root / "sources"
     if sources.is_dir():

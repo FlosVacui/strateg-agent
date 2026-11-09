@@ -35,6 +35,7 @@ from strateg.models import (
     FrameFile,
     GapsFile,
     JournalEvent,
+    MetricsFile,
     OptionsFile,
     PlanFile,
     ProjectState,
@@ -63,6 +64,7 @@ PROMISES_FILE = "promises.yaml"
 VERIFICATION_FILE = "verification.yaml"
 DECISIONS_FILE = "decisions.yaml"
 COMPLETENESS_FILE = "completeness.yaml"  # итог проверки полноты: пишет `strateg rubric record`
+METRICS_FILE = "metrics.yaml"  # значения показателей: пишет `strateg metric add`; нет файла — значений нет
 # Необязательные файлы выводов: пишет только CLI, у проекта на шаге 1 их ещё нет.
 OUTPUT_FILES = (
     FRAME_FILE,
@@ -77,6 +79,10 @@ OUTPUT_FILES = (
 TRACKED_OUTPUTS = (*OUTPUT_FILES, COMPLETENESS_FILE)
 PROJECT_FILES = (STATE_FILE, SOURCES_FILE, CLAIMS_FILE, JOURNAL_FILE, COST_FILE)
 HISTORY_DIR = "history"
+RELEASE_PREFIX = (
+    "release-"  # снимок выпуска: history/release-<n>/ (файлы выхода и outputs/*.md на момент выпуска)
+)
+_RELEASE_DIR = re.compile(rf"^{RELEASE_PREFIX}([1-9][0-9]*)$")
 # Часть сообщения об утверждении, которое отозвано или заменено, но стоит у рекомендации или обещания:
 # команды замены и отзыва принимают такие ошибки, потому что места использования переписывает `write`.
 STALE_REF_NOTE = "нельзя держать на отозванном или заменённом утверждении"
@@ -694,6 +700,7 @@ def _check_outputs(
         root, VERIFICATION_FILE, VerificationFile, ("rows", "premortem", "undesired_effects"), errors
     )
     _, dec = _load_optional(root, DECISIONS_FILE, DecisionsFile, ("decisions",), errors)
+    _, metrics = _load_optional(root, METRICS_FILE, MetricsFile, ("values",), errors)
     _, comp = _load_optional(root, COMPLETENESS_FILE, CompletenessFile, ("part_a", "part_b"), errors)
     if comp is not None:
         _check_completeness(comp, errors)
@@ -717,6 +724,8 @@ def _check_outputs(
         _check_verification(ver, cl, gap_reg, opts, errors)
     if dec is not None:
         _check_decisions(dec, cl, opt_reg, ver_reg, ver, errors)
+    if metrics is not None:
+        _check_metrics(metrics, ver_reg, errors)
     if plan is not None and claims is not None:
         _check_plan_questions(claims, plan_reg, errors)
     _check_text_refs(
@@ -1012,6 +1021,12 @@ def _check_decisions(
         errors.append(f"{DECISIONS_FILE}: цикл замены: {' -> '.join(cycle)}")
 
 
+def _check_metrics(metrics: MetricsFile, ver_reg: _Registry, errors: list[str]) -> None:
+    """Значение показателя ведёт в существующую строку плана проверки."""
+    for n, v in enumerate(metrics.values, start=1):
+        ver_reg.check(errors, f"{METRICS_FILE}, запись №{n} ({v.row})", "row", v.row)
+
+
 def _check_plan_questions(claims: ClaimsFile, plan_reg: _Registry, errors: list[str]) -> None:
     """`plan_question` — строка; значение вида ВП-n должно быть в плане, прочие тексты допустимы.
 
@@ -1065,6 +1080,13 @@ def _ranges(versions: list[int]) -> str:
     return ", ".join(out)
 
 
+def _release_member(rest: tuple[str, ...]) -> bool:
+    """Путь внутри `history/release-<n>/`: файл выхода или документ `outputs/<имя>.md`."""
+    if len(rest) == 1:
+        return rest[0] in OUTPUT_FILES
+    return len(rest) == 2 and rest[0] == "outputs" and rest[1].endswith(".md")
+
+
 def _check_history(root: Path, frame: FrameFile | None, errors: list[str]) -> None:
     """Имена версий в `history/`, полнота версий рамки и то, что прежняя версия — рамка."""
     from strateg.project import history_path, history_source  # импорт здесь: project импортирует этот модуль
@@ -1078,11 +1100,18 @@ def _check_history(root: Path, frame: FrameFile | None, errors: list[str]) -> No
             service = any(part.startswith(".") for part in parts) or p.name in _SERVICE_NAMES
             if not p.is_file() or service:
                 continue  # .gitkeep, .DS_Store и подобное — не версии
+            if parts and _RELEASE_DIR.match(parts[0]):
+                if not _release_member(parts[1:]):
+                    errors.append(
+                        f"{rel}: в снимке выпуска лежат файлы выхода и outputs/*.md, а это что-то другое"
+                    )
+                continue
             source = history_source(rel)
             if source is None:
                 errors.append(
                     f"{rel}: имя не подходит для версии: нужен вид <файл>.v<N>.<расширение>, "
-                    f"например {history_path(FRAME_FILE, 1)}"
+                    f"например {history_path(FRAME_FILE, 1)}; снимок выпуска лежит в "
+                    f"history/{RELEASE_PREFIX}<n>/"
                 )
             elif source[0] == FRAME_FILE:
                 found[source[1]] = rel

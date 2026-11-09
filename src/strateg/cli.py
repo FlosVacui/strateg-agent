@@ -1,5 +1,6 @@
 """Точка входа CLI `strateg`: `doctor` и команды проекта (`new`, `use`, `status`, `step`, `gate`, `fetch`,
-`add`, `claim`, `write`, `event`, `check`, `cost`, `budget`, `pack`, `rubric`, `route`). Сами команды
+`add`, `claim`, `write`, `event`, `check`, `cost`, `budget`, `pack`, `rubric`, `route`, `due`, `impact`,
+`metric`, `diff`). Сами команды
 проекта — в `strateg.commands`, проверка полноты — в `strateg.rubric`, маршрут роли — в `strateg.routing`.
 
 Коды возврата: 0 — успех, 1 — ошибка данных или правил, 2 — ошибка использования.
@@ -18,7 +19,7 @@ import tempfile
 from pathlib import Path
 from typing import NoReturn
 
-from strateg import __version__, commands, costreport, routing, rubric
+from strateg import __version__, commands, costreport, followup, routing, rubric
 from strateg.hooks import flags as hookflags
 
 OK, WARN, ERR = "OK", "WARN", "ERR"
@@ -351,6 +352,32 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     add("check", commands.cmd_check, "проверить активный проект")
+
+    p = add(
+        "due",
+        followup.cmd_due,
+        "что решать сейчас: срок пересмотра, условия отказа, устаревшие основания, обязательства",
+    )
+    p.add_argument("--today", help="дата отсчёта ГГГГ-ММ-ДД (по умолчанию сегодня); нужна для повторяемости")
+
+    p = add("impact", followup.cmd_impact, "что задевает новое сведение: источник И-n или утверждение У-n")
+    p.add_argument("id", help="источник или утверждение, например И-2 или У-13")
+
+    metric = add("metric", followup.cmd_metric_add, "значения показателей, которые внёс человек")
+    metric_sub = metric.add_subparsers(dest="metric_command", required=True, parser_class=_Parser)
+    p = metric_sub.add_parser(
+        "add",
+        parents=[common],
+        help="записать значение показателя строки плана проверки и сравнить его с порогами условий",
+    )
+    p.set_defaults(func=commands.run, handler=followup.cmd_metric_add)
+    p.add_argument("row", help="строка плана проверки, например ПП-2")
+    p.add_argument("--value", required=True, help="число с единицей, как в пороге: «18 %%», «1500 ₽»")
+    p.add_argument("--date", required=True, help="на какую дату значение, ГГГГ-ММ-ДД")
+    p.add_argument("--note", help="откуда значение (выгрузка, отчёт)")
+
+    p = add("diff", followup.cmd_diff, "что изменилось после выпуска: было → стало")
+    p.add_argument("--release", type=int, help="номер выпуска (по умолчанию последний)")
 
     cost = add("cost", commands.cmd_cost_add, "учёт стоимости")
     cost_sub = cost.add_subparsers(dest="cost_command", required=True, parser_class=_Parser)

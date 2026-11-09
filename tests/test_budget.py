@@ -79,7 +79,8 @@ def test_defaults_are_taken_from_the_config_folder(cli, home, tmp_path, monkeypa
     folder.mkdir()
     (folder / "defaults.yaml").write_text(
         "budget:\n  usd: 9\n  minutes: 20\n  warn_share: 0.5\n"
-        "  release_reserve:\n    usd: 1\n    minutes: 2\n",
+        "  release_reserve:\n    usd: 1\n    minutes: 2\n"
+        "follow_up:\n  source_max_age_days: 90\n  commitments_window_days: 3\n",
         encoding="utf-8",
     )
     monkeypatch.setenv(budgetlib.CONFIG_ENV, str(folder))

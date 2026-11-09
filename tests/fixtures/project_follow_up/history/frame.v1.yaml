@@ -1,0 +1,33 @@
+schema_version: 1
+version: 1
+decision:
+  value: Как продавать защиту и что обещать аудитории
+  origin: из запроса
+decision_space:
+  - продавать защиту отдельной подпиской
+  - включить защиту в тарифы
+deadline:
+  value: сегодня
+  origin: допущение
+research_question:
+  value: Как продавать защиту и что обещать аудитории
+  origin: из запроса
+recipient:
+  value: руководитель продукта
+  origin: допущение
+constraints:
+  value: только открытые источники
+  origin: из запроса
+data:
+  value: страница услуги по ссылке
+  origin: из материалов
+  source: И-1
+region:
+  value: Москва
+  origin: допущение
+success_criteria:
+  value: рекомендация, которую можно защитить, и план проверки
+  origin: допущение
+out_of_scope:
+  value: доработка самой услуги
+  origin: допущение

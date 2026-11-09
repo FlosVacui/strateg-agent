@@ -26,6 +26,7 @@ from strateg import fetch as fetchlib
 from strateg import pack as packlib
 from strateg import project as proj
 from strateg import quote as quotelib
+from strateg import release as releaselib
 from strateg.hooks import flags as hookflags
 from strateg.models import (
     LOCATOR_KINDS,
@@ -263,7 +264,13 @@ def cmd_step_done(args: argparse.Namespace) -> int:
     total = max((end - start.time).total_seconds(), 0.0)
     waited = proj.waited_seconds(start.time, end, proj.human_waits(p.journal))
     duration = round(max(total - waited, 0.0), 1)
+    release_no = 0
     with proj.transaction(p.root):
+        message = None
+        if step == "7":  # выпуск: снимок файлов выхода и документов, с ним потом сравнивает `strateg diff`
+            release_no, kept = releaselib.take_snapshot(p)
+            if release_no:
+                message = f"снимок выпуска {release_no}: файлов {len(kept)}, history/release-{release_no}/"
         p.add_event(
             p.event(
                 time=end,
@@ -273,17 +280,22 @@ def cmd_step_done(args: argparse.Namespace) -> int:
                 idempotency_hash=last_hash,
                 status="выполнено",
                 duration_s=duration,
+                message=message,
             )
         )
         p.state.step = step
         p.state.next_action = args.next or f"Шаг {step} завершён; начать следующий шаг"
         _refresh_budget(p)
         p.save_state()
-    return emit(
-        args,
-        {"step": step, "duration_s": duration, "waited_s": round(waited, 1)},
-        [f"Шаг {step} ({STEP_NAMES[step]}) выполнен за {_num(duration / 60)} мин (без ожидания ответов)."],
-    )
+    lines = [f"Шаг {step} ({STEP_NAMES[step]}) выполнен за {_num(duration / 60)} мин (без ожидания ответов)."]
+    if release_no:
+        lines.append(
+            f"Снимок выпуска {release_no}: history/release-{release_no}/ (с ним сравнивает `strateg diff`)."
+        )
+    data = {"step": step, "duration_s": duration, "waited_s": round(waited, 1)}
+    if release_no:
+        data["release"] = release_no
+    return emit(args, data, lines)
 
 
 def cmd_gate_open(args: argparse.Namespace) -> int:

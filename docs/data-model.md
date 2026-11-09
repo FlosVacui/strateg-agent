@@ -5,32 +5,32 @@
 ## Файлы
 | Файл | Формат | Кто пишет | Схема |
 |---|---|---|---|
-| `state.yaml` | YAML; `profile` — профиль выбора моделей (`route --profile`) | только CLI | `state.schema.json` |
+| `state.yaml` | YAML; `profile` — профиль выбора моделей | только CLI | `state.schema.json` |
 | `journal.jsonl` | JSONL, только добавление; у «выбор модели» — `role`, `model`, `level`, `effort`; хук (`actor: хук`, нужен `message`) пишет «отказ хука», «граница прав не активна», «задание исследователю», «роль выполнена» (`role` — `agent_type`), «учёт недоступен», «бюджет» | CLI и хук | `journal-event.schema.json` (строка) |
-| `cost.jsonl` | JSONL, только добавление; «по сообщению» пишут и хуки, без повторов `message_id`; `web_search_usd` — веб-поиск в `cost_usd` | CLI и хук | `cost-record.schema.json` (строка) |
-| `.tmp/cost/offsets.json` | JSON: смещения разбора, пропуски, `recounted_at`, `exhausted`; не в архиве | хук | — |
+| `cost.jsonl` | JSONL, только добавление; «по сообщению» пишут и хуки, без повторов `message_id`; `web_search_usd` — веб-поиск в `cost_usd`; смещения разбора, `recounted_at`, `exhausted` — в `.tmp/cost/offsets.json` (не в архиве, пишет хук) | CLI и хук | `cost-record.schema.json` (строка) |
 | `sources.yaml` | YAML | только CLI | `sources.schema.json` |
 | `claims.yaml` | YAML | скиллы через CLI | `claims.schema.json` |
 | `sources/` | текст снимков веба; sha256 файла — хеш снимка | CLI | — |
 | `inputs/` | материалы человека (при ПДн — обезличенная копия) и их текст | человек кладёт, текст пишет CLI | — |
-| `frame.yaml` | YAML: десять полей `{value, origin[, source]}`; те же в событии В1 (`gate.frame`) | только CLI | `frame.schema.json` |
+| `frame.yaml` | YAML: десять полей `{value, origin[, source]}`, те же в `gate.frame` (В1) | только CLI | `frame.schema.json` |
 | `plan.yaml` | YAML: вопросы `ВП-n` с ветками `{if, then}`, `excluded`, `estimate` | только CLI | `plan.schema.json` |
-| `gaps.yaml` | YAML: пробелы `П-n` (в том числе `close_via`, `hypothesis`) и перечень показателей `metric_coverage` | только CLI | `gaps.schema.json` |
+| `gaps.yaml` | YAML: пробелы `П-n` (`close_via`, `hypothesis`) и перечень показателей `metric_coverage` | только CLI | `gaps.schema.json` |
 | `options.yaml` | YAML: варианты `Вар-n`, возражения, сравнение, `recommendation`, `chosen` | только CLI | `options.schema.json` |
-| `promises.yaml` | YAML: «обещание → возможность → источник», `О-n` | только CLI | `promises.schema.json` |
-| `verification.yaml` | YAML: строки `ПП-n` (в том числе `from_change_mind`), `premortem`, `undesired_effects` | только CLI | `verification.schema.json` |
-| `decisions.yaml` | YAML: решения `Реш-n`; у условия отказа необязательная строка плана `row` | только CLI | `decisions.schema.json` |
-| `completeness.yaml` | YAML: итог полноты: `by` (`критик` или `агент`), часть А, ответы части Б, `result`, `failed`, `critic_call` (вызов критика подтверждён) | только CLI (`rubric record`) | `completeness.schema.json` |
-| `history/` | прежние версии: `history/frame.v1.yaml`, `history/outputs/options.v2.md` | CLI (`write`, `rubric record`) | — |
+| `promises.yaml` | YAML: обещания `О-n` | только CLI | `promises.schema.json` |
+| `verification.yaml` | YAML: строки `ПП-n` (и `from_change_mind`), `premortem`, `undesired_effects` | только CLI | `verification.schema.json` |
+| `decisions.yaml` | YAML: решения `Реш-n`; у условия отказа — строка плана `row` | только CLI | `decisions.schema.json` |
+| `metrics.yaml` | YAML: значения `ПП-n` — `value`, `unit`, `date`, `note`; `origin` — «пользователь» | только CLI (`metric add`) | `metrics.schema.json` |
+| `completeness.yaml` | YAML: итог полноты — `by` (`критик`, `агент`), части А и Б, `result`, `failed`, `critic_call` | только CLI (`rubric record`) | `completeness.schema.json` |
+| `history/` | прежние версии: `history/frame.v1.yaml`, `history/outputs/options.v2.md`; снимок выпуска `history/release-1/` | CLI (`write`, `rubric record`, `step done 7`) | — |
 
 Семь файлов выводов необязательны, `completeness.yaml` появляется на шаге 6. Документы — Markdown в `outputs/`, поля для проверок — в YAML.
 
 ## Общие правила
 - Ключи английские, snake_case; значения закрытых списков русские. В каждом файле и записи JSONL есть `schema_version` (сейчас 1). Неизвестные поля и повтор ключа YAML — ошибка. Несовместимое изменение поднимает `schema_version` и попадает в `CHANGELOG.md`.
-- Пути — только в полях путей: относительные, через `/`, без `C:\`, `\\сервер`, `..`, `.`, пустых элементов. UTF-8 без BOM, LF. Время — ISO 8601 с поясом; стоимость и длительность — конечные числа. Даты в выводах — `"2026-11-06"`, цифры ASCII.
-- Номера: `И-n` источник, `У-n` утверждение, `ВП-n`, `П-n`, `Вар-n`, `О-n`, `ПП-n`, `Реш-n` (буквы русские; латинскую ошибка называет). YAML 1.1: `no`, `1.10`, даты и шаг `3` без кавычек — другой тип; ошибка подсказывает кавычки.
-- `access` источника: «получен», «источник недоступен: защита», «запрещено robots.txt», «нужен браузер», «источник недоступен: ошибка». Статус действия: «начато», «выполнено», «ошибка», «пропущено», «прервано» (начато, но не выполнено; `duration_s` (необязательна) — работа шага до перерыва; шаг на паузе (ворота, остановка) не прерывается).
-- Материал хранит `material_sha256`: повтор `add` отдаёт прежний номер. Исходник с ПДн — в `.tmp/` до `add --confirm`, затем в `~/.strateg/private/`. Утверждение хранит `step` и `attempt`: дублей при повторе нет.
+- Пути — только в полях путей: относительные, через `/`, без `C:\`, `\\сервер`, `..`, `.`, пустых элементов. UTF-8 без BOM, LF. Время — ISO 8601 с поясом; стоимость и длительность — конечные числа. Даты — `"2026-11-06"`, цифры ASCII.
+- Номера: `И-n` источник, `У-n` утверждение, `ВП-n`, `П-n`, `Вар-n`, `О-n`, `ПП-n`, `Реш-n` (буквы русские). YAML 1.1: `no`, `1.10`, даты и шаг `3` без кавычек — другой тип; ошибка подсказывает кавычки.
+- `access` источника: «получен», «источник недоступен: защита», «запрещено robots.txt», «нужен браузер», «источник недоступен: ошибка». Статус действия: «начато», «выполнено», «ошибка», «пропущено», «прервано» (начато, не выполнено; `duration_s` — работа шага до перерыва; шаг на паузе не прерывается).
+- Материал хранит `material_sha256`: повтор `add` отдаёт прежний номер. Исходник с ПДн — в `.tmp/` до `add --confirm`, затем в `~/.strateg/private/`. Утверждение хранит `step` и `attempt` (дублей при повторе нет).
 
 ## Что не выразить схемой — только кодом
 **Внутри записи** (валидаторы моделей):
@@ -41,19 +41,19 @@
 - `verification.yaml`: ровно три разные причины пре-мортема; метод — с `strength` и `not_prove`. Владелец (и в решении) — не «все», «команда», «TBD», «n/a» и их написания. Порог (`threshold`) везде содержит цифру; у условия решения есть порог и дата.
 
 **Между записями и файлами** (`check_project`):
-- Ссылки ведут на существующие номера. `plan_question` вида `ВП-n` сверяется с `plan.yaml`, `baseline` вида `П-n` — с `gaps.yaml`; похожее на номер (латиница, строчные, нуль впереди) — ошибка с подсказкой.
+- Ссылки ведут на существующие номера. `plan_question` вида `ВП-n` сверяется с `plan.yaml`, `baseline` вида `П-n` — с `gaps.yaml`; похожее на номер (латиница, строчные, нуль впереди) — ошибка.
 - Типы: прогноз у ячейки сравнения, факт у обещания, гипотеза у показателя, пре-мортема и `gaps[].hypothesis`, допущение у `gaps[].assumption`, допущение или гипотеза у `decisions[].assumptions`, факт или прогноз у `metric_coverage[].claims`, факт или слово «гипотеза» у `objections[].basis`.
-- У рекомендации есть факт с цитатой не «о себе» (`self_reported: false`). Номера `П-n`, `У-n`, `Вар-n` в тексте файлов выхода ведут на реестры.
-- Синтетики нет в показателе, пре-мортеме, `recommendation.claims` (там же хоть один факт), `metric_coverage[].claims`, `closed_by`, `decisions.basis`, `objections[].basis`. Отозванное или заменённое нельзя только в рекомендации и обещании.
+- У рекомендации есть факт с цитатой не «о себе» (`self_reported: false`). Номера `П-n`, `У-n`, `Вар-n` в текстах файлов выхода ведут на реестры.
+- Синтетики нет в показателе, пре-мортеме, `recommendation.claims` (там же хоть один факт), `metric_coverage[].claims`, `closed_by`, `decisions.basis`, `objections[].basis`. Отозванное или заменённое нельзя в рекомендации и обещании.
 - Причина пре-мортема ведёт в строку «защитный»; условие решения с `row` — в существующую строку с тем же порогом; порог строки с `from_change_mind` равен порогу записи `recommendation.change_mind`.
-- `history/`: имена `<файл>.v<N>.<расширение>`; версии рамки 1…N−1, нехватка — одно сообщение, выше N−1 — ошибка; прежняя версия — рамка с тем же номером.
+- `history/`: имена `<файл>.v<N>.<расширение>`, в `release-<n>/` только файлы выхода и `outputs/*.md`; версии рамки 1…N−1, нехватка — одно сообщение, выше N−1 — ошибка; прежняя версия — рамка с тем же номером.
 - `completeness.yaml`: номера частей А и Б есть в рубрике, на все вопросы части Б есть ответ, `failed` — номера «нет», `result` равен выводу по `pass_rule`.
-- Источник с признаками закрытых данных нельзя цитировать без подтверждения человека: ошибка — снимок с `closed_markers` без `closed_confirmed`, материал с ПДн без `anonymization_confirmed`, изображение без `no_personal_data_confirmed`.
-- У отвеченного В1 есть `frame`, если есть `frame.yaml`; рамка последнего ответа на В1 совпадает с одной из версий рамки; метка `[О-n]` в `outputs/comms-strategy.md` ведёт на обещание. Замена: обратная ссылка, те же предмет, период, регион; циклов нет ни в заменах, ни в основаниях; у факта регион источника, источник не синтетика.
+- Закрытые данные нельзя цитировать без подтверждения человека: ошибка — снимок с `closed_markers` без `closed_confirmed`, материал с ПДн без `anonymization_confirmed`, изображение без `no_personal_data_confirmed`.
+- У отвеченного В1 есть `frame`, если есть `frame.yaml`; рамка последнего ответа на В1 совпадает с одной из версий рамки; метка `[О-n]` в `outputs/comms-strategy.md` ведёт на обещание. Замена: обратная ссылка, те же предмет, период, регион; циклов нет в заменах и основаниях; у факта регион источника, источник не синтетика.
 - Журнал и состояние: «найдена инструкция» — у «подозрительного» источника и только у него; `state.step` — шаг последнего действия; статусы ворот — по последнему событию ворот; время событий не убывает.
 - Запись проверки ссылается на текущий снимок; sha256 файла равен `text_sha256`; цитата есть в снимке после нормализации (ADR-0005); отметка выполнения и `message_id` не повторяются.
 
-**Не проверяется здесь — делают команды CLI:** сверка чисел и отрицаний в цитате (`claim add`); время работы и стоимость; запись файлов выхода и версий (`write`); замена и отзыв; «прервано» (`status --brief`); «изменено вне агента» (любая команда).
+**Не проверяется здесь — делают команды CLI:** сверка чисел и отрицаний в цитате (`claim add`); значение против порога (`due`); время работы и стоимость; запись файлов выхода и версий (`write`); замена и отзыв; «прервано» (`status --brief`); «изменено вне агента» (любая команда).
 
 ## Цепочка связей (рамка → ВП → И → У → Вар → О, ПП → Реш)
 ```
@@ -64,6 +64,7 @@
 Вар-n --`differs.from`--> Вар-m;  Вар-n --`objections[].basis`, `forecast`--> У-n;  `recommendation` --`option`, `claims`--> Вар-n, У-n
 О-n --`claims`--> У-n (факт);  ПП-n --`hypothesis`--> У-n (гипотеза);  `premortem` --`claim`, `row`--> У-n, ПП-n (защитный)
 Реш-n --`option`, `rejected`--> Вар-n;  Реш-n --`basis`, `assumptions`--> У-n;  `conditions[].row` --> ПП-n;  Реш-n <--`replaces` / `replaced_by`--> Реш-m
+`metrics.yaml` --`row`--> ПП-n
 ```
 
 ## Признаки приёмки, которые проверяются по файлам
@@ -72,10 +73,10 @@
 | С-1: тип; у факта проверенная цитата; нет фактов из синтетики; издатель, вид, «о себе»; диапазон у прогноза, способ проверки у гипотезы | `claims[].type`, `quotes[].check`, `publisher`, `publisher_kind`, `self_reported`, `forecast_range`, `check_method` |
 | С-1, С-13: ворота, режим, вопросы, время; стоимость; бюджет; нет «изменено вне агента»; итог проверки полноты | `journal`: `kind`, `gate`, `duration_s`; `cost.jsonl`; `state.yaml: budget`, `files`; `completeness.yaml` |
 | С-2: действие не повторено; типы и статусы после продолжения те же | `journal`: `idempotency_hash`, `status`; `claims[].step`, `attempt`; `state.yaml`: `step`, `next_action` |
-| С-3, С-4, С-5: прежняя рамка и документ доступны; замена, отзыв, правка человека | `status`, `status_history`, `replaces`, `replaced_by`, `origin: пользователь`, `kind: исправление`; `history/`, `frame.yaml: version`, `gate.frame` прежних В1 |
+| С-3, С-4, С-5: прежняя рамка и документ доступны; замена, отзыв, правка человека | `status`, `status_history`, `replaces`, `replaced_by`, `origin: пользователь`, `kind: исправление`; `history/`, `release-<n>/`, `frame.yaml: version`, `gate.frame` прежних В1 |
 | С-7, С-8, С-10: синтетика не факт; место цитаты; обезличивание; закрытые данные; инструкция в источнике | `type`/`origin: синтетика`, `locator`, `anonymized`, `closed_markers`, `closed_confirmed`, `suspicious` |
 | С-9: недоступный источник с датой и ошибкой; сбой в журнале | `access`, `access_note`, `fetch.accessed_at`; `kind: ошибка`; `status: прервано` |
 | С-14: нет абсолютных путей; состояние переносится | поля путей (`path`, `text_path`, `files`); `state.yaml` |
 | С-1: рамка и откуда поля; разные действия у вопроса плана; пробелы и показатели решения | `frame.yaml`, `gate.frame`, `plan.yaml: branches[].then`; `gaps.yaml`: `reason`, `searched`, `affects_choice`, `how_to_close`, `metric_coverage` |
 | С-1: варианты, возражения, сравнение, рекомендация; обещания на фактах; план проверки, пре-мортем | `options.yaml`; `promises.yaml`; `verification.yaml`: `rows[].kind`, `baseline`, `premortem`, `undesired_effects` |
-| С-6: запись решения, условия отказа с порогом, датой и строкой плана | `decisions.yaml`: `option`, `basis`, `owner`, `conditions`, `review_date`, `commitments` |
+| С-6: запись решения, условия отказа с порогом, датой и строкой плана | `decisions.yaml`: `option`, `basis`, `owner`, `conditions`, `review_date`, `commitments`; `metrics.yaml` |

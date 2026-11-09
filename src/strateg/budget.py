@@ -74,8 +74,18 @@ class BudgetDefaults(_Config):
     release_reserve: Reserve = Field(description="Резерв на выпуск с пометкой о неполноте")
 
 
+class FollowUpDefaults(_Config):
+    source_max_age_days: Annotated[int, Field(gt=0)] = Field(
+        description="Источник факта старше стольких дней (по дате обращения): основание решения устарело"
+    )
+    commitments_window_days: Annotated[int, Field(ge=0)] = Field(
+        description="Обязательство со сроком в пределах стольких дней попадает в `strateg due`"
+    )
+
+
 class Defaults(_Config):
     budget: BudgetDefaults
+    follow_up: FollowUpDefaults
 
 
 class TokenPrices(_Config):
