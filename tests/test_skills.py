@@ -379,7 +379,7 @@ def test_options_skill_has_the_chosen_option_step_and_loop_back():
 
 def test_research_skill_asks_for_two_searches():
     text = (SKILLS / "research" / "SKILL.md").read_text(encoding="utf-8")
-    assert "не меньше двух поисков" in text
+    assert "не меньше двух запросов разной формулировки и двух видов источников" in text
     assert "claim list --step 2б --plan-question" in text
 
 
@@ -998,3 +998,113 @@ def test_package_takes_cost_and_critic_trace_from_cli():
     text = (SKILLS / "package" / "SKILL.md").read_text(encoding="utf-8")
     assert "uv run strateg cost report" in text
     assert "вызов критика не подтверждён" in text
+
+
+# Правила качества рекомендации: довод, смысл цитат, поиск по пробелам, расчёт пользы, сообщение, страница.
+# Ключевая фраза каждого правила стоит в файле, который его исполняет; правишь фразу — правь и тест.
+QUALITY_PHRASES = {
+    "довод отличает вариант": [
+        (SKILLS / "options" / "SKILL.md", "чем вариант лучше каждого другого активного"),
+        (SKILLS / "options" / "SKILL.md", "«выбор условный: факты не различают Вар-a и Вар-b»"),
+        (SKILLS / "options" / "SKILL.md", "верный по определению варианта"),
+        (SKILLS / "options" / "SKILL.md", "`why`, `answer` и ячейки не сильнее своих `У-n`"),
+        (SKILLS / "options" / "SKILL.md", "В отличие от Вар-3"),
+        (SKILLS / "options" / "SKILL.md", "«Довод не различает» — перепиши `why`"),
+        (ROLES / "critic.md", "Порядок ответа:"),
+        (ROLES / "critic.md", "чем вариант лучше каждого другого активного"),
+        (ROLES / "critic.md", "«довод не различает»"),
+        (ROLES / "critic.md", "Довод: не различает"),
+        (SKILLS / "strategy" / "completeness.md", "Довод верен для любого варианта"),
+    ],
+    "утверждение не сильнее цитаты": [
+        (SKILLS / "research" / "claims.md", "оценки, причины или направления («замедлился», «лидер»)"),
+        (SKILLS / "research" / "claims.md", "только если оба значения в цитатах этого факта"),
+        (SKILLS / "research" / "claims.md", "CLI сверяет числа и слова цитаты, смысл — нет"),
+        (ROLES / "critic.md", "`why`, `answer` и ячейки сравнения — с утверждениями"),
+        (ROLES / "critic.md", "Сильнее цитаты: У-3"),
+    ],
+    "поиск по пробелу": [
+        (
+            SKILLS / "research" / "SKILL.md",
+            "не меньше двух запросов разной формулировки и двух видов источников по `publisher_kind`",
+        ),
+        (
+            SKILLS / "research" / "SKILL.md",
+            "официальный первоисточник (компания, регулятор), отраслевое исследование, СМИ, "
+            "отзыв пользователя",
+        ),
+        (SKILLS / "research" / "SKILL.md", "« → И-n, <вид>» или « → ничего»"),
+        (SKILLS / "research" / "SKILL.md", "`budget check --action поиск` дал код 1"),
+        (SKILLS / "research" / "SKILL.md", "«не искали: <виды>»"),
+        (SKILLS / "research" / "SKILL.md", "он первым в `how_to_close`"),
+        (METHODS / "gaps.md", "два общих запроса к одному виду — не поиск"),
+    ],
+    "польза, затраты и доходы с числами": [
+        (SKILLS / "strategy" / "SKILL.md", "а не перечень пробелов"),
+        (SKILLS / "strategy" / "SKILL.md", "«не оценено — П-n»"),
+        (
+            SKILLS / "options" / "SKILL.md",
+            "экономический порог перехода к «закрыть направление» или «не запускать»",
+        ),
+        (SKILLS / "options" / "SKILL.md", "маржа = офисы (У-5)"),
+        (METHODS / "product-strategy.md", "формула, входы `У-n` («факт»"),
+        (METHODS / "product-strategy.md", "цена дополнения к другой услуге — не цена отдельной"),
+        (METHODS / "product-strategy.md", "частичный расчёт и `П-n`"),
+        (METHODS / "product-strategy.md", "«продолжать, если выручка − переменные − постоянные затраты > 0»"),
+        (TEMPLATES / "product-strategy.md", "расчёт пользы пользователю: формула, входы с У-n, итог"),
+        (
+            AGENTS,
+            "расчёт из утверждений (формула, номера входов, итог) — не новое сведение; "
+            "итог не сильнее самого слабого входа",
+        ),
+    ],
+    "сообщение о пользе с условиями": [
+        (METHODS / "communication-strategy.md", "о пользе, затем об условиях"),
+        (METHODS / "communication-strategy.md", "польза из расчёта в «Польза, затраты и доходы»"),
+        (METHODS / "communication-strategy.md", "Перечень оговорок — не сообщение"),
+        (TEMPLATES / "comms-strategy.md", "польза, затем условия"),
+    ],
+    "одна страница читается директором": [
+        (TEMPLATES / "one-pager.md", "решение, главный довод, главный риск, что не проверено"),
+        (TEMPLATES / "one-pager.md", "номера — только у варианта"),
+        (SKILLS / "package" / "SKILL.md", "из номеров только вариант, без кодов `Б-n`"),
+        (SKILLS / "package" / "SKILL.md", "не больше двух номеров в скобках в конце предложения"),
+        (SKILLS / "package" / "SKILL.md", "в `outputs/one-pager.md` — словами."),
+    ],
+}
+QUALITY_CASES = [(rule, path, phrase) for rule, items in QUALITY_PHRASES.items() for path, phrase in items]
+
+
+@pytest.mark.parametrize(
+    ("rule", "path", "phrase"), QUALITY_CASES, ids=lambda v: v if isinstance(v, str) else ""
+)
+def test_quality_rules_keep_their_key_phrases(rule, path, phrase):
+    assert phrase in path.read_text(encoding="utf-8"), f"{rule}: в {rel(path)} нет фразы «{phrase}»"
+
+
+def test_one_pager_is_not_marked_with_rubric_codes():
+    """Пометка о неполноте в одной странице — словами: коды признаков идут в отчёты, а не к директору."""
+    text = (SKILLS / "package" / "SKILL.md").read_text(encoding="utf-8")
+    assert "в `outputs/one-pager.md`, `outputs/report.md` и `outputs/run-report.md` — «Неполно" not in text
+
+
+def test_the_economic_threshold_is_set_at_the_choice_step():
+    """Порог формулой пишется на шаге 4 в `change_mind` (его утверждает человек на В4), а не на шаге 5."""
+    options = (SKILLS / "options" / "SKILL.md").read_text(encoding="utf-8")
+    assert (
+        "Одна запись — экономический порог" in options and "`metric` формула, входы `У-n` и `П-n`" in options
+    )
+
+
+def test_rubric_part_b_asks_for_the_new_quality_rules():
+    data = yaml.safe_load(RUBRIC.read_text(encoding="utf-8"))
+    questions = {item["id"]: item["question"] for item in data["part_b"]}
+    assert (
+        "не меньше двух запросов" in questions["Б-3"]
+        and "Нехватка бюджета ответ «да» не даёт" in questions["Б-3"]
+    )
+    assert "publisher_kind" in questions["Б-3"]
+    assert "каждого другого активного" in questions["Б-4"] and "«выбор условный»" in questions["Б-4"]
+    assert "оценки или направления" in questions["Б-5"]
+    assert "формула, входы с У-n, итог" in questions["Б-15"] and "«не оценено — П-n»" in questions["Б-15"]
+    assert "недостающие входы с П-n" in questions["Б-15"]
