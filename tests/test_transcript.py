@@ -8,7 +8,7 @@ import pytest
 
 from strateg import budget, pricing
 from strateg import transcript as tr
-from transcripts import HAIKU, OPUS, SONNET, append, assistant, user_line, write
+from transcripts import HAIKU, OPUS, SONNET, append, assistant, searches, user_line, write
 
 NL = chr(10)
 
@@ -53,6 +53,61 @@ def test_repeat_of_a_message_keeps_the_largest_usage_in_any_order():
         lines = [assistant("m1", out=n) for n in outs]
         parsed = tr.parse(NL.join(lines).encode("utf-8"))
         assert parsed.messages["m1"].output_tokens == 250, outs
+
+
+def test_parse_takes_only_web_search_tool_use_ids():
+    """Из `content` берутся id блоков `tool_use` с именем `WebSearch`; другие вызовы и текст не читаются."""
+    line = assistant(
+        "m1", tools=(("t1", "WebSearch"), ("t2", "Read"), ("t3", "WebSearch"), ("t4", "WebFetch"))
+    )
+    u = tr.parse(line.encode("utf-8")).messages["m1"]
+    assert u.search_calls == frozenset({"t1", "t3"})
+    assert tr.parse(assistant("m2").encode("utf-8")).messages["m2"].search_calls == frozenset()
+    odd = json.dumps(
+        {
+            "type": "assistant",
+            "message": {
+                "id": "m3",
+                "model": SONNET,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+                "content": [
+                    {"type": "tool_use", "name": "WebSearch"},  # без id: не отличить повтор
+                    {"type": "tool_use", "id": 7, "name": "WebSearch"},
+                    {"type": "text", "id": "x", "name": "WebSearch"},
+                    "строка вместо блока",
+                    {"type": "tool_use", "id": "t9", "name": "WebSearch"},
+                ],
+            },
+        }
+    )
+    assert tr.parse(odd.encode("utf-8")).messages["m3"].search_calls == frozenset({"t9"})
+    broken = json.dumps(
+        {
+            "type": "assistant",
+            "message": {
+                "id": "m4",
+                "model": SONNET,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+                "content": "текст",
+            },
+        }
+    )
+    assert tr.parse(broken.encode("utf-8")).messages["m4"].search_calls == frozenset()
+
+
+def test_web_search_block_is_unique_by_id_across_repeated_lines_and_messages():
+    """Сообщение пишется несколькими строками, строка может повториться: поиск считается один раз."""
+    lines = [
+        assistant("m1", out=5, tools=searches("t1")),
+        assistant("m1", out=9, tools=searches("t1", "t2")),  # то же сообщение, дописан второй блок
+        assistant("m1", out=9, tools=searches("t1", "t2")),  # дословный повтор строки
+        assistant("m2", out=5, tools=searches("t2", "t3")),  # копия блока t2 в другом сообщении
+    ]
+    parsed = tr.parse(NL.join(lines).encode("utf-8"))
+    assert parsed.messages["m1"].search_calls == frozenset({"t1", "t2"})
+    assert parsed.messages["m2"].search_calls == frozenset({"t3"})
+    total = sum(len(u.search_calls) for u in parsed.messages.values())
+    assert total == 3
 
 
 def test_synthetic_messages_of_the_environment_are_not_counted_as_skipped():
@@ -230,6 +285,97 @@ def test_web_search_is_priced_by_the_number_of_searches(prices):
     assert cost(prices, web=2) == pytest.approx(0.02)
     assert cost(prices, web=0) == 0
     assert cost(prices, web=None) == 0
+
+
+def query_cost(prices) -> float:
+    """Запрос к модели поиска: средние токены `web_search_query` по ценам Haiku 5.5 из той же таблицы."""
+    q = prices.web_search_query
+    h = prices.models[q.model]
+    return (q.input_tokens * h.input + q.output_tokens * h.output) / 1e6
+
+
+def test_web_search_query_is_in_the_price_table_with_its_basis(prices):
+    q = prices.web_search_query
+    assert q.model == HAIKU and q.model in prices.models
+    assert (q.input_tokens, q.output_tokens, q.measured) == (11840, 1070, "2026-11-08")
+    assert query_cost(prices) == pytest.approx(0.001719)
+    text = (budget.config_dir() / "prices.yaml").read_text(encoding="utf-8")
+    assert "21 вызов" in text and "248 583" in text  # основание замера записано рядом с числами
+
+
+def test_web_search_tool_call_costs_the_fee_plus_the_search_model_query(prices):
+    one = cost(prices, tools=searches("t1"))
+    assert one == pytest.approx(0.01 + 0.001719)
+    assert cost(prices, tools=searches("t1", "t2", "t3")) == pytest.approx(3 * (0.01 + 0.001719))
+    # токены самого сообщения считаются отдельно от поиска
+    assert cost(prices, out=1000, tools=searches("t1")) == pytest.approx(0.01 + 0.01 + 0.001719)
+    # вызов другого инструмента поиском не считается
+    assert cost(prices, tools=(("t1", "Read"),)) == 0
+
+
+def test_web_search_query_follows_the_prices_of_its_model(prices):
+    """Запрос к модели поиска стоит по её цене из таблицы: сменили модель поиска — изменилась цена."""
+    changed = prices.model_copy(
+        update={"web_search_query": prices.web_search_query.model_copy(update={"model": OPUS})}
+    )
+    expected = (11840 * 4 + 1070 * 20) / 1e6
+    assert cost(changed, tools=searches("t1")) == pytest.approx(0.01 + expected)
+
+
+def test_server_reported_searches_are_not_charged_twice(prices):
+    """Среда назвала поиски сама (`server_tool_use`): вызовы `WebSearch` того же сообщения их не удваивают."""
+    assert cost(prices, web=2, tools=searches("t1", "t2")) == pytest.approx(0.02)
+    assert cost(prices, web=1, tools=searches("t1", "t2", "t3")) == pytest.approx(0.01)
+    assert cost(prices, web=0, tools=searches("t1")) == pytest.approx(
+        0.01 + 0.001719
+    )  # ноль — среда не считала
+
+
+def test_twenty_one_searches_match_the_measured_haiku_bill(prices):
+    """Замер: у Haiku 21 поиск, 248 583 токена ввода и 22 529 вывода — $0,2461 вместе с платой за поиск."""
+    got = cost(prices, tools=searches(*[f"t{n}" for n in range(21)]))
+    measured = 21 * 0.01 + (248_583 * 0.1 + 22_529 * 0.5) / 1e6
+    assert measured == pytest.approx(0.2461, abs=5e-5)
+    assert got == pytest.approx(measured, rel=0.001)
+
+
+def _prices_from(tmp_path, monkeypatch, change) -> None:
+    """Подставляет копию `prices.yaml`, изменённую `change(словарь)`."""
+    import yaml
+
+    raw = yaml.safe_load((budget.config_dir() / "prices.yaml").read_text(encoding="utf-8"))
+    change(raw)
+    folder = tmp_path / "cfg"
+    folder.mkdir(exist_ok=True)
+    (folder / "prices.yaml").write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
+    monkeypatch.setenv(budget.CONFIG_ENV, str(folder))
+
+
+def test_prices_without_the_search_query_load_and_a_search_costs_the_fee_only(tmp_path, monkeypatch):
+    _prices_from(tmp_path, monkeypatch, lambda raw: raw.pop("web_search_query"))
+    loaded = budget.load_prices()
+    assert loaded.web_search_query is None
+    assert loaded.accessed == "2026-11-08" and HAIKU in loaded.models  # остальное в таблице на месте
+    assert cost(loaded, tools=searches("t1", "t2")) == pytest.approx(0.02)  # плата за поиск, без запроса
+    assert cost(loaded, out=1000, tools=searches("t1")) == pytest.approx(0.01 + 0.01)
+    assert cost(loaded, web=2, tools=searches("t1", "t2", "t3")) == pytest.approx(0.02)  # среда назвала сама
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda raw: raw["web_search_query"].update(model="claude-нет"),
+        lambda raw: raw["web_search_query"].update(measured="вчера"),
+        lambda raw: raw["web_search_query"].update(input_tokens=0),
+    ],
+    ids=["unknown model", "bad date", "zero tokens"],
+)
+def test_prices_with_a_broken_search_query_are_refused(tmp_path, monkeypatch, change):
+    from strateg.project import CliError
+
+    _prices_from(tmp_path, monkeypatch, change)
+    with pytest.raises(CliError):
+        budget.load_prices()
 
 
 def test_us_inference_multiplies_tokens_but_not_searches(prices):

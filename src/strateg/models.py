@@ -817,7 +817,11 @@ class JournalEvent(_Model):
     message: Text | None = Field(None, description="Пояснение или причина")
     idempotency_hash: Sha256 | None = Field(None, description="Ключ идемпотентности: хеш шага и входов")
     status: ActionStatus | None = None
-    duration_s: Number | None = Field(None, ge=0, description="Длительность действия, секунды")
+    duration_s: Number | None = Field(
+        None,
+        ge=0,
+        description="Длительность, секунды; у шага «прервано» — работа до перерыва, без ожидания человека",
+    )
     gate: GateEvent | None = None
     mode: Mode | None = Field(None, description="Для смены режима")
     role: Text | None = Field(None, description="Для выбора модели и «роль выполнена»: имя роли")
@@ -838,6 +842,7 @@ class JournalEvent(_Model):
                 p.append("у действия нет ключа идемпотентности (idempotency_hash)")
             if self.status is None:
                 p.append("у действия нет статуса (status)")
+            # у «прервано» длительность необязательна: старые журналы её не пишут
             if self.status == "выполнено" and self.duration_s is None:
                 p.append(
                     "у выполненного действия нет длительности (duration_s): по ней считается время работы"
@@ -897,7 +902,14 @@ class CostRecord(_Model):
     cache_write_5m_tokens: Count = 0
     cache_write_1h_tokens: Count = 0
     cache_read_tokens: Count = 0
-    web_searches: Count = 0
+    web_searches: Count = Field(
+        0, description="Оплаченных веб-поисков: по данным среды или по вызовам WebSearch"
+    )
+    web_search_usd: Number | None = Field(
+        None,
+        ge=0,
+        description="Часть cost_usd на веб-поиск: плата за поиск и запрос к модели поиска (оценка)",
+    )
     cost_usd: Number | None = Field(None, ge=0)
     cost_source: CostSource
 

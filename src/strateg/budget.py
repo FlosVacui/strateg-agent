@@ -1,7 +1,7 @@
 """Бюджет проекта и таблицы настроек `config/` (ADR-0010).
 
 Бюджет — деньги и время работы агента; остановка наступает по тому, что кончится раньше. Время — сумма
-длительностей шагов без ожидания ответа на воротах, плюс идущий шаг. Если стоимость неизвестна, лимит
+длительностей шагов без ожидания ответов человека, плюс идущий шаг. Если стоимость неизвестна, лимит
 действует только по времени. На выпуск с пометкой о неполноте оставлен резерв: в нём `budget check`
 не отказывает.
 
@@ -17,7 +17,15 @@ from pathlib import Path
 from typing import Annotated
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, StrictStr, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictStr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from strateg import project as proj
 from strateg.project import CliError, Project
@@ -93,11 +101,34 @@ class FastPrice(_Config):
     output: Positive
 
 
+class WebSearchQuery(_Config):
+    """Запрос к модели поиска: среднее по замеру, не цена со страницы цен."""
+
+    model: StrictStr = Field(description="Модель, которая выполняет поиск; её цены — в `models`")
+    input_tokens: Annotated[int, Field(gt=0)]
+    output_tokens: Annotated[int, Field(gt=0)]
+    measured: StrictStr = Field(description="Дата замера, ГГГГ-ММ-ДД")
+
+    @field_validator("measured")
+    @classmethod
+    def _date(cls, value: str) -> str:
+        import datetime as dt
+
+        try:
+            dt.date.fromisoformat(value)
+        except ValueError:
+            raise ValueError("дата замера должна быть вида 2026-11-08") from None
+        return value
+
+
 class Prices(_Config):
     accessed: StrictStr = Field(description="Дата обращения к странице цен, ГГГГ-ММ-ДД")
     source: StrictStr = Field(description="Страница цен")
     models: dict[str, ModelPrices]
     web_search_usd_per_1000: Positive
+    web_search_query: WebSearchQuery | None = Field(
+        None, description="Модель поиска и средний запрос; без неё поиск стоит одну плату за поиск"
+    )
     batch_multiplier: Positive
     us_data_residency_multiplier: Positive
     fast_mode: dict[str, FastPrice] = Field(default_factory=dict)
@@ -112,6 +143,12 @@ class Prices(_Config):
         except ValueError:
             raise ValueError("дата обращения должна быть вида 2026-11-07") from None
         return value
+
+    @model_validator(mode="after")
+    def _search_model_is_priced(self) -> Prices:
+        if self.web_search_query is not None and self.web_search_query.model not in self.models:
+            raise ValueError(f"модели поиска {self.web_search_query.model} нет в таблице цен models")
+        return self
 
 
 def _load(name: str, model: type[BaseModel]):

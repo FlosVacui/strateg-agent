@@ -10,7 +10,7 @@ from helpers import load_yaml
 from strateg import accounting, storage
 from strateg import project as proj
 from strateg.project_check import check_project
-from transcripts import OPUS, SONNET, agent_file, append, assistant, session_files, write
+from transcripts import OPUS, SONNET, agent_file, append, assistant, searches, session_files, write
 
 
 @pytest.fixture
@@ -179,6 +179,55 @@ def test_web_search_goes_into_the_record(demo, files):
     accounting.account(demo, "sess-1", main_source(main))
     (rec,) = lines_of(demo)
     assert rec["web_searches"] == 3 and rec["cost_usd"] == pytest.approx(0.03)
+
+
+FEE_AND_QUERY = 0.01 + (11840 * 0.1 + 1070 * 0.5) / 1e6  # плата за поиск и запрос к Haiku 5.5
+
+
+def test_web_search_calls_become_fee_and_search_model_query_in_the_record(demo, files):
+    main, _ = files
+    write(main, assistant("m1", SONNET, out=1000, tools=searches("t1", "t2")))
+    accounting.account(demo, "sess-1", main_source(main))
+    (rec,) = lines_of(demo)
+    assert rec["web_searches"] == 2 and rec["web_search_usd"] == pytest.approx(2 * FEE_AND_QUERY)
+    assert rec["cost_usd"] == pytest.approx(0.01 + 2 * FEE_AND_QUERY)  # вывод Sonnet и два поиска
+    assert_clean(demo)
+
+
+def test_web_search_is_not_counted_again_by_a_repeated_line_or_a_second_pass(demo, files):
+    main, _ = files
+    block = assistant("m1", SONNET, out=1, tools=searches("t1"))
+    write(main, block, block, assistant("m1", SONNET, out=1, tools=searches("t1")))
+    accounting.account(demo, "sess-1", main_source(main))
+    append(main, block)  # та же строка дописана позже
+    result = accounting.account(demo, "sess-1", main_source(main))
+    assert result.added == 0 and result.duplicates == 1
+    (rec,) = lines_of(demo)
+    assert rec["web_searches"] == 1
+    # копия истории в другой сессии (ответвление) поиск тоже не удваивает
+    fork = main.with_name("fork.jsonl")
+    write(fork, block)
+    accounting.account(demo, "sess-2", [accounting.Source("main:fork", fork, accounting.MAIN_ROLE)])
+    assert len(lines_of(demo)) == 1
+    total = proj.cost_total(proj.Project.load(demo).costs)[0]
+    assert total == pytest.approx(1 * 10 / 1e6 + FEE_AND_QUERY)
+
+
+def test_searches_named_by_the_environment_are_not_doubled_by_the_calls(demo, files):
+    main, _ = files
+    write(main, assistant("m1", SONNET, web=2, tools=searches("t1", "t2")))
+    accounting.account(demo, "sess-1", main_source(main))
+    (rec,) = lines_of(demo)
+    assert rec["web_searches"] == 2 and rec["cost_usd"] == pytest.approx(0.02)
+    assert rec["web_search_usd"] == pytest.approx(0.02)
+
+
+def test_a_message_without_searches_has_no_web_search_money(demo, files):
+    main, _ = files
+    write(main, assistant("m1", SONNET, out=5))
+    accounting.account(demo, "sess-1", main_source(main))
+    (rec,) = lines_of(demo)
+    assert rec["web_searches"] == 0 and "web_search_usd" not in rec
 
 
 def test_step_is_taken_from_state_at_the_time_of_accounting(cli, demo, files):

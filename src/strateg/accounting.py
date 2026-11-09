@@ -9,7 +9,8 @@
 3. сообщение, id которого уже есть в `cost.jsonl`, пропускает: повторный разбор и копия истории в другой
    сессии (ответвление, продолжение) расход не удваивают;
 4. для новых сообщений считает цену по `config/prices.yaml` (`strateg.pricing`); модели нет в таблице —
-   токены записываются, цена «нет данных»;
+   токены записываются, цена «нет данных». Вызовы `WebSearch` в сообщении входят в цену (плата за поиск и
+   запрос к модели поиска), их доля — в `web_search_usd` записи;
 5. дописывает записи в `cost.jsonl` тем же кодом, что журнал (`storage.append_tracked`), и сохраняет смещения,
    время пересчёта и сведение, исчерпан ли бюджет (`strateg.offsets`): по ним хук решает, пересчитывать ли
    расход перед вызовом, который платным не бывает.
@@ -108,8 +109,17 @@ def recorded_ids(cost_bytes: bytes) -> set[str]:
 
 
 def _record_line(
-    u: tr.Usage, usd: float | None, *, session_id: str, role: str, step: str, when: Any
+    u: tr.Usage,
+    usd: float | None,
+    prices: budget.Prices,
+    *,
+    session_id: str,
+    role: str,
+    step: str,
+    when: Any,
 ) -> bytes:
+    searches = pricing.web_search_count(u)
+    web_usd = pricing.web_search_cost(prices, u) if usd is not None and searches else None
     record = CostRecord(
         schema_version=SCHEMA_VERSION,
         time=when,
@@ -125,7 +135,8 @@ def _record_line(
         cache_write_5m_tokens=u.cache_write_5m_tokens,
         cache_write_1h_tokens=u.cache_write_1h_tokens,
         cache_read_tokens=u.cache_read_tokens,
-        web_searches=u.web_searches,
+        web_searches=searches,
+        web_search_usd=web_usd,
         cost_usd=usd,
         cost_source="оценка" if usd is not None else "нет данных",
     )
@@ -184,7 +195,9 @@ def account(
                 else:
                     result.usd += usd
                 lines.append(
-                    _record_line(usage, usd, session_id=session_id, role=src.role, step=step, when=when)
+                    _record_line(
+                        usage, usd, prices, session_id=session_id, role=src.role, step=step, when=when
+                    )
                 )
             keep = 0 if chunk.restarted else (old_skipped if isinstance(old_skipped, int) else 0)
             saved["files"][src.key] = {**chunk.cursor.as_dict(), "skipped": keep + parsed.skipped}

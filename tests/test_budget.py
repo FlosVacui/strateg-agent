@@ -15,6 +15,23 @@ from strateg import budget as budgetlib
 REPO = Path(__file__).resolve().parent.parent
 
 
+@pytest.fixture(autouse=True)
+def five_dollars(request, tmp_path, monkeypatch):
+    """Тесты ходов бюджета считают от $5 и 60 минут, а не от числа по умолчанию: оно меняется по замерам.
+
+    Тесты без `cli` читают настоящие `config/defaults.yaml` и `config/prices.yaml` и этим не затронуты.
+    """
+    if "cli" not in request.fixturenames:
+        return
+    folder = tmp_path / "pinned-config"
+    folder.mkdir()
+    defaults = yaml.safe_load((REPO / "config" / "defaults.yaml").read_text(encoding="utf-8"))
+    defaults["budget"]["usd"] = 5
+    (folder / "defaults.yaml").write_text(yaml.safe_dump(defaults), encoding="utf-8")
+    (folder / "prices.yaml").write_bytes((REPO / "config" / "prices.yaml").read_bytes())
+    monkeypatch.setenv(budgetlib.CONFIG_ENV, str(folder))
+
+
 def new(cli) -> None:
     assert cli("new", "demo")[0] == 0
 
@@ -41,10 +58,12 @@ def budget_events(root: Path) -> list[dict]:
 
 def test_defaults_file_is_valid_and_has_the_chosen_numbers():
     d = budgetlib.load_defaults().budget
-    # по замеру двух прогонов (13–15 минут, около 1,7 доллара) с запасом
-    assert (d.usd, d.minutes, d.warn_share) == (5, 60, 0.8)
+    # по замеру сквозного прогона с субагентами: $5,23 и 25 минут до выпуска без повторной проверки полноты
+    assert (d.usd, d.minutes, d.warn_share) == (8, 60, 0.8)
     assert (d.release_reserve.usd, d.release_reserve.minutes) == (0.5, 5)
-    assert d.usd > 1.7 * 2 and d.minutes > 15 * 2
+    assert d.usd > 5.23 + 0.7 + 0.5 and d.minutes > 25 * 2  # выпуск, повторная проверка полноты и запас
+    text = (REPO / "config" / "defaults.yaml").read_text(encoding="utf-8")
+    assert "сквозного прогона" in text and "$5,23" in text  # основание числа — в комментарии
 
 
 def test_new_project_gets_the_default_budget(cli, home):

@@ -428,7 +428,7 @@ def test_status_shows_running_step_apart_and_marks_long_one(cli, clock):
     cli("step", "start", "1")
     clock.advance(3 * 60)
     out = cli("status")[1]
-    assert "Время работы: 3,0 из 60 мин · шаг идёт 3 мин" in out and "перерыв" not in out
+    assert "Время работы: 3,0 из 60 мин · шаг идёт 3 мин" in out and "возможно, был перерыв" not in out
     assert json.loads(cli("status", "--json")[1])["running_minutes"] == pytest.approx(3.0)
     clock.advance(24 * 3600)
     out = cli("status")[1]

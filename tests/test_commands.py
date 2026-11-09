@@ -403,7 +403,7 @@ def test_status_line_format_and_numbers(started, cli, clock):
     line = out.strip()
     assert code == 0 and "\n" not in line
     assert line == (
-        "Шаг 2б из 8 · Сбор · источников 1 · утверждений 1, без цитаты 0 · сбоев 0 · $1,20 из $5 · "
+        "Шаг 2б из 8 · Сбор · источников 1 · утверждений 1, без цитаты 0 · сбоев 0 · $1,20 из $8 · "
         "18 из 60 мин"
     )
     assert json.loads(cli("status", "--line", "--json")[1])["line"] == line
