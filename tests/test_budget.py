@@ -92,6 +92,22 @@ def test_defaults_are_taken_from_the_config_folder(cli, home, tmp_path, monkeypa
     }
 
 
+def test_old_defaults_without_follow_up_still_work(cli, home, tmp_path, monkeypatch):
+    folder = tmp_path / "cfg"
+    folder.mkdir()
+    (folder / "defaults.yaml").write_text(
+        "budget:\n  usd: 9\n  minutes: 20\n  warn_share: 0.5\n"
+        "  release_reserve:\n    usd: 1\n    minutes: 2\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(budgetlib.CONFIG_ENV, str(folder))
+    follow = budgetlib.load_defaults().follow_up
+    assert (follow.source_max_age_days, follow.commitments_window_days) == (180, 7)
+    new(cli)
+    code, out, err = cli("due", "--project", "demo")
+    assert code == 0, err
+
+
 def test_broken_defaults_are_a_clear_error(cli, home, tmp_path, monkeypatch):
     folder = tmp_path / "cfg"
     folder.mkdir()

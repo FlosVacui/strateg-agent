@@ -1511,6 +1511,23 @@ def cmd_claim_revoke(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 
+def _keep_released_decisions(p: Project, models: dict[str, Any]) -> None:
+    """После выпуска решение из снимка не убирают из `decisions.yaml`: его заменяют или отменяют."""
+    model = models.get("decisions")
+    released = releaselib.released_decisions(p.root) if model is not None else None
+    if released is None:
+        return
+    number, ids = released
+    gone = [i for i in ids if i not in {d.id for d in model.decisions}]
+    if gone:
+        raise CliError(
+            f"файлы выхода не записаны: {', '.join(gone)} было в снимке выпуска {number} "
+            "и пропало из decisions.yaml. "
+            "Решение не убирают: новое решение пишут с `replaces: <прежнее>`, а у прежнего ставят "
+            "`status: заменено` и `replaced_by`; ненужное решение отменяют статусом «отменено»"
+        )
+
+
 def cmd_write(args: argparse.Namespace) -> int:
     p = _open(args)
     by = _by(args)
@@ -1525,6 +1542,7 @@ def cmd_write(args: argparse.Namespace) -> int:
     if errors:
         raise CliError("файлы выхода не записаны: вход не по схеме", errors)
 
+    _keep_released_decisions(p, models)
     changes, same = outputs.plan_changes(p, models)
     report = [
         {

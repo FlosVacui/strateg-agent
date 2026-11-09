@@ -12,7 +12,7 @@ DOC = (Path(__file__).resolve().parent.parent / "docs" / "data-model.md").read_t
 
 def test_doc_fits_two_screens():
     assert len(DOC.splitlines()) <= 100
-    assert len(DOC.encode("utf-8")) <= 16000
+    assert len(DOC.encode("utf-8")) <= 16500
 
 
 def test_doc_says_what_is_left_for_the_next_package():

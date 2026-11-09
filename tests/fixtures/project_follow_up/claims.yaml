@@ -185,8 +185,39 @@ claims:
       similarity: 100
       snapshot_sha256: b4773c63b2bb265aa9f32668ecafc371144ca4fb5422bb488c81e92a031c3483
       checked_at: '2026-11-06T10:26:00+03:00'
-  status: действует
+  status: заменено
   status_history:
   - status: действует
     at: '2026-11-06T10:26:00+03:00'
     by: агент
+  - status: заменено
+    at: '2026-11-06T10:40:00+03:00'
+    by: CLI
+    reason: на странице «Барьера» от ноября цена и модель продаж другие
+  replaced_by: У-9
+- id: У-9
+  text: Конкурент «Барьер» с ноября продаёт защиту отдельной подпиской за 49 рублей в месяц
+  type: факт
+  origin: источник
+  step: 2б
+  attempt: 1
+  subject: модель продаж у конкурента «Барьер»
+  period: '2026'
+  region: RU-MOW
+  quotes:
+  - source: И-5
+    text: Конкурент «Барьер» с ноября продаёт защиту отдельной подпиской за 49 рублей в месяц
+    publisher: компания «Барьер»
+    publisher_kind: официальный первоисточник
+    self_reported: false
+    check:
+      method: точное вхождение
+      similarity: 100
+      snapshot_sha256: 3502835f7a57d4f5110eb085b0152f162256e59469c7ef3cf8d333a2808f18ca
+      checked_at: '2026-11-06T10:40:00+03:00'
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-06T10:40:00+03:00'
+    by: агент
+  replaces: У-8

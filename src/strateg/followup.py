@@ -16,6 +16,7 @@ import argparse
 import datetime as dt
 import re
 import time
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -112,15 +113,83 @@ def _in_days(delta: int) -> str:
     return f"просрочено на {-delta} дн."
 
 
-def latest_value(metrics: MetricsFile, row: str | None) -> MetricValue | None:
-    """Последнее значение строки: с самой поздней датой, при равных датах — записанное позже."""
+def latest_value(
+    metrics: MetricsFile,
+    row: str | None,
+    *,
+    today: dt.date | None = None,
+    since: dt.date | None = None,
+) -> MetricValue | None:
+    """Последнее значение строки: с самой поздней датой, при равных датах — записанное позже.
+
+    Значения позже `today` не берутся (срез «на дату»); значения раньше `since` (дня решения) тоже.
+    """
     if row is None:
         return None
     best: MetricValue | None = None
     for v in metrics.values:
-        if v.row == row and (best is None or v.date >= best.date):
+        if v.row != row or (today is not None and v.date > str(today)):
+            continue
+        if since is not None and v.date < str(since):
+            continue
+        if best is None or v.date >= best.date:
             best = v
     return best
+
+
+def value_before(
+    metrics: MetricsFile, row: str | None, *, today: dt.date, since: dt.date | None
+) -> MetricValue | None:
+    """Последнее значение строки на дату раньше дня решения: на условие этого решения не засчитывается."""
+    if row is None or since is None:
+        return None
+    older = [v for v in metrics.values if v.row == row and v.date <= str(today) and v.date < str(since)]
+    return max(older, key=lambda v: v.date, default=None)
+
+
+def _decision_versions(p: Project) -> list[set[str]] | None:
+    """Номера решений во всех версиях `decisions.yaml`, от первой к текущей; нет цельной истории — None."""
+    folder = p.root / "history"
+    found: dict[int, Path] = {}
+    if folder.is_dir():
+        for path in folder.rglob("*"):
+            source = proj.history_source(path.relative_to(p.root).as_posix()) if path.is_file() else None
+            if source is not None and source[0] == "decisions.yaml":
+                found[source[1]] = path
+    if sorted(found) != list(range(1, len(found) + 1)):
+        return None
+    out: list[set[str]] = []
+    try:
+        for path in [*(found[n] for n in sorted(found)), p.root / "decisions.yaml"]:
+            data = proj.read_yaml(path)
+            out.append({str(x["id"]) for x in data.get("decisions", [])})
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, CliError):
+        return None
+    return out
+
+
+def decision_day(p: Project, d: Decision) -> dt.date | None:
+    """День, когда решение попало в проект: событие журнала `strateg write decisions`, где оно впервые есть.
+
+    Поля с датой в решении нет, поэтому день берётся из журнала по версиям файла (текущая версия — последняя
+    запись, `history/decisions.v<n>.yaml` — прежние). Решение, которое записано не командой `write`
+    или раньше начала журнала, даёт None: тогда значения показателей по дате решения не отсекаются.
+    """
+    events = [
+        e
+        for e in p.journal
+        if e.kind == "действие" and e.name == "strateg write decisions" and e.status == "выполнено"
+    ]
+    versions = _decision_versions(p)
+    if not events or not versions:
+        return None
+    first = next((j for j, ids in enumerate(versions) if d.id in ids), None)
+    if first is None:
+        return None
+    index = len(events) - (len(versions) - first)
+    if index < 0:
+        return None
+    return events[index].time.astimezone(proj.now().tzinfo).date()
 
 
 @dataclass(frozen=True)
@@ -164,11 +233,17 @@ def _value_text(v: MetricValue) -> str:
 
 
 def _condition_items(
-    d: Decision, c: DecisionCondition, i: int, metrics: MetricsFile, today: dt.date
+    d: Decision,
+    c: DecisionCondition,
+    i: int,
+    metrics: MetricsFile,
+    today: dt.date,
+    since: dt.date | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     out: dict[str, list[dict[str, Any]]] = {"check": [], "fired": [], "manual": []}
     label = f"условие {c.row}" if c.row else f"условие №{i + 1}"
-    value = latest_value(metrics, c.row)
+    value = latest_value(metrics, c.row, today=today, since=since)
+    early = value_before(metrics, c.row, today=today, since=since) if value is None else None
     verdict = judge(c, value)
     base = {"row": c.row, "metric": c.metric, "threshold": c.threshold, "action": c.action, "date": c.date}
     if value is not None:
@@ -200,72 +275,106 @@ def _condition_items(
         )
     if verdict.state != "сработало" and _day(c.date) <= today and (value is None or value.date < c.date):
         late = _in_days((_day(c.date) - today).days)
-        seen = f"; последнее значение {_value_text(value)} от {value.date}" if value else "; значений нет"
+        if value:
+            seen = f"; последнее значение {_value_text(value)} от {value.date}"
+        elif early:
+            seen = (
+                f"; значение {_value_text(early)} от {early.date} внесено до решения ({since}) "
+                "и на это условие не засчитано"
+            )
+        else:
+            seen = "; значений нет"
         out["check"].append(
             _item(
                 d,
                 f"{d.id}: {label}: срок {c.date} ({late}) — пора проверить показатель «{c.metric}» "
                 f"(порог «{c.threshold}»{seen}).",
                 days=(_day(c.date) - today).days,
+                **({"before_decision": early.date} if early else {}),
                 **base,
             )
         )
     return out
 
 
+def _walk(d: Decision, claims: dict[str, Claim]) -> list[tuple[str, str, Claim, list[str]]]:
+    """Утверждения, на которых стоит решение: (роль, прямая опора решения, утверждение, цепочка до него).
+
+    Идём от оснований и допущений решения вглубь по `basis` утверждений. Ниже отозванного или заменённого
+    не спускаемся: о нём сказано, а то, что под ним, уже не держит решение. Повторы и циклы отсекаются.
+    """
+    out: list[tuple[str, str, Claim, list[str]]] = []
+    for role, refs in (("основание", d.basis), ("допущение", d.assumptions)):
+        for root in refs:
+            seen: set[str] = set()
+            queue: deque[tuple[str, list[str]]] = deque([(root, [root])])
+            while queue:
+                cid, path = queue.popleft()
+                c = claims.get(cid)
+                if c is None or cid in seen:
+                    continue
+                seen.add(cid)
+                out.append((role, root, c, path))
+                if c.status == "действует":
+                    queue.extend((b, [*path, b]) for b in c.basis if b not in seen)
+    return out
+
+
+def _accessed_day(s: Any) -> dt.date:
+    """День получения источника в поясе проекта (запись могла быть сделана в другом поясе)."""
+    return s.fetch.accessed_at.astimezone(proj.now().tzinfo).date()
+
+
 def _stale_items(d: Decision, p: Project, today: dt.date, max_age: int) -> list[dict[str, Any]]:
     claims = {c.id: c for c in p.claims.claims}
     sources = {s.id: s for s in p.sources.sources}
     out = []
-    for role, refs in (("основание", d.basis), ("допущение", d.assumptions)):
-        for cid in refs:
-            c = claims.get(cid)
-            if c is None:
-                continue
+    for role, root, c, path in _walk(d, claims):
+        cid = c.id
+        chain = " → ".join(path)
+        deep = len(path) > 1
+        extra = {"through": root, "chain": path} if deep else {}
+        if c.status in ("заменено", "отозвано"):
             if c.status == "заменено":
-                out.append(
-                    _item(
-                        d,
-                        f"{d.id}: {cid} заменено на {c.replaced_by}, а на него опирается решение ({role}).",
-                        claim=cid,
-                        role=role,
-                        reason="заменено",
-                        replaced_by=c.replaced_by,
-                    )
-                )
-            elif c.status == "отозвано":
+                what, reason = f"заменено на {c.replaced_by}", "заменено"
+                word = f"заменённом {cid} ({what})"
+            else:
                 why = c.status_history[-1].reason if c.status_history else None
-                reason = f": {why}" if why else ""
-                out.append(
-                    _item(
-                        d,
-                        f"{d.id}: {cid} отозвано{reason}, а на него опирается решение ({role}).",
-                        claim=cid,
-                        role=role,
-                        reason="отозвано",
-                    )
+                what, reason = "отозвано" + (f": {why}" if why else ""), "отозвано"
+                word = f"отозванном {cid}" + (f" ({why})" if why else "")
+            if deep:
+                text = (
+                    f"{d.id}: {path[-2]} стоит на {word}"
+                    + (f"; цепочка {chain}" if len(path) > 2 else "")
+                    + f"; на {root} опирается решение ({role})."
                 )
-            elif c.type == "факт":
-                for sid in dict.fromkeys(q.source for q in c.quotes):
-                    s = sources.get(sid)
-                    if s is None or s.fetch is None:
-                        continue  # у материала из inputs/ даты обращения нет
-                    got = s.fetch.accessed_at.date()
-                    age = (today - got).days
-                    if age > max_age:
-                        out.append(
-                            _item(
-                                d,
-                                f"{d.id}: {cid} ({role}) держится на источнике {sid}, полученном {got}: "
-                                f"прошло {age} дн., допустимо {max_age}; перепроверьте.",
-                                claim=cid,
-                                role=role,
-                                reason="источник устарел",
-                                source=sid,
-                                accessed=str(got),
-                                age_days=age,
-                            )
+            else:
+                text = f"{d.id}: {cid} {what}, а на него опирается решение ({role})."
+            extras = {"replaced_by": c.replaced_by} if c.status == "заменено" else {}
+            out.append(_item(d, text, claim=cid, role=role, reason=reason, **extras, **extra))
+        elif c.type == "факт":
+            for sid in dict.fromkeys(q.source for q in c.quotes):
+                s = sources.get(sid)
+                if s is None or s.fetch is None:
+                    continue  # у материала из inputs/ даты обращения нет
+                got = _accessed_day(s)
+                age = (today - got).days
+                if age > max_age:
+                    holder = f"{cid} ({role})" if not deep else f"{cid}, на котором стоит {root} ({role})"
+                    out.append(
+                        _item(
+                            d,
+                            f"{d.id}: {holder} держится на источнике {sid}, полученном {got}: "
+                            f"прошло {age} дн., допустимо {max_age}; перепроверьте.",
+                            claim=cid,
+                            role=role,
+                            reason="источник устарел",
+                            source=sid,
+                            accessed=str(got),
+                            age_days=age,
+                            **extra,
                         )
+                    )
     return out
 
 
@@ -296,17 +405,18 @@ def _next_event(
     claims = {c.id: c for c in p.claims.claims}
     sources = {s.id: s for s in p.sources.sources}
     for d in active:
-        for cid in dict.fromkeys([*d.basis, *d.assumptions]):
-            c = claims.get(cid)
-            if c is None or c.status != "действует" or c.type != "факт":
+        for _role, _root, c, _path in _walk(d, claims):
+            if c.status != "действует" or c.type != "факт":
                 continue
             for sid in dict.fromkeys(q.source for q in c.quotes):
                 s = sources.get(sid)
                 if s is None or s.fetch is None:
                     continue
-                day = s.fetch.accessed_at.date() + dt.timedelta(days=max_age + 1)
+                day = _accessed_day(s) + dt.timedelta(days=max_age + 1)
                 if day > today:
-                    found.append((day, f"{d.id}: источник {sid} основания {cid} станет старше {max_age} дн."))
+                    found.append(
+                        (day, f"{d.id}: источник {sid} основания {c.id} станет старше {max_age} дн.")
+                    )
         if _day(d.review_date) > today:
             found.append((_day(d.review_date), f"{d.id}: срок пересмотра {d.review_date}"))
         for c in d.conditions:
@@ -346,8 +456,9 @@ def compute_due(p: Project, today: dt.date) -> dict[str, Any]:
                     review_date=d.review_date,
                 )
             )
+        since = decision_day(p, d)
         for i, c in enumerate(d.conditions):
-            for key, items in _condition_items(d, c, i, metrics, today).items():
+            for key, items in _condition_items(d, c, i, metrics, today, since).items():
                 groups[key] += items
         groups["stale"] += _stale_items(d, p, today, follow.source_max_age_days)
         groups["commitments"] += _commitment_items(d, today, follow.commitments_window_days)
@@ -453,55 +564,60 @@ def cmd_metric_add(args: argparse.Namespace) -> int:
             "в единицах порога"
         )
     note = args.note.strip() if args.note and args.note.strip() else None
-    metrics = load_metrics(p)
-    same = next(
-        (
-            v
-            for v in metrics.values
-            if (v.row, v.value, v.unit, v.date, v.note) == (row_id, number, unit, str(day), note)
-        ),
-        None,
-    )
     shown = th.show_amount(number, unit)
-    if same is None:
-        started = time.monotonic()
-        record = MetricValue(
-            row=row_id,
-            value=number,
-            unit=unit,  # type: ignore[arg-type]
-            date=str(day),
-            note=note,
-            origin="пользователь",
-            recorded_at=proj.now(),
+    started = time.monotonic()
+    # Чтение, поиск повтора и запись — под одной блокировкой папки: иначе параллельный вызов затрёт запись.
+    with proj.locked(p.root):
+        metrics = load_metrics(p)
+        same = next(
+            (
+                v
+                for v in metrics.values
+                if (v.row, v.value, v.unit, v.date) == (row_id, number, unit, str(day))
+            ),
+            None,
         )
-        with proj.transaction(p.root):
-            metrics.values.append(record)
-            proj.write_text(p.root / METRICS_FILE, proj.dump_yaml(metrics))
-            p.add_event(
-                p.event(
-                    kind="действие",
-                    name="strateg metric add",
-                    idempotency_hash=proj.key_hash("metric add", row_id, number, unit, str(day), note),
-                    status="выполнено",
-                    duration_s=round(time.monotonic() - started, 2),
-                    message=f"{row_id}: {shown} на {day}",
-                )
+        if same is None:
+            record = MetricValue(
+                row=row_id,
+                value=number,
+                unit=unit,  # type: ignore[arg-type]
+                date=str(day),
+                note=note,
+                origin="пользователь",
+                recorded_at=proj.now(),
             )
-            p.save_state()
+            with proj.transaction(p.root):
+                metrics.values.append(record)
+                proj.write_text(p.root / METRICS_FILE, proj.dump_yaml(metrics))
+                p.add_event(
+                    p.event(
+                        kind="действие",
+                        name="strateg metric add",
+                        idempotency_hash=proj.key_hash("metric add", row_id, number, unit, str(day)),
+                        status="выполнено",
+                        duration_s=round(time.monotonic() - started, 2),
+                        message=f"{row_id}: {shown} на {day}",
+                    )
+                )
+                p.save_state()
+    if same is not None:
+        note = same.note
     # Что значение говорит по условиям отказа этой строки.
     dec = _read(p, "decisions")
-    value = latest_value(metrics, row_id)
+    now_day = proj.now().date()
     results = []
     for d in dec.decisions if dec else []:
         if d.status != "действует":
             continue
+        since = decision_day(p, d)
+        value = latest_value(metrics, row_id, today=now_day, since=since)
+        early = value_before(metrics, row_id, today=now_day, since=since) if value is None else None
         for c in d.conditions:
             if c.row != row_id:
                 continue
-            v = judge(c, value)
-            results.append(
-                {"decision": d.id, "threshold": c.threshold, "result": v.state, "action": c.action}
-            )
+            state = "до решения" if early is not None else judge(c, value).state
+            results.append({"decision": d.id, "threshold": c.threshold, "result": state, "action": c.action})
     lines = [
         f"{row_id}: значение {shown} на {day} уже записано, повтор ничего не меняет."
         if same is not None
@@ -512,6 +628,7 @@ def cmd_metric_add(args: argparse.Namespace) -> int:
             "сработало": f"СРАБОТАЛО, действие: {r['action']}",
             "не сработало": "не сработало",
             "порог не разобран": "порог не разобран, сравните вручную",
+            "до решения": "значение внесено до решения и на это условие не засчитано",
             "единицы разные": "единицы порога и значения разные, сравните вручную",
         }.get(r["result"], r["result"])
         lines.append(f"  {r['decision']}: порог «{r['threshold']}» — {tail}.")
@@ -571,7 +688,7 @@ def compute_impact(p: Project, seed: str) -> dict[str, Any]:
     ver, prom, dec = _read(p, "verification"), _read(p, "promises"), _read(p, "decisions")
     frame = _read(p, "frame")
 
-    # --- исходное и утверждения по связям `basis` и спору ---
+    # --- исходное и утверждения по связям `basis`, спору и замене (`replaces`/`replaced_by`) ---
     seed_claims: list[str]
     seed_info: dict[str, Any]
     frame_fields: list[str] = []
@@ -602,6 +719,10 @@ def compute_impact(p: Project, seed: str) -> dict[str, Any]:
                 _add(dependents, c.id, f"основание {cur}")
             elif c.dispute is not None and c.dispute.claim == cur:
                 _add(dependents, c.id, f"спор с {cur}")
+            elif c.replaces == cur:  # новая версия: всё, что стояло на заменённом, теперь под вопросом
+                _add(dependents, c.id, f"заменяет {cur}")
+            elif c.replaced_by == cur:  # прежняя версия: на ней могло стоять то, что ещё не переписано
+                _add(dependents, c.id, f"заменено на {cur}")
             else:
                 continue
             if c.id not in reached:

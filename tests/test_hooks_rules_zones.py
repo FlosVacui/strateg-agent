@@ -368,6 +368,14 @@ def test_write_of_cli_state_files_is_refused_with_the_cli_hint(tool, key, extra,
 
 
 @pytest.mark.parametrize("tool,key,extra", WRITE_TOOLS)
+def test_write_of_metrics_is_refused_with_the_metric_add_hint(tool, key, extra):
+    d = refused(
+        decide(tool, {key: "projects/demo/metrics.yaml", **extra}, svc=with_active("demo")), "strateg"
+    )
+    assert "metric add" in d.reason
+
+
+@pytest.mark.parametrize("tool,key,extra", WRITE_TOOLS)
 @pytest.mark.parametrize("target", WRITE_OPEN)
 def test_write_to_outputs_and_tmp_of_the_active_project_is_allowed(tool, key, extra, target):
     allowed(

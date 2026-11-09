@@ -15,7 +15,7 @@ budget:
   spent_minutes: 0.1
 next_action: 'Выпустить документы: отчёт, одна страница, отчёт о прогоне'
 files:
-  claims.yaml: a0fa9d4306f4e46c32f846673ada50badf3b3fa6578e0ec6e4ba2bb2c127e15d
+  claims.yaml: e8cb45b7650ea48dcfae686a6c2a9dff297ab15fb633a407ed8b79d6ca480694
   cost.jsonl: 21212d8a0542a475c80d9c498dbd4c335356edf9452ae4c24e961db769cfba6d
   decisions.yaml: abb0ec69741e05daf2a6ace408ee9693d3421287e95f38ce2c8e981902a952ad
   frame.yaml: 1dca43f57ac0ffba58f0f5ea0ea6b0e4b1c015e3632ccc3c338b5ceee2f38988
@@ -26,8 +26,9 @@ files:
   options.yaml: 2c0214ff4a2e80c21b8cdd9facf7826fff510421a6b7b716e26385c827d31b99
   plan.yaml: dda626bb144ec9c971b522a140403a06fbbffb6fd193d0bb3a34ba1ea06abda9
   promises.yaml: 670e927a7ea3e2c8a051f3be9ea1d27a2c49171266afe750bb8a764d03189739
-  sources.yaml: e17a6640092d00358f2e8a3a6afbaa44a28da12383cffc66896989f7d466b59b
+  sources.yaml: 9137a8b896cf51097635206baab10161df24b73e0f9ad27dfa1d5b292142973a
   sources/i-1.txt: deb6df4405ae41f9142e96d68fd96b66a8ecab5c638f4d3d18ba03ef22e55a19
   sources/i-3.txt: 05d5eacb225ccfb0a67036e56bf70800d2db60e3810b4dd707127e36faf8420e
   sources/i-4.txt: b4773c63b2bb265aa9f32668ecafc371144ca4fb5422bb488c81e92a031c3483
+  sources/i-5.txt: 3502835f7a57d4f5110eb085b0152f162256e59469c7ef3cf8d333a2808f18ca
   verification.yaml: 73344f2494f12dc4276458f55667044466f6918219da7c68bfccbf16b87f0489

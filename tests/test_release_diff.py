@@ -193,20 +193,20 @@ def test_step_8_accepts_claim_changes_and_they_stay_checked(cli, fu, tmp_path):
     path = tmp_path / "new.yaml"
     path.write_text(yaml.safe_dump(new, allow_unicode=True), encoding="utf-8")
     replaced = run(cli, "claim", "replace", "У-4", "--file", str(path), "--by", "пользователь")
-    assert replaced["id"] == "У-9"
+    assert replaced["id"] == "У-10"
     claims = {c["id"]: c for c in load_yaml(fu / "claims.yaml")["claims"]}
     assert claims["У-3"]["status"] == "отозвано" and claims["У-4"]["status"] == "заменено"
-    assert claims["У-9"]["step"] == "8" and claims["У-9"]["replaces"] == "У-4"
+    assert claims["У-10"]["step"] == "8" and claims["У-10"]["replaces"] == "У-4"
     # рекомендация ещё стоит на У-4: проверка называет это, а `write` исправляет
     assert any("рекомендацию" in e for e in check_project(fu))
     opts = raw(fu, "options")
-    opts["recommendation"]["claims"] = ["У-2", "У-9"]
+    opts["recommendation"]["claims"] = ["У-2", "У-10"]
     for o in opts["options"]:
         for cell in ("effect", "first_signal"):
             if o["comparison"][cell].get("forecast") == "У-4":
-                o["comparison"][cell]["forecast"] = "У-9"
+                o["comparison"][cell]["forecast"] = "У-10"
     decisions = raw(fu, "decisions")
-    decisions["decisions"][0]["basis"] = ["У-2", "У-9", "У-7"]
+    decisions["decisions"][0]["basis"] = ["У-2", "У-10", "У-7"]
     write(cli, options=opts, decisions=decisions)
     assert check_project(fu) == []
     assert {e["actor"] for e in journal_of(fu)[-8:]} <= {"CLI", "пользователь"}  # событий хука нет
@@ -340,3 +340,48 @@ def test_diff_is_read_only(cli, fu):
 def test_project_released_before_snapshots_gets_a_hint(cli, fu):
     # шаг 7 выполнен давно, папки release-1 нет: сравнивать не с чем
     assert "снимка выпуска нет" in fail(cli, "diff")
+
+
+# --- решение из снимка выпуска нельзя убрать ------------------------------------------------------
+
+
+def only_new_decision(fu: Path) -> dict:
+    """Файл решений без Реш-1: одно новое решение, ссылки на прежнее нет."""
+    data = replacing_decision(fu)
+    new = data["decisions"][1]
+    new.pop("replaces")
+    return {"decisions": [new]}
+
+
+def test_a_released_decision_cannot_be_dropped_from_the_file(cli, fu):
+    released(cli, fu)
+    run(cli, "step", "start", "8")
+    before = (fu / "decisions.yaml").read_bytes()
+    code, out, err = cli(
+        "write", "--file", "-", "--project", "fu", "--json",
+        stdin=json.dumps({"decisions": only_new_decision(fu)}, ensure_ascii=False),
+    )  # fmt: skip
+    assert code == 1, (out, err)
+    message = json.loads(out)["error"]
+    assert "Реш-1 было в снимке выпуска 1 и пропало из decisions.yaml" in message
+    assert "replaces" in message and "отменено" in message
+    assert (fu / "decisions.yaml").read_bytes() == before  # ничего не записано
+    assert not (fu / "history" / "decisions.v1.yaml").exists()
+
+
+def test_a_released_decision_can_be_replaced_or_cancelled(cli, fu):
+    released(cli, fu)
+    run(cli, "step", "start", "8")
+    write(cli, decisions=replacing_decision(fu))  # заменено: Реш-1 остаётся в файле со статусом
+    data = raw(fu, "decisions")
+    data["decisions"][0].pop("replaced_by")
+    data["decisions"][0]["status"] = "отменено"
+    data["decisions"][1].pop("replaces")
+    write(cli, decisions=data)  # отменено: тоже остаётся в файле
+    assert check_project(fu) == []
+
+
+def test_before_release_a_decision_can_still_be_dropped(cli, fu):
+    # снимка выпуска нет: проверять нечего, правка черновика решений свободна
+    write(cli, decisions=only_new_decision(fu))
+    assert [d["id"] for d in raw(fu, "decisions")["decisions"]] == ["Реш-2"]

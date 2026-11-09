@@ -48,3 +48,17 @@ sources:
   text_path: sources/i-4.txt
   text_sha256: b4773c63b2bb265aa9f32668ecafc371144ca4fb5422bb488c81e92a031c3483
   untrusted: true
+- id: И-5
+  kind: страница
+  url: https://barrier.example.com/offers-nov
+  access: получен
+  fetch:
+    accessed_at: '2026-11-05T09:30:00+03:00'
+    final_url: https://barrier.example.com/offers-nov
+    region: RU-MOW
+    encoding: utf-8
+    extractor: trafilatura 2.0.0
+    raw_sha256: e05c0296e568842a94674e767771046dbcaa76056de10d26a347d3cca2648d12
+  text_path: sources/i-5.txt
+  text_sha256: 3502835f7a57d4f5110eb085b0152f162256e59469c7ef3cf8d333a2808f18ca
+  untrusted: true

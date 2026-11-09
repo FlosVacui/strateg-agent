@@ -76,16 +76,21 @@ class BudgetDefaults(_Config):
 
 class FollowUpDefaults(_Config):
     source_max_age_days: Annotated[int, Field(gt=0)] = Field(
-        description="Источник факта старше стольких дней (по дате обращения): основание решения устарело"
+        default=180,
+        description="Источник факта старше стольких дней (по дате обращения): основание решения устарело",
     )
     commitments_window_days: Annotated[int, Field(ge=0)] = Field(
-        description="Обязательство со сроком в пределах стольких дней попадает в `strateg due`"
+        default=7,
+        description="Обязательство со сроком в пределах стольких дней попадает в `strateg due`",
     )
 
 
 class Defaults(_Config):
     budget: BudgetDefaults
-    follow_up: FollowUpDefaults
+    follow_up: FollowUpDefaults = Field(
+        default_factory=FollowUpDefaults,
+        description="Сопровождение решений; раздела нет — значения по умолчанию",
+    )
 
 
 class TokenPrices(_Config):

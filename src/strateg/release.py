@@ -134,6 +134,19 @@ def _yaml(path: Path) -> dict[str, Any] | None:
         return None
 
 
+def released_decisions(root: Path) -> tuple[int, list[str]] | None:
+    """Номер последнего выпуска и номера решений, которые на нём были; снимка или файла решений нет — None."""
+    snaps = release_dirs(root)
+    if not snaps:
+        return None
+    n = max(snaps)
+    data = _yaml(snaps[n] / "decisions.yaml")
+    if data is None:
+        return None
+    ids = [str(x["id"]) for x in data.get("decisions", []) if isinstance(x, dict) and "id" in x]
+    return n, ids
+
+
 def _plain(value: Any) -> Any:
     """Значение для JSON: даты YAML становятся строками."""
     if isinstance(value, dict):

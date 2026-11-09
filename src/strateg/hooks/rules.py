@@ -53,6 +53,7 @@ CLI_STATE_FILES = (
     "verification.yaml",
     "decisions.yaml",
     "completeness.yaml",
+    "metrics.yaml",
 )
 CLI_STATE_DIRS = ("sources", "history")
 CLI_STATE_SUFFIXES = (".yaml", ".yml", ".jsonl")
@@ -268,6 +269,11 @@ def _cli_hint(name: str) -> str:
         return "утверждения — `uv run strateg claim add|replace|revoke`"
     if name in ("sources.yaml", "sources/"):
         return "источники — `uv run strateg fetch` и `uv run strateg add`"
+    if name == "metrics.yaml":
+        return (
+            "значения показателей — "
+            '`uv run strateg metric add ПП-n --value "<число> <единица>" --date <дата>`'
+        )
     return (
         "файлы выхода — `uv run strateg write --file projects/<id>/.tmp/<имя>.yaml`, "
         "остальное — команды `strateg`"

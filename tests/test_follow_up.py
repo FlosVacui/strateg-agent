@@ -5,8 +5,9 @@
 «запросить выгрузку …» — до 2026-11-20. Основания Реш-1: У-2, У-4, У-7 (факт из И-3, страница получена
 2026-03-01), допущение У-3.
 
-Цепочка связей: И-1 -> У-2 -> У-3, У-4, У-5 -> У-6; И-3 -> У-7 (возражение Вар-3, обещание О-3, основание
-Реш-1); И-4 -> У-8 (возражение Вар-4, вариант отвергнут решением).
+Цепочка связей: И-1 -> У-2 -> У-3, У-4, У-5 -> У-6 (У-2 заменяет допущение У-1); И-3 -> У-7 (возражение
+Вар-3, обещание О-3, основание Реш-1); И-4 -> У-8 (возражение Вар-4, вариант отвергнут решением); новая
+страница И-5 -> У-9 заменяет У-8.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -21,6 +23,7 @@ import yaml
 
 from helpers import edit_yaml, journal_of, load_yaml, rehash, tree_hashes
 from strateg import budget as budgetlib
+from strateg import followup, storage
 from strateg import project as proj
 from strateg.project_check import check_project
 
@@ -68,6 +71,36 @@ def metric(cli, row: str, value: str, date: str, *extra: str):
 
 
 WHAT = "запросить выгрузку отключений у владельца продукта"
+
+
+def drop_u2_from_basis(fu: Path) -> None:
+    """Реш-1 стоит на У-4, У-7 и допущении У-3; У-2 только под ними (на нём стоят У-3 и У-4)."""
+    edit_yaml(fu, "decisions.yaml", lambda d: d["decisions"][0].update(basis=["У-4", "У-7"]))
+    rehash(fu)
+    assert check_project(fu) == []
+
+
+def age_source(fu: Path, sid: str = "И-1", accessed: str = "2026-01-01T09:00:00+03:00") -> None:
+    edit_yaml(
+        fu,
+        "sources.yaml",
+        lambda d: next(s for s in d["sources"] if s["id"] == sid)["fetch"].update(accessed_at=accessed),
+    )
+    rehash(fu)
+
+
+def quote_from_old_source(fu: Path, claim: str) -> None:
+    """Утверждение любого типа получает цитату из И-3 (страница получена 2026-03-01)."""
+
+    def put(d: dict) -> None:
+        quote = next(q for c in d["claims"] if c["id"] == "У-7" for q in c["quotes"])
+        next(c for c in d["claims"] if c["id"] == claim)["quotes"] = [quote]
+
+    edit_yaml(fu, "claims.yaml", put)
+    rehash(fu)
+    assert check_project(fu) == []
+
+
 STALE_SOURCE = ("stale", "Реш-1", "У-7", "источник устарел")
 
 
@@ -266,7 +299,7 @@ def test_revoked_and_replaced_claims_make_the_basis_stale(cli, fu, tmp_path):
     }
     texts = {i["claim"]: i["text"] for i in data["groups"]["stale"]}
     assert "У-3 отозвано: интервью не подтвердило" in texts["У-3"] and "(допущение)" in texts["У-3"]
-    assert "У-4 заменено на У-9" in texts["У-4"] and "(основание)" in texts["У-4"]
+    assert "У-4 заменено на У-10" in texts["У-4"] and "(основание)" in texts["У-4"]
 
 
 def test_a_replaced_decision_is_not_followed(cli, fu):
@@ -413,7 +446,7 @@ def ids(entries: list[dict]) -> list[str]:
 def test_impact_of_a_source_reaches_everything_that_stands_on_it(cli, fu):
     r = impact(cli, "И-1")
     assert r["seed_claims"] == ["У-2"]
-    assert ids(r["claims"]) == ["У-2", "У-3", "У-4", "У-5", "У-6"]
+    assert ids(r["claims"]) == ["У-1", "У-2", "У-3", "У-4", "У-5", "У-6"]  # У-1 заменено на У-2
     assert r["frame_fields"] == ["data"]  # поле рамки «данные» взято из И-1
     assert ids(r["plan_questions"]) == ["ВП-1", "ВП-2"]
     assert ids(r["gaps"]) == ["П-1"]
@@ -451,7 +484,7 @@ def test_impact_of_a_competitor_source_hits_the_choice_through_the_decision(cli,
 
 def test_impact_that_leaves_the_choice_alone_says_so(cli, fu):
     r = impact(cli, "И-4")
-    assert ids(r["claims"]) == ["У-8"] and ids(r["options"]) == ["Вар-4"]
+    assert ids(r["claims"]) == ["У-8", "У-9"] and ids(r["options"]) == ["Вар-4"]  # У-9 заменяет У-8
     assert ids(r["decisions"]) == ["Реш-1"]  # отвергнутый им вариант задет, но выбор не опирается на У-8
     assert r["decisions"][0]["why"] == ["отвергнутый вариант Вар-4 задет"]
     assert r["choice"] == {"affected": False, "via": [], "stop": None}
@@ -480,7 +513,7 @@ def test_impact_of_a_claim_that_hits_a_row_but_not_the_choice(cli, fu):
 
 def test_impact_of_a_claim_without_dependents_names_only_its_own_links(cli, fu):
     r = impact(cli, "У-8")
-    assert r["claims"] == [] and ids(r["options"]) == ["Вар-4"]
+    assert ids(r["claims"]) == ["У-9"] and ids(r["options"]) == ["Вар-4"]  # У-9 заменяет У-8
     assert r["choice"]["affected"] is False
 
 
@@ -495,7 +528,8 @@ def test_impact_of_a_replaced_and_a_revoked_claim_still_shows_dependents(cli, fu
     )
     code, out, _ = cli("impact", "У-1", "--project", "fu")  # заменено на У-2
     assert code == 0 and "заменено на У-2" in out
-    assert ids(impact(cli, "У-1")["claims"]) == []  # У-1 ни на чём не стоит, зависимые держатся на У-2
+    # заменённое У-1 задевает то, что стоит на его замене У-2: связь «заменено» идёт в обе стороны
+    assert ids(impact(cli, "У-1")["claims"]) == ["У-2", "У-3", "У-4", "У-5", "У-6"]
 
 
 def test_a_dispute_links_the_disputing_claim(cli, fu):
@@ -508,17 +542,9 @@ def test_a_dispute_links_the_disputing_claim(cli, fu):
     )
     rehash(fu)
     r = impact(cli, "У-7")
-    assert ids(r["claims"]) == ["У-8"] and r["claims"][0]["why"] == ["спор с У-7"]
+    assert ids(r["claims"]) == ["У-8", "У-9"] and r["claims"][0]["why"] == ["спор с У-7", "заменено на У-9"]
+    assert r["claims"][1]["why"] == ["заменяет У-8"]  # и новая версия спорящего утверждения
     assert ids(r["options"]) == ["Вар-3", "Вар-4"]
-
-
-def test_impact_numbers_in_documents_are_matched_whole(cli, fu):
-    # У-1 не должен находиться в тексте с У-13 или ПУ-1; «П-1» не находится внутри «ВП-1»
-    r = impact(cli, "У-8")
-    assert {d["path"] for d in r["documents"]} == {"outputs/situation.md"}
-    assert [d["numbers"] for d in r["documents"]] == [["Вар-4", "У-8"]] or "У-8" in r["documents"][0][
-        "numbers"
-    ]
 
 
 @pytest.mark.parametrize(
@@ -553,3 +579,263 @@ def test_old_project_without_new_files_still_works(cli, home):
     assert cli("check", "--project", "old")[0] == 0
     assert cli("due", "--today", "2026-11-09", "--project", "old")[0] == 0
     assert cli("impact", "У-2", "--project", "old")[0] == 0
+
+
+# --- due: основания вглубь, срез на дату, значения до решения -------------------------------------
+
+
+def test_stale_goes_down_the_basis_chain(cli, fu):
+    """Решение стоит на прогнозе У-4 и допущении У-3, а те на факте У-2: отозвано У-2 — решение названо."""
+    drop_u2_from_basis(fu)
+    assert cli("claim", "revoke", "У-2", "--reason", "страница изменилась", "--project", "fu")[0] == 0
+    data = due(cli, "2026-07-01")
+    assert keys(data) == {("stale", "Реш-1", "У-2", "отозвано")}
+    texts = sorted(i["text"] for i in data["groups"]["stale"])
+    assert len(texts) == 2  # через У-4 (основание) и через У-3 (допущение)
+    assert any(
+        "У-4 стоит на отозванном У-2" in t and "на У-4 опирается решение (основание)" in t for t in texts
+    )
+    assert any("У-3 стоит на отозванном У-2" in t and "(допущение)" in t for t in texts)
+    assert {tuple(i["chain"]) for i in data["groups"]["stale"]} == {("У-4", "У-2"), ("У-3", "У-2")}
+
+
+def test_stale_names_the_whole_chain_when_it_is_longer(cli, fu):
+    drop_u2_from_basis(fu)
+    edit_yaml(
+        fu,
+        "claims.yaml",
+        lambda d: next(c for c in d["claims"] if c["id"] == "У-4").update(basis=["У-3"]),
+    )
+    rehash(fu)
+    assert cli("claim", "revoke", "У-2", "--reason", "страница изменилась", "--project", "fu")[0] == 0
+    texts = [i["text"] for i in due(cli, "2026-07-01")["groups"]["stale"]]
+    assert any("У-3 стоит на отозванном У-2" in t and "цепочка У-4 → У-3 → У-2" in t for t in texts), texts
+
+
+def test_a_deep_fact_on_an_old_source_makes_the_decision_stale(cli, fu):
+    drop_u2_from_basis(fu)
+    age_source(fu, "И-1")  # получен 2026-01-01: к 2026-08-01 прошло больше 180 дней
+    data = due(cli, "2026-08-01")
+    assert keys(data) == {("stale", "Реш-1", "У-2", "источник устарел")}
+    item = data["groups"]["stale"][0]
+    assert item["source"] == "И-1" and item["through"] in ("У-3", "У-4")
+    assert "на котором стоит У-" in item["text"]
+    # У-4 и У-3 сами источников не имеют, поэтому о них по возрасту не говорится
+    assert not any(i["claim"] in ("У-3", "У-4") for i in data["groups"]["stale"])
+
+
+@pytest.mark.parametrize("claim", ["У-4", "У-3"])  # прогноз и допущение решения
+def test_forecast_and_assumption_on_an_old_source_do_not_go_stale(cli, fu, claim):
+    quote_from_old_source(fu, claim)
+    got = keys(due(cli, "2026-09-01"))  # И-3 получен 2026-03-01
+    assert got == {STALE_SOURCE}  # только факт У-7; У-3 и У-4 по возрасту не проверяются
+
+
+def test_walking_the_basis_survives_cycles(cli, fu):
+    p = proj.Project.load(fu)
+    decision = followup._read(p, "decisions").decisions[0]
+    claims = {c.id: c for c in p.claims.claims}
+    claims["У-3"] = claims["У-3"].model_copy(update={"basis": ["У-4"]})
+    claims["У-4"] = claims["У-4"].model_copy(update={"basis": ["У-3", "У-2"]})
+    found = followup._walk(decision, claims)
+    assert len(found) == len({(role, root, c.id) for role, root, c, _ in found})  # на корень каждое один раз
+    assert {c.id for _, _, c, _ in found} >= {"У-2", "У-3", "У-4", "У-7"}
+
+
+def test_source_day_is_counted_in_the_project_time_zone(cli, fu):
+    # 22:00 по поясу -05:00 — это уже 2026-03-01 по Москве: 180 дней проходят 2026-08-28
+    age_source(fu, "И-3", "2026-02-28T22:00:00-05:00")
+    assert STALE_SOURCE not in keys(due(cli, "2026-08-28"))
+    data = due(cli, "2026-08-29")
+    assert STALE_SOURCE in keys(data)
+    assert data["groups"]["stale"][0]["accessed"] == "2026-03-01"
+
+
+def test_values_after_today_are_not_taken(cli, fu):
+    assert metric(cli, "ПП-2", "35 %", "2027-01-20")[0] == 0  # внесено 2027-02-01, на дату 2027-01-20
+    assert ("fired", "Реш-1", "ПП-2") not in keys(due(cli, "2027-01-19"))
+    assert ("fired", "Реш-1", "ПП-2") in keys(due(cli, "2027-01-20"))
+
+
+def test_two_values_on_one_date_the_later_entry_wins(cli, fu):
+    assert metric(cli, "ПП-2", "35 %", "2027-01-20")[0] == 0
+    assert metric(cli, "ПП-2", "10 %", "2027-01-20")[0] == 0  # то же число дня, записано позже
+    assert ("fired", "Реш-1", "ПП-2") not in keys(due(cli, "2027-01-21"))
+    assert metric(cli, "ПП-2", "36 %", "2027-01-20")[0] == 0
+    assert ("fired", "Реш-1", "ПП-2") in keys(due(cli, "2027-01-21"))
+
+
+def replace_decision_now(cli, fu: Path) -> None:
+    """Реш-2 вместо Реш-1 записано командой `write` (часы — 2027-02-01); условие по ПП-2 то же, срок позже."""
+    data = load_yaml(fu / "decisions.yaml")
+    data.pop("schema_version")
+    old = data["decisions"][0]
+    new = {
+        **old,
+        "id": "Реш-2",
+        "review_date": "2027-06-01",
+        "conditions": [{**c, "date": "2027-06-01"} for c in old["conditions"]],
+        "commitments": [],
+        "replaces": "Реш-1",
+    }
+    old.update(status="заменено", replaced_by="Реш-2")
+    data["decisions"].append(new)
+    code, out, err = cli("write", "--file", "-", "--project", "fu", stdin=json.dumps({"decisions": data}))
+    assert code == 0, (out, err)
+
+
+def test_decision_day_comes_from_the_journal_write(cli, fu):
+    replace_decision_now(cli, fu)
+    p = proj.Project.load(fu)
+    by_id = {d.id: d for d in followup._read(p, "decisions").decisions}
+    assert followup.decision_day(p, by_id["Реш-2"]) == dt.date(2027, 2, 1)
+    assert followup.decision_day(p, by_id["Реш-1"]) is None  # записан до журнала: даты нет
+
+
+def test_a_value_from_before_the_decision_does_not_fire_the_new_decision(cli, fu):
+    assert metric(cli, "ПП-2", "35 %", "2027-01-20")[0] == 0  # при Реш-1 это сработавшее условие
+    assert ("fired", "Реш-1", "ПП-2") in keys(due(cli, "2027-01-21"))
+    replace_decision_now(cli, fu)  # Реш-2 записано 2027-02-01
+    data = due(cli, "2027-06-02")
+    assert ("fired", "Реш-2", "ПП-2") not in keys(data)
+    (check,) = [i for i in data["groups"]["check"] if i["decision"] == "Реш-2" and i["row"] == "ПП-2"]
+    assert "внесено до решения (2027-02-01)" in check["text"] and check["before_decision"] == "2027-01-20"
+    code, out, _ = cli("due", "--today", "2027-06-02", "--project", "fu")
+    assert "внесено до решения" in out
+    # значение, внесённое в день решения или позже, засчитывается
+    assert metric(cli, "ПП-2", "35 %", "2027-02-01")[0] == 0
+    assert ("fired", "Реш-2", "ПП-2") in keys(due(cli, "2027-06-02"))
+
+
+def test_metric_add_says_when_the_value_is_from_before_the_decision(cli, fu):
+    replace_decision_now(cli, fu)
+    code, data, err = metric(cli, "ПП-2", "35 %", "2027-01-25")
+    assert code == 0, err
+    assert [(c["decision"], c["result"]) for c in data["conditions"]] == [("Реш-2", "до решения")]
+    code, out, _ = cli("metric", "add", "ПП-2", "--value", "36 %", "--date", "2027-01-26", "--project", "fu")
+    assert "значение внесено до решения и на это условие не засчитано" in out
+    data = metric(cli, "ПП-2", "36 %", "2027-02-01")[1]
+    assert [(c["decision"], c["result"]) for c in data["conditions"]] == [("Реш-2", "сработало")]
+
+
+# --- metric add: блокировка, повтор без заметки --------------------------------------------------
+
+
+def test_metric_add_reads_and_writes_under_the_project_lock(cli, fu, monkeypatch):
+    depth = []
+    real = followup.load_metrics
+
+    def spy(p):
+        depth.append(storage._entry(p.root).depth)  # > 0: папка проекта занята этим процессом
+        return real(p)
+
+    monkeypatch.setattr(followup, "load_metrics", spy)
+    assert metric(cli, "ПП-5", "11 %", "2027-01-05")[0] == 0
+    assert depth and all(d > 0 for d in depth), depth
+
+
+def test_parallel_metric_add_keeps_every_value(fu, home):
+    from test_project_lock import run_cli
+
+    dates = [f"2026-10-0{i}" for i in range(1, 7)]
+
+    def one(i: int):
+        args = ("metric", "add", "ПП-5", "--value", f"{10 + i} %", "--date", dates[i], "--project", "fu")
+        return run_cli(home, *args)
+
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        done = list(pool.map(one, range(6)))
+    assert [r.returncode for r in done] == [0] * 6, [r.stderr for r in done]
+    values = load_yaml(fu / "metrics.yaml")["values"]
+    assert sorted(v["date"] for v in values) == dates  # ни одна запись не потеряна
+    assert len([e for e in journal_of(fu) if e.get("name") == "strateg metric add"]) == 6
+    assert check_project(fu) == []
+
+
+def test_metric_add_repeat_ignores_the_note(cli, fu):
+    assert metric(cli, "ПП-2", "35 %", "2027-01-20", "--note", "выгрузка за декабрь")[0] == 0
+    before = (fu / "metrics.yaml").read_bytes()
+    events = len(journal_of(fu))
+    code, data, _ = metric(cli, "ПП-2", "35 %", "2027-01-20", "--note", "из другого отчёта")
+    assert code == 0 and data["already_recorded"] is True and data["note"] == "выгрузка за декабрь"
+    code, data, _ = metric(cli, "ПП-2", "35 %", "2027-01-20")
+    assert data["already_recorded"] is True
+    assert (fu / "metrics.yaml").read_bytes() == before and len(journal_of(fu)) == events
+
+
+# --- impact: замена утверждения -------------------------------------------------------------------
+
+
+def replace_u7_with_new_page(cli, fu: Path, tmp_path: Path) -> tuple[str, str]:
+    """Новая страница с ценой заменяет У-7 (на нём Вар-3, О-3 и Реш-1): (источник, утверждение)."""
+    (fu / "inputs" / "new.txt").write_text(
+        "Новые тарифы «Щита»\n\nКонкурент «Щит» продаёт защиту от мошенников за 79 рублей в месяц.\n",
+        encoding="utf-8",
+    )
+    code, added, err = call(cli, "add", "inputs/new.txt")
+    assert code == 0, err
+    source = added["source"]
+    claim = {
+        "text": "Конкурент «Щит» продаёт защиту за 79 рублей в месяц",
+        "type": "факт",
+        "subject": "цена защиты у конкурента «Щит»",
+        "period": "2026",
+        "region": "RU-MOW",
+        "quotes": [
+            {
+                "source": source,
+                "text": "Конкурент «Щит» продаёт защиту от мошенников за 79 рублей в месяц",
+                "publisher": "компания «Щит»",
+                "publisher_kind": "официальный первоисточник",
+                "self_reported": False,
+            }
+        ],
+    }
+    path = tmp_path / "new7.yaml"
+    path.write_text(yaml.safe_dump(claim, allow_unicode=True), encoding="utf-8")
+    code, replaced, err = call(cli, "claim", "replace", "У-7", "--file", str(path), "--by", "пользователь")
+    assert code == 0, err
+    return source, replaced["id"]
+
+
+def test_a_new_source_that_replaces_a_claim_hits_the_choice(cli, fu, tmp_path):
+    source, new = replace_u7_with_new_page(cli, fu, tmp_path)
+    for seed in (source, new, "У-7"):
+        r = impact(cli, seed)
+        assert {"У-7", new} <= set(ids(r["claims"])) | {r["seed"]["id"]}, seed
+        assert ids(r["options"]) == ["Вар-3"] and ids(r["promises"]) == ["О-3"], seed
+        assert ids(r["decisions"]) == ["Реш-1"], seed
+        assert r["choice"]["affected"] is True and r["choice"]["stop"], seed
+        assert "решение Реш-1 опирается на У-7" in r["choice"]["via"], seed
+    for seed in (source, new):
+        why = {e["id"]: e["why"] for e in impact(cli, seed)["claims"]}
+        assert why["У-7"] == [f"заменено на {new}"], seed
+    assert {e["id"]: e["why"] for e in impact(cli, "У-7")["claims"]}[new] == ["заменяет У-7"]
+    code, out, _ = cli("impact", source, "--project", "fu")
+    assert "Выбор на В4: задет — решение Реш-1 опирается на У-7" in out and "внеплановая остановка" in out
+
+
+def test_impact_goes_over_replacement_both_ways_in_the_fixture(cli, fu):
+    new_page = impact(cli, "И-5")  # страница ноября: У-9 заменяет У-8, на котором стоит возражение Вар-4
+    assert {e["id"]: e["why"] for e in new_page["claims"]} == {
+        "У-8": ["заменено на У-9"],
+        "У-9": ["цитата из И-5", "заменяет У-8"],
+    }
+    assert ids(new_page["options"]) == ["Вар-4"] and ids(new_page["decisions"]) == ["Реш-1"]
+    assert new_page["choice"]["affected"] is False
+    assert {e["id"]: e["why"] for e in impact(cli, "У-8")["claims"]} == {"У-9": ["заменяет У-8"]}
+    new = impact(cli, "У-9")
+    assert {e["id"]: e["why"] for e in new["claims"]} == {"У-8": ["заменено на У-9"]}
+    assert ids(new["options"]) == ["Вар-4"]  # то, что стояло на заменённом У-8
+
+
+def test_documents_are_matched_by_whole_number(cli, fu):
+    (fu / "outputs" / "extra-a.md").write_text("# А\n\nНомера У-80, ПУ-8 и У-13, ПУ-1.\n", encoding="utf-8")
+    (fu / "outputs" / "extra-b.md").write_text("# Б\n\nСводка (У-8) и (У-1).\n", encoding="utf-8")
+    rehash(fu)
+
+    def extra_docs(seed: str) -> list[str]:
+        return [d["path"] for d in impact(cli, seed)["documents"] if "extra" in d["path"]]
+
+    assert extra_docs("У-8") == ["outputs/extra-b.md"]  # не У-80 и не ПУ-8
+    assert extra_docs("У-1") == ["outputs/extra-b.md"]  # не У-13 и не ПУ-1
