@@ -8,6 +8,9 @@
 В отчёте разбора: сколько записей транскриптов пропущено (битые строки, сообщения без учётных полей) — по
 служебному файлу смещений `.tmp/cost/offsets.json`, и какие модели без цены. Повышения модели — из событий
 «выбор модели» с именем «повышение».
+
+Веб-поиск показан отдельной строкой в итоге и у каждой роли: число вызовов и оценка денег (плата за поиск и
+запрос к модели поиска, `config/prices.yaml`); эти деньги уже входят в сумму роли.
 """
 
 from __future__ import annotations
@@ -25,6 +28,8 @@ from strateg.project import Project
 from strateg.routing import UPGRADE_EVENT
 
 NO_STEP = "не указан"
+WEB_SEARCH_NOTE = "оценка"  # веб-поиск считается по таблице цен и среднему запросу, а не по данным среды
+DEFAULT_SEARCH_FEE = 0.01  # $10 за 1000 поисков: запасное значение, если таблицы цен нет
 SUBSCRIPTION_NOTE = (
     "На подписке это эквивалент по цене API, а не счёт: оценка. Доля лимитов подписки здесь не видна."
 )
@@ -41,11 +46,12 @@ class Bucket:
     cache_write_1h_tokens: int = 0
     cache_read_tokens: int = 0
     web_searches: int = 0
+    web_search_usd: float = 0.0
     usd: float = 0.0
     unpriced_calls: int = 0
     models: dict[str, int] = field(default_factory=dict)
 
-    def add(self, r: CostRecord) -> None:
+    def add(self, r: CostRecord, search_fee: float = DEFAULT_SEARCH_FEE) -> None:
         self.calls += 1
         self.input_tokens += r.input_tokens
         self.output_tokens += r.output_tokens
@@ -57,13 +63,21 @@ class Bucket:
             self.unpriced_calls += 1
         else:
             self.usd += r.cost_usd
+            self.web_search_usd += web_search_usd(r, search_fee)
         self.models[r.model] = self.models.get(r.model, 0) + 1
 
 
-def _group(records: list[CostRecord], key: Any) -> dict[str, Bucket]:
+def web_search_usd(r: CostRecord, search_fee: float = DEFAULT_SEARCH_FEE) -> float:
+    """Деньги записи на веб-поиск. У записей без поля (прежние версии) — плата за поиск по числу поисков."""
+    if r.web_search_usd is not None:
+        return r.web_search_usd
+    return r.web_searches * search_fee
+
+
+def _group(records: list[CostRecord], key: Any, search_fee: float = DEFAULT_SEARCH_FEE) -> dict[str, Bucket]:
     out: dict[str, Bucket] = defaultdict(Bucket)
     for r in records:
-        out[key(r)].add(r)
+        out[key(r)].add(r, search_fee)
     return dict(out)
 
 
@@ -79,6 +93,7 @@ def _row(name_key: str, name: str, b: Bucket, total: float) -> dict[str, Any]:
         "cache_write_1h_tokens": b.cache_write_1h_tokens,
         "cache_read_tokens": b.cache_read_tokens,
         "web_searches": b.web_searches,
+        "web_search_usd": round(b.web_search_usd, 6),
         "usd": None if nothing else round(b.usd, 6),  # нет цены нигде в группе: не «0 долларов»
         "unpriced_calls": b.unpriced_calls,
         "share": None if nothing or total <= 0 else round(b.usd / total, 4),
@@ -121,10 +136,14 @@ def report_data(p: Project) -> dict[str, Any]:
         for e in p.journal
         if e.kind == "выбор модели" and e.name == UPGRADE_EVENT
     ]
+    fee = DEFAULT_SEARCH_FEE
     try:
-        accessed: str | None = budget.load_prices().accessed
+        prices = budget.load_prices()
+        accessed: str | None = prices.accessed
+        fee = prices.web_search_usd_per_1000 / 1000
     except Exception:  # noqa: BLE001 - отчёт не зависит от таблицы цен: дата не видна, остальное есть
         accessed = None
+    overall = _group(counted, lambda r: "", fee).get("", Bucket())
     return {
         "project": p.id,
         "total_usd": total,
@@ -135,9 +154,16 @@ def report_data(p: Project) -> dict[str, Any]:
         "sessions": len(sessions),
         "prices_accessed": accessed,
         "subscription_note": SUBSCRIPTION_NOTE,
-        "roles": [_row("role", k, b, base) for k, b in _sorted(_group(counted, lambda r: r.role))],
-        "steps": [_row("step", k, b, base) for k, b in _sorted(_group(counted, lambda r: r.step or NO_STEP))],
-        "models": [_row("model", k, b, base) for k, b in _sorted(_group(counted, lambda r: r.model))],
+        "web_search": {
+            "calls": overall.web_searches,
+            "usd": round(overall.web_search_usd, 6),
+            "precision": WEB_SEARCH_NOTE,
+        },
+        "roles": [_row("role", k, b, base) for k, b in _sorted(_group(counted, lambda r: r.role, fee))],
+        "steps": [
+            _row("step", k, b, base) for k, b in _sorted(_group(counted, lambda r: r.step or NO_STEP, fee))
+        ],
+        "models": [_row("model", k, b, base) for k, b in _sorted(_group(counted, lambda r: r.model, fee))],
         "skipped_records": accounting.skipped_total(p.root),
         "unpriced_models": [{"model": m, "calls": n} for m, n in sorted(unpriced.items())],
         "model_upgrades": upgrades,
@@ -160,13 +186,20 @@ def _share(x: float | None) -> str:
     return "—" if x is None else f"{x * 100:.0f} %".replace(".", ",")
 
 
+def _web_search(calls: int, usd: float) -> str:
+    """«веб-поиск: 21 вызовов, $0,2461 (оценка)»: плата за поиск и запрос к модели поиска."""
+    return f"веб-поиск: {calls} вызовов, {_usd(usd)} ({WEB_SEARCH_NOTE})"
+
+
 def _tokens(row: dict[str, Any]) -> str:
     cache_write = row["cache_write_5m_tokens"] + row["cache_write_1h_tokens"]
     text = (
         f"ввод {row['input_tokens']}, вывод {row['output_tokens']}, "
         f"запись кэша {cache_write}, чтение кэша {row['cache_read_tokens']}"
     )
-    return text + (f", веб-поиск {row['web_searches']}" if row["web_searches"] else "")
+    return text + (
+        ", " + _web_search(row["web_searches"], row["web_search_usd"]) if row["web_searches"] else ""
+    )
 
 
 def report_lines(d: dict[str, Any]) -> list[str]:
@@ -177,6 +210,8 @@ def report_lines(d: dict[str, Any]) -> list[str]:
     )
     lines = [head + ("" if d["complete"] or d["total_usd"] is None else "; часть записей без цены")]
     lines.append(f"Записей: {d['records']}, сессий: {d['sessions']}. {d['subscription_note']}")
+    if d["web_search"]["calls"]:
+        lines.append(_web_search(d["web_search"]["calls"], d["web_search"]["usd"]) + "; входит в сумму выше.")
     if d["total_usd"] is not None and d["breakdown_usd"] is not None:
         if abs(d["total_usd"] - d["breakdown_usd"]) > 1e-6:
             lines.append(

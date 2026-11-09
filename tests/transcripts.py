@@ -26,7 +26,9 @@ def assistant(
     web: int | None = None,
     geo: str | None = None,
     speed: str | None = None,
+    tools: tuple[tuple[str, str], ...] = (),
 ) -> str:
+    """Строка ассистента. `tools` — вызовы инструментов в `content`: пары (id блока, имя инструмента)."""
     usage: dict = {
         "input_tokens": inp,
         "output_tokens": out,
@@ -40,9 +42,18 @@ def assistant(
         usage["inference_geo"] = geo
     if speed is not None:
         usage["speed"] = speed
-    return json.dumps(
-        {"type": "assistant", "message": {"id": mid, "model": model, "usage": usage}}, ensure_ascii=False
-    )
+    message: dict = {"id": mid, "model": model, "usage": usage}
+    if tools:
+        message["content"] = [
+            {"type": "tool_use", "id": block, "name": name, "input": {"query": "синтетический запрос"}}
+            for block, name in tools
+        ]
+    return json.dumps({"type": "assistant", "message": message}, ensure_ascii=False)
+
+
+def searches(*ids: str) -> tuple[tuple[str, str], ...]:
+    """Вызовы `WebSearch` с этими id блоков — для `assistant(..., tools=searches("t1", "t2"))`."""
+    return tuple((block, "WebSearch") for block in ids)
 
 
 def user_line() -> str:

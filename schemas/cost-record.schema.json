@@ -111,9 +111,24 @@
     },
     "web_searches": {
       "default": 0,
+      "description": "Оплаченных веб-поисков: по данным среды или по вызовам WebSearch",
       "minimum": 0,
       "title": "Web Searches",
       "type": "integer"
+    },
+    "web_search_usd": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Часть cost_usd на веб-поиск: плата за поиск и запрос к модели поиска (оценка)",
+      "title": "Web Search Usd"
     },
     "cost_usd": {
       "anyOf": [

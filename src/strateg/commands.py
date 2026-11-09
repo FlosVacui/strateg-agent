@@ -199,7 +199,10 @@ def cmd_step_start(args: argparse.Namespace) -> int:
     step = _norm_step(args.step)
     notes: list[str] = []
     with proj.transaction(p.root):
-        for h, e in _open_steps(p).items():
+        open_steps = _open_steps(p)
+        # длительность считается по журналу до записи «прервано»
+        worked = {h: proj.interrupted_seconds(p.journal, e) for h, e in open_steps.items()}
+        for h, e in open_steps.items():
             p.add_event(
                 p.event(
                     step=e.step,
@@ -207,6 +210,7 @@ def cmd_step_start(args: argparse.Namespace) -> int:
                     name=e.name,
                     idempotency_hash=h,
                     status="прервано",
+                    duration_s=worked[h],
                     message="шаг начат заново без отметки выполнения"
                     if e.step == step
                     else f"начат шаг {step}, а этот не завершён",
@@ -257,10 +261,7 @@ def cmd_step_done(args: argparse.Namespace) -> int:
     start = next(e for e in mine if e.idempotency_hash == last_hash and e.status == "начато")
     end = proj.now()
     total = max((end - start.time).total_seconds(), 0.0)
-    waited = sum(
-        proj.overlap_seconds(start.time, end, opened, answered or end)
-        for opened, answered in proj.gate_waits(p.journal)
-    )
+    waited = proj.waited_seconds(start.time, end, proj.human_waits(p.journal))
     duration = round(max(total - waited, 0.0), 1)
     with proj.transaction(p.root):
         p.add_event(
@@ -281,7 +282,7 @@ def cmd_step_done(args: argparse.Namespace) -> int:
     return emit(
         args,
         {"step": step, "duration_s": duration, "waited_s": round(waited, 1)},
-        [f"Шаг {step} ({STEP_NAMES[step]}) выполнен за {_num(duration / 60)} мин (без ожидания на воротах)."],
+        [f"Шаг {step} ({STEP_NAMES[step]}) выполнен за {_num(duration / 60)} мин (без ожидания ответов)."],
     )
 
 
@@ -1943,11 +1944,12 @@ def _status_data(p: Project) -> dict[str, Any]:
         or (c.type in ("гипотеза", "прогноз") and not (c.basis or c.quotes))
     )
     total_usd, precision, complete = proj.cost_total(p.costs)
-    running = None  # сколько минут идёт начатый и не завершённый шаг (без ожидания на воротах)
+    running = None  # сколько минут идёт начатый и не завершённый шаг (без ожидания ответов человека)
     if p.state.step in [e.step for e in _open_steps(p).values()]:
         running = round((proj.work_seconds(p.journal, at=proj.now()) - proj.work_seconds(p.journal)) / 60, 2)
     open_steps = [e.step for e in _open_steps(p).values()]
     waiting = [g for g in GATES if p.state.gates.get(g) == "ждут ответа"]  # type: ignore[call-overload]
+    paused = proj.pause_kind(p.journal) if p.state.step in open_steps else None
     if waiting:
         nxt = (
             f"ждём ответа на {waiting[0]}: следующее сообщение человека и есть ответ; "
@@ -1961,6 +1963,7 @@ def _status_data(p: Project) -> dict[str, Any]:
         "step": p.state.step,
         "step_name": STEP_NAMES[p.state.step],
         "step_in_progress": p.state.step in open_steps,
+        "paused": paused,
         "waiting_gates": waiting,
         "gates": dict(p.state.gates),
         "sources": {
@@ -1983,6 +1986,7 @@ def _status_data(p: Project) -> dict[str, Any]:
         ),
         "work_minutes": round(proj.work_seconds(p.journal, at=proj.now()) / 60, 2),
         "running_minutes": running,
+        "clock_minutes": round(proj.clock_seconds(p.journal) / 60, 2),
         "limit_minutes": p.state.budget.limit_minutes,
         "cost_usd": total_usd,
         "cost_precision": precision,
@@ -2000,6 +2004,30 @@ def _status_data(p: Project) -> dict[str, Any]:
         ],
         "next_action": nxt,
     }
+
+
+PAUSE_TEXT = {
+    proj.PAUSE_GATE: "ждём ответа на {gates}",
+    proj.PAUSE_STOP: "ждём ответ человека на внеплановую остановку",
+}
+
+
+def _step_state(d: dict[str, Any]) -> str:
+    """Пометка у шага: «в работе» или «на паузе: чего ждём» (ворота или остановка)."""
+    if not d["step_in_progress"]:
+        return ""
+    if d["paused"] is None:
+        return " · в работе"
+    gates = ", ".join(d["waiting_gates"]) or "воротах"
+    return " · на паузе: " + PAUSE_TEXT[d["paused"]].format(gates=gates)
+
+
+def _clock_note(d: dict[str, Any]) -> str:
+    """Время работы и время по часам: ожидание ответов человека входит только во второе."""
+    return (
+        f"время работы {_num(d['work_minutes'])} мин, "
+        f"по часам {_num(d['clock_minutes'])} мин (ожидание ответов входит)"
+    )
 
 
 def status_line(d: dict[str, Any]) -> str:
@@ -2021,19 +2049,36 @@ def status_line(d: dict[str, Any]) -> str:
     return " · ".join(parts)
 
 
+def _paused_steps(p: Project) -> dict[str, JournalEvent]:
+    """Шаги, которые ждут человека: после их «начато» последнее событие проекта — открытые ворота без ответа
+    или «внеплановая остановка». Ключ — идемпотентность шага."""
+    if proj.pause_kind(p.journal) is None:
+        return {}
+    return _open_steps(p)
+
+
 def _resume(p: Project) -> list[JournalEvent]:
     """Возобновление работы: «прервано» для начатых и не завершённых действий.
 
-    Событие пишется один раз: после него последняя отметка действия уже не «начато». «Изменено вне агента»
-    пишет `save_state` (так же, как у любой команды). Возвращает прерванные действия.
+    Шаг, который ждал ответа человека (ворота или остановка), не прерывается: работа идёт дальше с того же
+    «начато». У настоящего перерыва «прервано» получает длительность — работу шага до последнего события
+    проекта; простой до возобновления в неё не входит. Событие пишется один раз: после него последняя отметка
+    действия уже не «начато». «Изменено вне агента» пишет `save_state` (так же, как у любой команды).
+    Возвращает прерванные действия.
     """
     last: dict[str, JournalEvent] = {}
     for e in p.journal:
         if e.kind == "действие" and e.idempotency_hash:
             last[e.idempotency_hash] = e
-    interrupted = [(h, e) for h, e in last.items() if e.status == "начато"]
+    paused = _paused_steps(p)
+    interrupted = [(h, e) for h, e in last.items() if e.status == "начато" and h not in paused]
     if not interrupted and not p.outside:
         return []
+    # длительность считается по журналу до записи «прервано»: иначе концом работы стало бы время возобновления
+    seconds = {
+        h: proj.interrupted_seconds(p.journal, e) if (e.name or "").startswith("шаг ") else None
+        for h, e in interrupted
+    }
     with proj.transaction(p.root, rollback=False):
         for h, e in interrupted:
             p.add_event(
@@ -2043,6 +2088,7 @@ def _resume(p: Project) -> list[JournalEvent]:
                     name=e.name,
                     idempotency_hash=h,
                     status="прервано",
+                    duration_s=seconds[h],
                     message="начато и не завершено до перерыва; обнаружено при возобновлении работы",
                 )
             )
@@ -2077,7 +2123,7 @@ def _brief(args: argparse.Namespace, p: Project, *, peek: bool) -> int:
         nxt = f"начать прерванный шаг заново: `{resume[-1]}`; записанное — в `strateg claim list --step …`"
     lines = [
         f"Проект: {d['project']} · режим: {d['mode']}",
-        f"Шаг: {d['step']} ({d['step_name']})" + (" · в работе" if d["step_in_progress"] else ""),
+        f"Шаг: {d['step']} ({d['step_name']})" + _step_state(d),
         "Ворота ждут ответа: " + ", ".join(d["waiting_gates"])
         if d["waiting_gates"]
         else "Ворота: ответов не ждут",
@@ -2091,7 +2137,11 @@ def _brief(args: argparse.Namespace, p: Project, *, peek: bool) -> int:
     if peek and changed:
         lines.append("Сводка без записи (--peek): событие «изменено вне агента» запишет следующая команда.")
     lines.append(
-        "Бюджет: " + d["budget"]["text"] + (f" ({d['budget']['warning']})" if d["budget"]["warning"] else "")
+        "Бюджет: "
+        + d["budget"]["text"]
+        + (f" ({d['budget']['warning']})" if d["budget"]["warning"] else "")
+        + " · "
+        + _clock_note(d)
     )
     lines.append(
         "Файлы выхода: " + (", ".join(f"{k}{frame_note if k == 'frame' else ''}" for k in present) or "нет")
@@ -2105,6 +2155,7 @@ def _brief(args: argparse.Namespace, p: Project, *, peek: bool) -> int:
         "step": d["step"],
         "step_name": d["step_name"],
         "step_in_progress": d["step_in_progress"],
+        "paused": d["paused"],
         "waiting_gates": d["waiting_gates"],
         "next_action": nxt,
         "interrupted": [{"name": e.name, "step": e.step} for e in interrupted],
@@ -2114,6 +2165,8 @@ def _brief(args: argparse.Namespace, p: Project, *, peek: bool) -> int:
         "frame_version": frame_version,
         "frame_draft": "frame" in present and not outputs.b1_answered(p.journal),
         "budget": d["budget"],
+        "work_minutes": d["work_minutes"],
+        "clock_minutes": d["clock_minutes"],
         "env_notes": env_notes,
     }
     return emit(args, data, lines)
@@ -2152,13 +2205,14 @@ def cmd_status(args: argparse.Namespace) -> int:
     types = ", ".join(f"{k} {v}" for k, v in d["claims"]["by_type"].items())
     lines = [
         f"Проект: {d['project']} · режим: {d['mode']}",
-        f"Шаг: {d['step']} ({d['step_name']})" + (" · в работе" if d["step_in_progress"] else ""),
+        f"Шаг: {d['step']} ({d['step_name']})" + _step_state(d),
         "Ворота: " + ", ".join(f"{g} {s}" for g, s in d["gates"].items()),
         f"Источники: {d['sources']['total']}"
         + (f" ({kinds})" if kinds else "")
         + (f", недоступны: {d['sources']['unavailable']}" if d["sources"]["unavailable"] else ""),
         f"Утверждения: {d['claims']['active']} действуют" + (f" ({types})" if types else ""),
-        f"Время работы: {_num(d['work_minutes'])} из {d['limit_minutes']:g} мин{running} · стоимость: {cost}",
+        f"Время работы: {_num(d['work_minutes'])} из {d['limit_minutes']:g} мин{running} · "
+        f"по часам {_num(d['clock_minutes'])} мин (ожидание ответов входит) · стоимость: {cost}",
         "Бюджет: " + d["budget"]["text"],
     ]
     if d["budget"]["warning"]:
@@ -2181,5 +2235,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         lines.insert(
             0, "Ждём ответа на " + ", ".join(d["waiting_gates"]) + ": следующее сообщение человека — ответ"
         )
+    elif d["paused"] == proj.PAUSE_STOP:
+        lines.insert(0, "Ждём ответ человека на внеплановую остановку: следующее сообщение человека — ответ")
     lines.append(f"Дальше: {d['next_action'] or 'не задано'}")
     return emit(args, d, lines)

@@ -10,10 +10,13 @@
 - `message.model` — id модели, как в таблице цен;
 - `message.usage` — токены ввода и вывода, чтения кэша, записи кэша (`cache_creation_input_tokens` — сумма,
   `cache_creation.ephemeral_5m_input_tokens` и `ephemeral_1h_input_tokens` — разбивка), число веб-поисков
-  (`server_tool_use.web_search_requests`), регион вывода `inference_geo` и режим `speed`.
+  (`server_tool_use.web_search_requests`), регион вывода `inference_geo` и режим `speed`;
+- `message.content[*]` — только блоки `tool_use` с именем `WebSearch`: их `id` (и ничего больше). Среда не
+  пишет эти поиски в `server_tool_use`, а поиск стоит денег; блок уникален по `id`, повтор строки или
+  копия сообщения его не удваивает.
 
-Всё остальное (текст, вызовы инструментов, результаты) разбор не читает и не хранит. Строка, которую нельзя
-разобрать, и сообщение без `usage`, id или модели пропускаются и считаются в `skipped`; хук не падает.
+Всё остальное (текст, другие вызовы инструментов, результаты) разбор не читает и не хранит. Строка, которую
+нельзя разобрать, и сообщение без `usage`, id или модели пропускаются и считаются в `skipped`; хук не падает.
 
 Чтение с места: `read_new` отдаёт только полные строки после сохранённого смещения. Файл короче смещения или
 с другим началом (его переписали) читается с начала; повторный разбор не удваивает расход, потому что учёт
@@ -25,12 +28,13 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 HEAD_BYTES = 1024  # по началу файла замечают, что его переписали
 SYNTHETIC_MODEL = "<synthetic>"  # служебные сообщения среды (ошибка API, прерывание) без `usage`
+WEB_SEARCH_TOOL = "WebSearch"  # имя инструмента веб-поиска в блоках `tool_use`
 
 
 @dataclass(frozen=True)
@@ -44,7 +48,8 @@ class Usage:
     cache_write_5m_tokens: int = 0
     cache_write_1h_tokens: int = 0
     cache_read_tokens: int = 0
-    web_searches: int = 0
+    web_searches: int = 0  # поиски по данным среды: `server_tool_use.web_search_requests`
+    search_calls: frozenset[str] = frozenset()  # id блоков `tool_use` с именем `WebSearch` в этом сообщении
     geo: str | None = None  # `inference_geo`: "us" — ответ из США (цены ×1,1)
     speed: str | None = None  # "fast" — быстрый режим
 
@@ -59,6 +64,7 @@ class Usage:
             cache_write_1h_tokens=max(self.cache_write_1h_tokens, other.cache_write_1h_tokens),
             cache_read_tokens=max(self.cache_read_tokens, other.cache_read_tokens),
             web_searches=max(self.web_searches, other.web_searches),
+            search_calls=self.search_calls | other.search_calls,
             geo=other.geo or self.geo,
             speed=other.speed or self.speed,
         )
@@ -85,6 +91,22 @@ def _field(source: Mapping[str, Any], key: str, *, required: bool = False) -> in
     if key not in source:
         return None if required else 0
     return _count(source[key])
+
+
+def search_calls_of(message: Mapping[str, Any]) -> frozenset[str]:
+    """id блоков `tool_use` с именем `WebSearch`; блок без id учесть нельзя (не отличить повтор)."""
+    content = message.get("content")
+    if not isinstance(content, list):
+        return frozenset()
+    return frozenset(
+        block["id"]
+        for block in content
+        if isinstance(block, dict)
+        and block.get("type") == "tool_use"
+        and block.get("name") == WEB_SEARCH_TOOL
+        and isinstance(block.get("id"), str)
+        and block["id"]
+    )
 
 
 def usage_of(message: Mapping[str, Any]) -> Usage | None:
@@ -126,6 +148,7 @@ def usage_of(message: Mapping[str, Any]) -> Usage | None:
         cache_write_1h_tokens=write_1h,
         cache_read_tokens=cache_read or 0,
         web_searches=searches,
+        search_calls=search_calls_of(message),
         geo=geo if isinstance(geo, str) else None,
         speed=speed if isinstance(speed, str) else None,
     )
@@ -134,6 +157,7 @@ def usage_of(message: Mapping[str, Any]) -> Usage | None:
 def parse(data: bytes) -> Parsed:
     """Разбирает байты транскрипта (целые строки). Не бросает исключений на любых входных данных."""
     out = Parsed()
+    claimed: dict[str, str] = {}  # id блока `tool_use` -> сообщение, которое его учло первым
     for raw in data.split(b"\n"):
         line = raw.strip()
         if not line:
@@ -158,6 +182,12 @@ def parse(data: bytes) -> Parsed:
         if found is None:
             out.skipped += 1
             continue
+        # блок `tool_use` принадлежит одному сообщению: копия блока в другом сообщении поиск не удваивает
+        mine = frozenset(
+            i for i in found.search_calls if claimed.setdefault(i, found.message_id) == found.message_id
+        )
+        if mine != found.search_calls:
+            found = replace(found, search_calls=mine)
         before = out.messages.get(found.message_id)
         out.messages[found.message_id] = found if before is None else before.merged(found)
     return out

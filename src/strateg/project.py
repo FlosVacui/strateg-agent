@@ -566,7 +566,52 @@ def step_action_name(step: str) -> str:
     return f"шаг {step}"
 
 
-def gate_waits(events: list[JournalEvent]) -> list[tuple[dt.datetime, dt.datetime | None]]:
+STOP_ACTION = "внеплановая остановка"  # агент остановился и ждёт ответа человека
+OUTSIDE_EVENT = (
+    "изменено вне агента"  # заметка о правке человека: время события — время обнаружения, не работы
+)
+
+PAUSE_GATE = "ворота"
+PAUSE_STOP = "остановка"
+
+Wait = tuple[dt.datetime, dt.datetime | None]  # начало ожидания и его конец (None — ожидание идёт)
+
+
+def progress_events(events: list[JournalEvent]) -> list[JournalEvent]:
+    """События хода проекта: без заметок «изменено вне агента» (их время — время обнаружения правки)."""
+    return [e for e in events if e.kind != OUTSIDE_EVENT]
+
+
+def is_step_action(e: JournalEvent) -> bool:
+    return e.kind == "действие" and (e.name or "").startswith("шаг ")
+
+
+def is_open_gate(e: JournalEvent) -> bool:
+    """Ворота с вопросами человеку, на которые ещё нет ответа."""
+    g = e.gate
+    return e.kind == "ворота" and g is not None and g.questions > 0 and g.answered_at is None
+
+
+def is_stop(e: JournalEvent) -> bool:
+    return e.kind == "действие" and e.name == STOP_ACTION
+
+
+def pause_kind(events: list[JournalEvent]) -> str | None:
+    """Чего ждёт проект: «ворота» или «остановка»; None — не ждёт.
+
+    Ждёт, когда последнее событие проекта — открытые ворота без ответа или «внеплановая остановка»:
+    дальше ход идёт только после ответа человека.
+    """
+    progress = progress_events(events)
+    if not progress:
+        return None
+    last = progress[-1]
+    if is_open_gate(last):
+        return PAUSE_GATE
+    return PAUSE_STOP if is_stop(last) else None
+
+
+def gate_waits(events: list[JournalEvent]) -> list[Wait]:
     """Ожидание ответа на воротах: открытие и ответ (None — ответа ещё нет).
 
     Ворота без вопросов человеку пройдены сразу, ожидания в них нет.
@@ -582,34 +627,93 @@ def gate_waits(events: list[JournalEvent]) -> list[tuple[dt.datetime, dt.datetim
     return [(opened, answered) for (_, opened), answered in waits.items()]
 
 
+def stop_waits(events: list[JournalEvent]) -> list[Wait]:
+    """Ожидание ответа на «внеплановую остановку»: от остановки до следующего события проекта."""
+    progress = progress_events(events)
+    return [
+        (e.time, progress[i + 1].time if i + 1 < len(progress) else None)
+        for i, e in enumerate(progress)
+        if is_stop(e)
+    ]
+
+
+def human_waits(events: list[JournalEvent]) -> list[Wait]:
+    """Всё ожидание человека: ответы на воротах и на остановки. Оно не работа агента."""
+    return [*gate_waits(events), *stop_waits(events)]
+
+
 def overlap_seconds(a0: dt.datetime, a1: dt.datetime, b0: dt.datetime, b1: dt.datetime) -> float:
     lo, hi = max(a0, b0), min(a1, b1)
     return max((hi - lo).total_seconds(), 0.0)
 
 
-def work_seconds(events: list[JournalEvent], at: dt.datetime | None = None) -> float:
-    """Время работы: сумма длительностей шагов, записанных при `step done`.
+def waited_seconds(start: dt.datetime, end: dt.datetime, waits: list[Wait]) -> float:
+    """Ожидание человека на отрезке [start, end]; пересекающиеся ожидания не удваиваются."""
+    spans = sorted((max(a, start), min(b or end, end)) for a, b in waits)
+    total, reach = 0.0, None
+    for lo, hi in spans:
+        if hi <= lo:
+            continue
+        if reach is not None and lo < reach:
+            lo = reach
+        if hi > lo:
+            total += (hi - lo).total_seconds()
+            reach = hi if reach is None else max(reach, hi)
+    return total
 
-    С `at` к сумме добавляется идущий шаг (начат, не завершён) без ожидания на воротах.
+
+def work_between(events: list[JournalEvent], start: dt.datetime, end: dt.datetime) -> float:
+    """Работа на отрезке: его длина без ожидания человека."""
+    return max((end - start).total_seconds() - waited_seconds(start, end, human_waits(events)), 0.0)
+
+
+def last_open_attempt(events: list[JournalEvent], hash_: str) -> JournalEvent | None:
+    """Последнее «начато» действия с этим ключом."""
+    found = None
+    for e in events:
+        if e.kind == "действие" and e.idempotency_hash == hash_ and e.status == "начато":
+            found = e
+    return found
+
+
+def interrupted_seconds(events: list[JournalEvent], started: JournalEvent) -> float:
+    """Работа шага до перерыва: от его «начато» до последнего события проекта, без ожидания человека.
+
+    Простой от последнего события до возобновления в работу не входит.
+    """
+    progress = progress_events(events)
+    end = progress[-1].time if progress else started.time
+    return round(work_between(events, started.time, max(end, started.time)), 1)
+
+
+def work_seconds(events: list[JournalEvent], at: dt.datetime | None = None) -> float:
+    """Время работы: сумма длительностей шагов, записанных при `step done`, и работа прерванных шагов.
+
+    У «прервано» длительность — работа шага до перерыва; у старых записей её нет, они не прибавляют ничего.
+    С `at` к сумме добавляется идущий шаг (начат, не завершён) без ожидания человека на воротах и после
+    «внеплановой остановки».
     """
     total = sum(
-        e.duration_s or 0.0
-        for e in events
-        if e.kind == "действие" and e.status == "выполнено" and (e.name or "").startswith("шаг ")
+        e.duration_s or 0.0 for e in events if is_step_action(e) and e.status in ("выполнено", "прервано")
     )
     if at is not None:
         last: dict[str, JournalEvent] = {}
         for e in events:
-            if e.kind == "действие" and (e.name or "").startswith("шаг ") and e.idempotency_hash:
+            if is_step_action(e) and e.idempotency_hash:
                 last[e.idempotency_hash] = e
-        waits = gate_waits(events)
+        waits = human_waits(events)
         for e in last.values():
             if e.status == "начато":
-                waited = sum(
-                    overlap_seconds(e.time, at, opened, answered or at) for opened, answered in waits
-                )
-                total += max((at - e.time).total_seconds() - waited, 0.0)
+                total += max((at - e.time).total_seconds() - waited_seconds(e.time, at, waits), 0.0)
     return total
+
+
+def clock_seconds(events: list[JournalEvent]) -> float:
+    """Время по часам: от первого до последнего события проекта; ожидание ответов входит."""
+    progress = progress_events(events)
+    if len(progress) < 2:
+        return 0.0
+    return max((progress[-1].time - progress[0].time).total_seconds(), 0.0)
 
 
 def counted_costs(records: list[CostRecord]) -> tuple[list[CostRecord], bool]:

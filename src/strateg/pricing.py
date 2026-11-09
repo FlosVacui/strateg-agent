@@ -4,7 +4,10 @@
 - ввод, вывод, запись кэша на 5 минут и на час, чтение кэша — по ценам модели;
 - у Haiku 5.5 цены выше для запроса, где ввод длиннее порога; в длину входят все токены ввода, в том числе
   чтение и запись кэша (`long_prompt` в таблице);
-- веб-поиск — по числу поисков из транскрипта, сверх токенов;
+- веб-поиск — плата за поиск сверх токенов. Число поисков — `server_tool_use.web_search_requests`, а если
+  среда его не пишет (нулевое поле), то число уникальных вызовов `WebSearch` в сообщении. К каждому вызову по
+  транскрипту прибавляется запрос к модели поиска (`web_search_query` в таблице: средние токены по цене
+  этой модели). Поиски из `server_tool_use` платой за запрос не дополняются: тот же вызов не считается дважды;
 - ответ только из США (`inference_geo: us`) — цены токенов ×1,1, у Haiku 5.5 и длинные тоже; на поиск
   множитель страница цен не распространяет;
 - быстрый режим (`speed: fast`) — цены ввода и вывода из `fast_mode`; запись и чтение кэша считаются от них
@@ -63,6 +66,32 @@ def token_prices(prices: Prices, key: str, u: Usage) -> TokenPrices:
     return chosen
 
 
+def web_search_count(u: Usage) -> int:
+    """Сколько веб-поисков оплачивает сообщение: по данным среды, а если их нет — по вызовам `WebSearch`."""
+    return u.web_searches if u.web_searches > 0 else len(u.search_calls)
+
+
+def web_search_query_cost(prices: Prices) -> float:
+    """Запрос к модели поиска: средние токены `web_search_query` по ценам этой модели из той же таблицы."""
+    q = prices.web_search_query
+    key = model_key(q.model, prices)
+    if key is None:  # проверка таблицы (`Prices`) этого не допускает
+        raise ValueError(f"модели поиска {q.model} нет в таблице цен")
+    probe = Usage(
+        message_id="web-search-query", model=key, input_tokens=q.input_tokens, output_tokens=q.output_tokens
+    )
+    p = token_prices(prices, key, probe)
+    return (q.input_tokens * p.input + q.output_tokens * p.output) / PER
+
+
+def web_search_cost(prices: Prices, u: Usage) -> float:
+    """Веб-поиск сообщения: плата за поиск, а у вызовов, которых среда не посчитала, ещё и запрос к модели."""
+    fee = prices.web_search_usd_per_1000 / 1000
+    if u.web_searches > 0:
+        return u.web_searches * fee  # среда назвала поиски сама: их не удваиваем оценкой по вызовам
+    return len(u.search_calls) * (fee + web_search_query_cost(prices))
+
+
 def message_cost(prices: Prices, u: Usage) -> float | None:
     """Стоимость сообщения в долларах; None — модели нет в таблице («нет цены»)."""
     key = model_key(u.model, prices)
@@ -78,4 +107,4 @@ def message_cost(prices: Prices, u: Usage) -> float | None:
     ) / PER
     if u.geo == "us":
         tokens *= prices.us_data_residency_multiplier  # множитель страницы цен — на токены, не на поиск
-    return tokens + u.web_searches * prices.web_search_usd_per_1000 / 1000
+    return tokens + web_search_cost(prices, u)

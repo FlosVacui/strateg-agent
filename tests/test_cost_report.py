@@ -9,7 +9,7 @@ import pytest
 from strateg import accounting
 from strateg.hooks import effects
 from strateg.hooks.rules import EventSpec
-from transcripts import HAIKU, OPUS, SONNET, agent_file, assistant, session_files, write
+from transcripts import HAIKU, OPUS, SONNET, agent_file, assistant, searches, session_files, write
 
 
 @pytest.fixture(autouse=True)
@@ -105,7 +105,7 @@ def test_report_text_has_total_precision_roles_steps_and_the_subscription_note(c
     assert "Стоимость проекта demo: $" in text and "(оценка)" in text and "часть записей без цены" in text
     assert "По ролям:" in text and "По шагам:" in text and "По моделям:" in text
     assert "researcher:" in text and "critic:" in text
-    assert "веб-поиск 2" in text
+    assert "веб-поиск: 2 вызовов, $0,0200 (оценка)" in text
     assert "Модели без цены в config/prices.yaml: claude-future-9 (1)" in text
     assert "эквивалент по цене API" in text and "оценка" in text
     assert "обращение к странице цен 2026-11-08" in text
@@ -204,3 +204,86 @@ def test_synthetic_messages_do_not_show_up_as_skipped_records(cli, busy, tmp_pat
     d = report(cli, "--json")
     assert d["skipped_records"] == 0
     assert "Пропущено при разборе" not in report(cli)
+
+
+# --- веб-поиск ----------------------------------------------------------------------------------------------
+
+FEE_AND_QUERY = 0.01 + (11840 * 0.1 + 1070 * 0.5) / 1e6
+
+
+@pytest.fixture
+def searching(cli, demo, tmp_path):
+    """Исследователь: три поиска и ещё два по данным среды; основной агент: один поиск."""
+    main, folder = session_files(tmp_path / "w", "s1")
+    write(main, assistant("a1", SONNET, out=1000, tools=searches("t0")))
+    agent_file(
+        folder,
+        "r1",
+        assistant("r1", SONNET, out=2000, tools=searches("t1", "t2")),
+        assistant("r1", SONNET, out=2000, tools=searches("t1", "t2", "t3")),  # тот же ответ, дописан блок
+        assistant("r2", SONNET, out=0, web=2),
+    )
+    accounting.account(
+        demo,
+        "s1",
+        [src("main", main, "основной"), src("agent:r1", folder / "agent-r1.jsonl", "researcher")],
+    )
+    return demo
+
+
+def test_report_has_a_web_search_line_in_the_total_and_in_the_roles(cli, searching):
+    d = report(cli, "--json")
+    # четыре вызова WebSearch — плата и запрос к модели поиска; два поиска из данных среды — одна плата
+    calls, usd = 6, 4 * FEE_AND_QUERY + 2 * 0.01
+    assert d["web_search"]["calls"] == calls and d["web_search"]["usd"] == pytest.approx(usd, abs=1e-6)
+    assert d["web_search"]["precision"] == "оценка"
+    roles = by(d["roles"], "role")
+    assert roles["researcher"]["web_searches"] == 5
+    assert roles["researcher"]["web_search_usd"] == pytest.approx(3 * FEE_AND_QUERY + 2 * 0.01, abs=1e-6)
+    assert roles["основной"]["web_searches"] == 1
+    assert roles["основной"]["web_search_usd"] == pytest.approx(FEE_AND_QUERY, abs=1e-6)
+    # деньги поиска уже в сумме роли, а не сверх неё
+    assert roles["основной"]["usd"] == pytest.approx(1000 * 10 / 1e6 + FEE_AND_QUERY, abs=1e-6)
+
+
+def test_report_text_says_web_search_with_calls_dollars_and_estimate(cli, searching):
+    text = report(cli)
+    assert "веб-поиск: 6 вызовов, $0,0669 (оценка)" in text
+    researcher = next(line for line in text.splitlines() if line.strip().startswith("researcher:"))
+    assert "веб-поиск: 5 вызовов, $0,0552 (оценка)" in researcher
+
+
+def test_report_without_searches_has_no_web_search_line(cli, demo, tmp_path):
+    main, _ = session_files(tmp_path / "n", "s1")
+    write(main, assistant("a1", SONNET, out=1000))
+    accounting.account(demo, "s1", [src("main", main, "основной")])
+    d = report(cli, "--json")
+    assert d["web_search"] == {"calls": 0, "usd": 0.0, "precision": "оценка"}
+    assert "веб-поиск" not in report(cli)
+
+
+def test_records_written_before_the_web_search_field_get_the_fee_by_count(cli, demo):
+    """Прежняя запись с `web_searches` и без `web_search_usd` читается: плата за поиск по числу."""
+    line = {
+        "schema_version": 1,
+        "time": "2026-11-06T10:00:00+03:00",
+        "session_id": "old",
+        "role": "researcher",
+        "model": HAIKU,
+        "environment": "claude-code",
+        "step": "1",
+        "entry": "по сообщению",
+        "message_id": "old-1",
+        "input_tokens": 10,
+        "output_tokens": 10,
+        "web_searches": 3,
+        "cost_usd": 0.03,
+        "cost_source": "оценка",
+    }
+    with (demo / "cost.jsonl").open("ab") as f:
+        f.write((json.dumps(line) + "\n").encode())
+    from helpers import rehash
+
+    rehash(demo)
+    d = report(cli, "--json")
+    assert d["web_search"]["calls"] == 3 and d["web_search"]["usd"] == pytest.approx(0.03)
