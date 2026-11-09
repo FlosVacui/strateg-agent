@@ -1,7 +1,7 @@
 """Бюджет проекта и таблицы настроек `config/` (ADR-0010).
 
 Бюджет — деньги и время работы агента; остановка наступает по тому, что кончится раньше. Время — сумма
-длительностей шагов без ожидания ответа на воротах, плюс идущий шаг. Если стоимость неизвестна, лимит
+длительностей шагов без ожидания ответов человека, плюс идущий шаг. Если стоимость неизвестна, лимит
 действует только по времени. На выпуск с пометкой о неполноте оставлен резерв: в нём `budget check`
 не отказывает.
 
@@ -126,7 +126,9 @@ class Prices(_Config):
     source: StrictStr = Field(description="Страница цен")
     models: dict[str, ModelPrices]
     web_search_usd_per_1000: Positive
-    web_search_query: WebSearchQuery
+    web_search_query: WebSearchQuery | None = Field(
+        None, description="Модель поиска и средний запрос; без неё поиск стоит одну плату за поиск"
+    )
     batch_multiplier: Positive
     us_data_residency_multiplier: Positive
     fast_mode: dict[str, FastPrice] = Field(default_factory=dict)
@@ -144,7 +146,7 @@ class Prices(_Config):
 
     @model_validator(mode="after")
     def _search_model_is_priced(self) -> Prices:
-        if self.web_search_query.model not in self.models:
+        if self.web_search_query is not None and self.web_search_query.model not in self.models:
             raise ValueError(f"модели поиска {self.web_search_query.model} нет в таблице цен models")
         return self
 

@@ -2026,7 +2026,7 @@ def _clock_note(d: dict[str, Any]) -> str:
     """Время работы и время по часам: ожидание ответов человека входит только во второе."""
     return (
         f"время работы {_num(d['work_minutes'])} мин, "
-        f"по часам {_num(d['clock_minutes'])} мин (ожидание ответов входит)"
+        f"по часам {_num(d['clock_minutes'])} мин (с ожиданием ответов и перерывами)"
     )
 
 
@@ -2050,8 +2050,9 @@ def status_line(d: dict[str, Any]) -> str:
 
 
 def _paused_steps(p: Project) -> dict[str, JournalEvent]:
-    """Шаги, которые ждут человека: после их «начато» последнее событие проекта — открытые ворота без ответа
-    или «внеплановая остановка». Ключ — идемпотентность шага."""
+    """Шаги, которые ждут человека: после их «начато» последнее событие хода проекта — открытые ворота без
+    ответа или «внеплановая остановка» (события хуков и «прервано» сводки не в счёт).
+    Ключ — идемпотентность шага."""
     if proj.pause_kind(p.journal) is None:
         return {}
     return _open_steps(p)
@@ -2089,7 +2090,7 @@ def _resume(p: Project) -> list[JournalEvent]:
                     idempotency_hash=h,
                     status="прервано",
                     duration_s=seconds[h],
-                    message="начато и не завершено до перерыва; обнаружено при возобновлении работы",
+                    message=proj.RESUME_NOTE,
                 )
             )
         p.save_state()  # пишет «изменено вне агента» и принимает хеши: повторный `status` ничего не запишет
@@ -2212,7 +2213,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         + (f", недоступны: {d['sources']['unavailable']}" if d["sources"]["unavailable"] else ""),
         f"Утверждения: {d['claims']['active']} действуют" + (f" ({types})" if types else ""),
         f"Время работы: {_num(d['work_minutes'])} из {d['limit_minutes']:g} мин{running} · "
-        f"по часам {_num(d['clock_minutes'])} мин (ожидание ответов входит) · стоимость: {cost}",
+        f"по часам {_num(d['clock_minutes'])} мин (с ожиданием ответов и перерывами) · стоимость: {cost}",
         "Бюджет: " + d["budget"]["text"],
     ]
     if d["budget"]["warning"]:

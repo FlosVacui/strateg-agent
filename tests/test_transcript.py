@@ -339,24 +339,43 @@ def test_twenty_one_searches_match_the_measured_haiku_bill(prices):
     assert got == pytest.approx(measured, rel=0.001)
 
 
-def test_prices_without_the_search_query_or_with_an_unknown_model_are_refused(tmp_path, monkeypatch):
+def _prices_from(tmp_path, monkeypatch, change) -> None:
+    """Подставляет копию `prices.yaml`, изменённую `change(словарь)`."""
     import yaml
 
+    raw = yaml.safe_load((budget.config_dir() / "prices.yaml").read_text(encoding="utf-8"))
+    change(raw)
+    folder = tmp_path / "cfg"
+    folder.mkdir(exist_ok=True)
+    (folder / "prices.yaml").write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
+    monkeypatch.setenv(budget.CONFIG_ENV, str(folder))
+
+
+def test_prices_without_the_search_query_load_and_a_search_costs_the_fee_only(tmp_path, monkeypatch):
+    _prices_from(tmp_path, monkeypatch, lambda raw: raw.pop("web_search_query"))
+    loaded = budget.load_prices()
+    assert loaded.web_search_query is None
+    assert loaded.accessed == "2026-11-08" and HAIKU in loaded.models  # остальное в таблице на месте
+    assert cost(loaded, tools=searches("t1", "t2")) == pytest.approx(0.02)  # плата за поиск, без запроса
+    assert cost(loaded, out=1000, tools=searches("t1")) == pytest.approx(0.01 + 0.01)
+    assert cost(loaded, web=2, tools=searches("t1", "t2", "t3")) == pytest.approx(0.02)  # среда назвала сама
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda raw: raw["web_search_query"].update(model="claude-нет"),
+        lambda raw: raw["web_search_query"].update(measured="вчера"),
+        lambda raw: raw["web_search_query"].update(input_tokens=0),
+    ],
+    ids=["unknown model", "bad date", "zero tokens"],
+)
+def test_prices_with_a_broken_search_query_are_refused(tmp_path, monkeypatch, change):
     from strateg.project import CliError
 
-    raw = yaml.safe_load((budget.config_dir() / "prices.yaml").read_text(encoding="utf-8"))
-    for broken in (
-        {k: v for k, v in raw.items() if k != "web_search_query"},
-        {**raw, "web_search_query": {**raw["web_search_query"], "model": "claude-нет"}},
-        {**raw, "web_search_query": {**raw["web_search_query"], "measured": "вчера"}},
-        {**raw, "web_search_query": {**raw["web_search_query"], "input_tokens": 0}},
-    ):
-        folder = tmp_path / f"cfg{id(broken)}"
-        folder.mkdir()
-        (folder / "prices.yaml").write_text(yaml.safe_dump(broken, allow_unicode=True), encoding="utf-8")
-        monkeypatch.setenv(budget.CONFIG_ENV, str(folder))
-        with pytest.raises(CliError):
-            budget.load_prices()
+    _prices_from(tmp_path, monkeypatch, change)
+    with pytest.raises(CliError):
+        budget.load_prices()
 
 
 def test_us_inference_multiplies_tokens_but_not_searches(prices):

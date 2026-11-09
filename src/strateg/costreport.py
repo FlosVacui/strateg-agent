@@ -141,8 +141,10 @@ def report_data(p: Project) -> dict[str, Any]:
         prices = budget.load_prices()
         accessed: str | None = prices.accessed
         fee = prices.web_search_usd_per_1000 / 1000
+        query_priced: bool | None = prices.web_search_query is not None
     except Exception:  # noqa: BLE001 - отчёт не зависит от таблицы цен: дата не видна, остальное есть
         accessed = None
+        query_priced = None
     overall = _group(counted, lambda r: "", fee).get("", Bucket())
     return {
         "project": p.id,
@@ -158,6 +160,7 @@ def report_data(p: Project) -> dict[str, Any]:
             "calls": overall.web_searches,
             "usd": round(overall.web_search_usd, 6),
             "precision": WEB_SEARCH_NOTE,
+            "query_priced": query_priced,
         },
         "roles": [_row("role", k, b, base) for k, b in _sorted(_group(counted, lambda r: r.role, fee))],
         "steps": [
@@ -186,9 +189,18 @@ def _share(x: float | None) -> str:
     return "—" if x is None else f"{x * 100:.0f} %".replace(".", ",")
 
 
+def calls_word(n: int) -> str:
+    """«вызов» / «вызова» / «вызовов»: 1, 2, 5, 11, 21."""
+    if n % 10 == 1 and n % 100 != 11:
+        return "вызов"
+    if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        return "вызова"
+    return "вызовов"
+
+
 def _web_search(calls: int, usd: float) -> str:
-    """«веб-поиск: 21 вызовов, $0,2461 (оценка)»: плата за поиск и запрос к модели поиска."""
-    return f"веб-поиск: {calls} вызовов, {_usd(usd)} ({WEB_SEARCH_NOTE})"
+    """«веб-поиск: 21 вызов, $0,2461 (оценка)»: плата за поиск и запрос к модели поиска."""
+    return f"веб-поиск: {calls} {calls_word(calls)}, {_usd(usd)} ({WEB_SEARCH_NOTE})"
 
 
 def _tokens(row: dict[str, Any]) -> str:
@@ -211,7 +223,10 @@ def report_lines(d: dict[str, Any]) -> list[str]:
     lines = [head + ("" if d["complete"] or d["total_usd"] is None else "; часть записей без цены")]
     lines.append(f"Записей: {d['records']}, сессий: {d['sessions']}. {d['subscription_note']}")
     if d["web_search"]["calls"]:
-        lines.append(_web_search(d["web_search"]["calls"], d["web_search"]["usd"]) + "; входит в сумму выше.")
+        note = "; модель поиска без цены" if d["web_search"]["query_priced"] is False else ""
+        lines.append(
+            _web_search(d["web_search"]["calls"], d["web_search"]["usd"]) + note + "; входит в сумму выше."
+        )
     if d["total_usd"] is not None and d["breakdown_usd"] is not None:
         if abs(d["total_usd"] - d["breakdown_usd"]) > 1e-6:
             lines.append(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 
 import pytest
 
@@ -105,7 +106,7 @@ def test_report_text_has_total_precision_roles_steps_and_the_subscription_note(c
     assert "Стоимость проекта demo: $" in text and "(оценка)" in text and "часть записей без цены" in text
     assert "По ролям:" in text and "По шагам:" in text and "По моделям:" in text
     assert "researcher:" in text and "critic:" in text
-    assert "веб-поиск: 2 вызовов, $0,0200 (оценка)" in text
+    assert "веб-поиск: 2 вызова, $0,0200 (оценка)" in text
     assert "Модели без цены в config/prices.yaml: claude-future-9 (1)" in text
     assert "эквивалент по цене API" in text and "оценка" in text
     assert "обращение к странице цен 2026-11-08" in text
@@ -214,6 +215,10 @@ FEE_AND_QUERY = 0.01 + (11840 * 0.1 + 1070 * 0.5) / 1e6
 @pytest.fixture
 def searching(cli, demo, tmp_path):
     """Исследователь: три поиска и ещё два по данным среды; основной агент: один поиск."""
+    return fill_searching(demo, tmp_path)
+
+
+def fill_searching(demo, tmp_path):
     main, folder = session_files(tmp_path / "w", "s1")
     write(main, assistant("a1", SONNET, out=1000, tools=searches("t0")))
     agent_file(
@@ -248,7 +253,8 @@ def test_report_has_a_web_search_line_in_the_total_and_in_the_roles(cli, searchi
 
 def test_report_text_says_web_search_with_calls_dollars_and_estimate(cli, searching):
     text = report(cli)
-    assert "веб-поиск: 6 вызовов, $0,0669 (оценка)" in text
+    # итоговая строка целиком: подстрока была бы и в строке роли
+    assert "веб-поиск: 6 вызовов, $0,0669 (оценка); входит в сумму выше." in text.splitlines()
     researcher = next(line for line in text.splitlines() if line.strip().startswith("researcher:"))
     assert "веб-поиск: 5 вызовов, $0,0552 (оценка)" in researcher
 
@@ -258,7 +264,7 @@ def test_report_without_searches_has_no_web_search_line(cli, demo, tmp_path):
     write(main, assistant("a1", SONNET, out=1000))
     accounting.account(demo, "s1", [src("main", main, "основной")])
     d = report(cli, "--json")
-    assert d["web_search"] == {"calls": 0, "usd": 0.0, "precision": "оценка"}
+    assert d["web_search"] == {"calls": 0, "usd": 0.0, "precision": "оценка", "query_priced": True}
     assert "веб-поиск" not in report(cli)
 
 
@@ -287,3 +293,65 @@ def test_records_written_before_the_web_search_field_get_the_fee_by_count(cli, d
     rehash(demo)
     d = report(cli, "--json")
     assert d["web_search"]["calls"] == 3 and d["web_search"]["usd"] == pytest.approx(0.03)
+
+
+@pytest.mark.parametrize(
+    ("calls", "word"),
+    [
+        (0, "вызовов"),
+        (1, "вызов"),
+        (2, "вызова"),
+        (4, "вызова"),
+        (5, "вызовов"),
+        (11, "вызовов"),
+        (12, "вызовов"),
+        (21, "вызов"),
+        (22, "вызова"),
+        (25, "вызовов"),
+        (101, "вызов"),
+        (111, "вызовов"),
+    ],
+)
+def test_web_search_line_declines_the_calls(calls, word):
+    from strateg import costreport
+
+    assert costreport._web_search(calls, 0.5) == f"веб-поиск: {calls} {word}, $0,5000 (оценка)"
+
+
+def test_web_search_line_in_the_report_has_the_right_form_for_one_and_for_twenty_one_calls(
+    cli, demo, tmp_path
+):
+    main, _ = session_files(tmp_path / "d", "s1")
+    write(main, assistant("a1", SONNET, out=0, tools=searches("t1")))
+    accounting.account(demo, "s1", [src("main", main, "основной")])
+    assert "веб-поиск: 1 вызов, $0,0117 (оценка); входит в сумму выше." in report(cli).splitlines()
+    write(
+        main,
+        assistant("a1", SONNET, out=0, tools=searches("t1")),
+        assistant("a2", SONNET, out=0, tools=searches(*[f"u{n}" for n in range(20)])),
+    )
+    accounting.account(demo, "s1", [src("main", main, "основной")])
+    assert "веб-поиск: 21 вызов, " in report(cli)
+
+
+def test_report_says_the_search_model_has_no_price_when_the_table_has_no_query(
+    cli, demo, tmp_path, monkeypatch
+):
+    """Таблица цен без `web_search_query`: поиск — одна плата, а отчёт говорит, что запрос не оценён."""
+    import yaml
+
+    from strateg import budget
+
+    raw = yaml.safe_load((budget.config_dir() / "prices.yaml").read_text(encoding="utf-8"))
+    del raw["web_search_query"]
+    folder = tmp_path / "cfg"
+    folder.mkdir()
+    (folder / "prices.yaml").write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
+    shutil.copy(budget.config_dir() / "defaults.yaml", folder / "defaults.yaml")
+    monkeypatch.setenv(budget.CONFIG_ENV, str(folder))
+    fill_searching(demo, tmp_path)  # шесть поисков, каждый по одной плате
+    d = report(cli, "--json")
+    assert d["web_search"]["query_priced"] is False
+    assert d["web_search"]["calls"] == 6 and d["web_search"]["usd"] == pytest.approx(0.06, abs=1e-6)
+    line = "веб-поиск: 6 вызовов, $0,0600 (оценка); модель поиска без цены; входит в сумму выше."
+    assert line in report(cli).splitlines()

@@ -1108,3 +1108,54 @@ def test_rubric_part_b_asks_for_the_new_quality_rules():
     assert "оценки или направления" in questions["Б-5"]
     assert "формула, входы с У-n, итог" in questions["Б-15"] and "«не оценено — П-n»" in questions["Б-15"]
     assert "недостающие входы с П-n" in questions["Б-15"]
+
+
+# --- Время и стоимость: числа, которые видит человек, и условие отчёта о прогоне ---------------------------
+
+
+def _usd_number(text: str) -> float:
+    return float(text.replace(",", "."))
+
+
+def test_frame_names_the_default_budget_of_defaults_yaml():
+    """Агент называет на В1 тот же бюджет, что и `status --line`: доллары и минуты — как в настройках."""
+    from strateg import budget as budgetlib
+
+    default = budgetlib.load_defaults().budget
+    text = (SKILLS / "frame" / "SKILL.md").read_text(encoding="utf-8")
+    (line,) = [x for x in text.splitlines() if x.startswith("- бюджет по умолчанию:")]
+    found = re.fullmatch(r"- бюджет по умолчанию: \$(\d+(?:[.,]\d+)?) или (\d+) минут работы.*", line)
+    assert found, line
+    assert _usd_number(found[1]) == default.usd and float(found[2]) == default.minutes
+    assert "config/defaults.yaml" in line
+
+
+def test_user_journey_and_the_eval_card_show_the_default_budget():
+    from strateg import budget as budgetlib
+
+    default = budgetlib.load_defaults().budget
+    journey = (ROOT / "docs" / "user-journey.md").read_text(encoding="utf-8")
+    amounts = {_usd_number(x) for x in re.findall(r"(?:из|до) \$(\d+(?:[.,]\d+)?)", journey)}
+    assert amounts == {default.usd}
+    card = (ROOT / "evals" / "cases" / "fraud-protection" / "card.yaml").read_text(encoding="utf-8")
+    assert f"бюджет агента: ${default.usd:g} и {default.minutes:g} минут работы" in card
+
+
+def test_package_does_not_write_the_budget_note_in_claude_code_with_hooks():
+    text = (SKILLS / "package" / "SKILL.md").read_text(encoding="utf-8")
+    assert (
+        "«бюджет проверялся на границах шагов, а не посреди хода» — только если среда не Claude Code с хуками."  # noqa: E501
+        in text
+    )
+    assert "В Claude Code с хуками — не пиши." in text
+
+
+def test_package_names_the_clock_time_with_the_wait_and_the_breaks():
+    text = (SKILLS / "package" / "SKILL.md").read_text(encoding="utf-8")
+    assert "по часам N мин (с ожиданием ответов и перерывами)" in text
+
+
+def test_research_gives_the_full_path_estimate_guide():
+    text = (SKILLS / "research" / "SKILL.md").read_text(encoding="utf-8")
+    assert "около $5–6,5 и 25–30 минут работы" in text
+    assert "Оценка ниже ориентира — с причиной" in text
