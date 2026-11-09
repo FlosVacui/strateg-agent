@@ -80,6 +80,12 @@ def drop_u2_from_basis(fu: Path) -> None:
     assert check_project(fu) == []
 
 
+def fu_basis(fu: Path) -> set[str]:
+    """Прямые основания и допущения первого решения фикстуры."""
+    d = followup._read(proj.Project.load(fu), "decisions").decisions[0]
+    return {*d.basis, *d.assumptions}
+
+
 def age_source(fu: Path, sid: str = "И-1", accessed: str = "2026-01-01T09:00:00+03:00") -> None:
     edit_yaml(
         fu,
@@ -640,6 +646,47 @@ def test_walking_the_basis_survives_cycles(cli, fu):
     found = followup._walk(decision, claims)
     assert len(found) == len({(role, root, c.id) for role, root, c, _ in found})  # на корень каждое один раз
     assert {c.id for _, _, c, _ in found} >= {"У-2", "У-3", "У-4", "У-7"}
+
+
+def test_walking_a_diamond_in_the_basis_names_the_shared_claim_once(cli, fu):
+    p = proj.Project.load(fu)
+    decision = followup._read(p, "decisions").decisions[0]
+    claims = {c.id: c for c in p.claims.claims}
+    root = decision.basis[0]
+    a, b, shared = [
+        cid
+        for cid, c in claims.items()
+        if cid not in {*decision.basis, *decision.assumptions} and c.status == "действует"
+    ][:3]
+    claims[root] = claims[root].model_copy(update={"basis": [a, b]})
+    claims[a] = claims[a].model_copy(update={"basis": [shared]})
+    claims[b] = claims[b].model_copy(update={"basis": [shared]})
+    found = followup._walk(decision, claims)
+    assert sum(1 for _, r, c, _ in found if r == root and c.id == shared) == 1
+
+
+def test_a_stale_fact_reached_by_several_paths_is_named_once(cli, fu):
+    stale = [i for i in due(cli, "2027-06-02")["groups"]["stale"] if i.get("source") == "И-1"]
+    named = [(i["claim"], i["source"]) for i in stale]
+    assert named and len(named) == len(set(named))  # каждый факт с этим источником — одной строкой
+    assert not any(i.get("through") for i in stale if i["claim"] in fu_basis(fu))  # ближайший путь
+
+
+def test_a_deep_stale_fact_reads_as_one_sentence(cli, fu):
+    drop_u2_from_basis(fu)
+    deep = [i for i in due(cli, "2027-06-02")["groups"]["stale"] if i.get("through")]
+    assert deep and all(", держится на источнике" in i["text"] for i in deep if i.get("source"))
+
+
+def test_decision_day_is_counted_in_the_project_time_zone(cli, fu):
+    replace_decision_now(cli, fu)
+    p = proj.Project.load(fu)
+    by_id = {d.id: d for d in followup._read(p, "decisions").decisions}
+    i = max(j for j, e in enumerate(p.journal) if e.name == "strateg write decisions")
+    # 22:30 по поясу -05:00 — это уже 06:30 следующего дня по поясу проекта (+03:00)
+    late = dt.datetime(2027, 1, 31, 22, 30, tzinfo=dt.timezone(dt.timedelta(hours=-5)))
+    p.journal[i] = p.journal[i].model_copy(update={"time": late})
+    assert followup.decision_day(p, by_id["Реш-2"]) == dt.date(2027, 2, 1)
 
 
 def test_source_day_is_counted_in_the_project_time_zone(cli, fu):

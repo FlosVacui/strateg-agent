@@ -329,7 +329,13 @@ def _stale_items(d: Decision, p: Project, today: dt.date, max_age: int) -> list[
     claims = {c.id: c for c in p.claims.claims}
     sources = {s.id: s for s in p.sources.sources}
     out = []
-    for role, root, c, path in _walk(d, claims):
+    walked = _walk(d, claims)
+    # Устаревший источник факта называем один раз — по ближайшему пути: путей к факту бывает несколько.
+    nearest = {}
+    for _, _, c, path in walked:
+        nearest[c.id] = min(nearest.get(c.id, len(path)), len(path))
+    said: set[tuple[str, str]] = set()
+    for role, root, c, path in walked:
         cid = c.id
         chain = " → ".join(path)
         deep = len(path) > 1
@@ -359,8 +365,9 @@ def _stale_items(d: Decision, p: Project, today: dt.date, max_age: int) -> list[
                     continue  # у материала из inputs/ даты обращения нет
                 got = _accessed_day(s)
                 age = (today - got).days
-                if age > max_age:
-                    holder = f"{cid} ({role})" if not deep else f"{cid}, на котором стоит {root} ({role})"
+                if age > max_age and len(path) == nearest[cid] and (cid, sid) not in said:
+                    said.add((cid, sid))
+                    holder = f"{cid} ({role})" if not deep else f"{cid}, на котором стоит {root} ({role}),"
                     out.append(
                         _item(
                             d,
