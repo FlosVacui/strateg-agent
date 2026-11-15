@@ -33,6 +33,26 @@ ROLE_DONE_REPEAT_SECONDS = 3.0
 HUMAN_ANSWER = "ответ человека"
 STOP_NAME = "внеплановая остановка"
 TASK_KIND = "задание исследователю"
+# Виды событий журнала (`models.EventKind`): строка хвоста с другим видом — не событие; тест сверяет списки
+_EVENT_KINDS = frozenset(
+    {
+        "действие",
+        "ворота",
+        "ошибка",
+        "исправление",
+        "смена режима",
+        "выбор модели",
+        "изменено вне агента",
+        "найдена инструкция в источнике",
+        "бюджет",
+        "учёт недоступен",
+        "отказ хука",
+        "граница прав не активна",
+        "задание исследователю",
+        "роль выполнена",
+        "ответ человека",
+    }
+)
 MAX_ERROR_CHARS = 500
 HIDDEN_LINE = "[строка скрыта: похожа на ключ]"
 PROJECT_ID = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
@@ -250,6 +270,30 @@ def append_event(root: Path, spec: EventSpec, timeout: float | None = None) -> b
     return storage.append_journal(root, build, seconds)
 
 
+_EVENT_FIELDS = frozenset(
+    {
+        "schema_version",
+        "time",
+        "actor",
+        "kind",
+        "step",
+        "name",
+        "message",
+        "idempotency_hash",
+        "status",
+        "duration_s",
+        "gate",
+        "mode",
+        "role",
+        "model",
+        "level",
+        "effort",
+        "source",
+        "path",
+    }
+)
+
+
 def _tail_verdict(journal: bytes) -> bool | None:
     """Хвост журнала без моделей: последнее событие хода — остановка (True), другое (False) или неясно (None).
 
@@ -267,6 +311,14 @@ def _tail_verdict(journal: bytes) -> bool | None:
         if not isinstance(e, dict):
             continue
         kind = e.get("kind")
+        if (
+            kind not in _EVENT_KINDS
+            or not isinstance(e.get("time"), str)
+            or not isinstance(e.get("step"), str)
+        ):
+            continue  # JSON, но не событие: пропускается так же, как нечитаемая строка
+        if e.get("schema_version") != 1 or set(e) - _EVENT_FIELDS:
+            return None  # вид знакомый, но строка не по схеме: решает полный разбор
         if kind == "изменено вне агента" or (
             e.get("actor") == ACTOR and kind not in (TASK_KIND, HUMAN_ANSWER)
         ):

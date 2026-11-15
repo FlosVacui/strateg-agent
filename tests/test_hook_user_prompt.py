@@ -367,3 +367,44 @@ def test_a_note_of_the_summary_in_the_tail_goes_to_the_full_parse(cli, demo, clo
     calls = count_full_parses(monkeypatch)
     submit()
     assert len(calls) == 1 and len(answers(demo)) == 1
+
+
+# --- Строка хвоста, которая не событие ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        {},
+        {"kind": "несуществующий вид", "actor": "агент", "time": "2026-11-06T10:00:00+03:00", "step": "2б"},
+        {"kind": None},
+        {"kind": "действие", "name": "x", "time": "2026-11-06T10:00:00+03:00", "step": "2б", "лишнее": 1},
+        {
+            "kind": "действие",
+            "name": "x",
+            "time": "2026-11-06T10:00:00+03:00",
+            "step": "2б",
+            "schema_version": 2,
+        },
+        {"schema_version": 1, "time": "2026-11-06T10:00:00+03:00", "step": "2б", "actor": "агент"},
+        [1, 2],
+        "abc",
+        0,
+    ],
+)
+def test_a_json_line_that_is_not_an_event_after_the_stop_does_not_turn_the_recording_off(
+    cli, demo, clock, line
+):
+    stopped(cli, clock, demo)
+    append_raw(demo, json.dumps(line, ensure_ascii=False).encode("utf-8"))
+    submit()
+    assert answer_count(demo) == 1
+
+
+def test_the_tail_lists_follow_the_model():
+    import typing
+
+    from strateg.models import EventKind, JournalEvent
+
+    assert effects._EVENT_KINDS == frozenset(typing.get_args(EventKind))
+    assert effects._EVENT_FIELDS == frozenset(JournalEvent.model_fields)

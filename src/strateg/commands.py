@@ -581,15 +581,39 @@ def _finish_event(p: Project, h: str, started: float, status: str, message: str 
     )
 
 
+def _chain_ids(p: Project, start: SourceModel, url: str, region: str | None) -> set[str]:
+    """Источники этого адреса: его записи, `other_urls` и вся цепочка `refreshes` в обе стороны от `start`."""
+    ids = {start.id} | {s.id for s in p.sources.sources if _same_address(s, url, region)}
+    grown = True
+    while grown:
+        grown = False
+        for s in p.sources.sources:
+            linked = s.id in ids or (s.refreshes is not None and s.refreshes in ids)
+            if linked and (s.id not in ids or (s.refreshes and s.refreshes not in ids)):
+                ids.add(s.id)
+                if s.refreshes:
+                    ids.add(s.refreshes)
+                grown = True
+    return ids
+
+
 def _text_twin(
-    p: Project, text_sha: str | None, region: str | None, skip: SourceModel | None = None
+    p: Project,
+    text_sha: str | None,
+    region: str | None,
+    skip: SourceModel | None = None,
+    within: set[str] | None = None,
 ) -> SourceModel | None:
-    """Полученный веб-источник с тем же текстом снимка и тем же регионом (материалы `inputs/` не в счёт)."""
+    """Полученный веб-источник с тем же текстом снимка и тем же регионом (материалы `inputs/` не в счёт).
+
+    `within` ограничивает поиск набором номеров (цепочка одного адреса при `--refresh`).
+    """
     return next(
         (
             s
             for s in p.sources.sources
             if s is not skip
+            and (within is None or s.id in within)
             and s.url is not None
             and s.text_sha256 == text_sha
             and s.access == "получен"
@@ -597,6 +621,13 @@ def _text_twin(
         ),
         None,
     )
+
+
+def _standing_claims(p: Project, sid: str) -> list[str]:
+    """Действующие утверждения с цитатой из источника."""
+    return [
+        c.id for c in p.claims.claims if c.status == "действует" and any(q.source == sid for q in c.quotes)
+    ]
 
 
 def _store_result(
@@ -643,14 +674,15 @@ def _store_result(
             _finish_event(p, h, started, "выполнено", f"{prior.id}: перепроверка, текст тот же")
             p.save_state()
             return prior
-        back = _text_twin(p, text_sha, region)
-        # страница вернулась к тексту другого снимка региона: второго источника с ним не заводим
+        back = _text_twin(p, text_sha, region, within=_chain_ids(p, prior, url, region))
+        # страница вернулась к тексту другого снимка этого адреса: второго источника с ним не заводим
         if back is not None:
             back.rechecked_at = proj.now()
             p.save_sources()
             extra["rechecked"] = True
             extra["returned_to"] = back.id
             extra["previous"] = prior.id
+            extra["claims_on_previous"] = _standing_claims(p, prior.id)
             message = (
                 f"{back.id}: перепроверка {prior.id}, текст совпал со снимком {back.id}, нового источника нет"
             )
@@ -748,11 +780,7 @@ def _store_result(
     p.save_sources()
     if prior is not None:
         extra["refreshes"] = prior.id
-        extra["claims_on_previous"] = [
-            c.id
-            for c in p.claims.claims
-            if c.status == "действует" and any(q.source == prior.id for q in c.quotes)
-        ]
+        extra["claims_on_previous"] = _standing_claims(p, prior.id)
     if source.suspicious:
         signs = snapshot[0].instruction_signs if snapshot else []
         p.add_event(
@@ -920,7 +948,7 @@ def _fetch_report(
     if s.access == "получен":
         if extra.get("returned_to"):
             head = (
-                f"Источник {s.id}: страница вернулась к тексту этого снимка (запрос шёл по адресу "
+                f"Источник {s.id}: страница вернулась к тексту этого снимка (запрос шёл по адресу источника "
                 f"{extra['previous']}); новый источник не создан, отметка перепроверки поставлена у {s.id} "
                 f"({s.rechecked_at})."
             )
@@ -953,13 +981,14 @@ def _fetch_report(
                 f"Новый источник не создан: текст совпадает с {same_text} (другой адрес); "
                 f"адрес добавлен к {same_text}."
             )
-        if extra.get("refreshes"):
+        if extra.get("refreshes") or extra.get("returned_to"):
             on_old = extra["claims_on_previous"]
             lines.append(
-                f"Утверждения, которые стоят на {extra['refreshes']}: "
+                f"Утверждения, которые стоят на {extra.get('refreshes') or extra['previous']}: "
                 + (", ".join(on_old) if on_old else "нет")
                 + (
-                    ". Решает агент: сверить с новым снимком и заменить (`claim replace`) или оставить."
+                    ". Решает агент: сверить со снимком страницы, заменить (`claim replace`), "
+                    "снять (`claim revoke`) или оставить."
                     if on_old
                     else ""
                 )
