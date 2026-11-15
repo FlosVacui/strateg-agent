@@ -318,6 +318,9 @@ PublisherKind = Literal[
     "материал пользователя",
 ]
 CheckMethod = Literal["точное вхождение", "без пробелов и дефисов"]
+# Вердикт классификатора о паре «утверждение — цитата» (ADR-0007): подтверждает ли цитата смысл.
+VerdictValue = Literal["подтверждает", "частично", "не подтверждает", "не уверен"]
+VerdictBy = Literal["классификатор", "агент"]
 
 EventKind = Literal[
     "действие",
@@ -617,6 +620,18 @@ class ForecastRange(_Model):
     unit: Text
 
 
+class ClaimVerdict(_Model):
+    """Вердикт о смысле цитаты: текущий; прежние — в журнале (`strateg claim verdict`)."""
+
+    verdict: VerdictValue
+    type_ok: Flag | None = Field(None, description="Верен ли тип утверждения; нет — не оценивали")
+    reason: Text = Field(description="Одна строка причины")
+    by: VerdictBy = Field(description="«классификатор» — роль со свежим контекстом, «агент» — запасной путь")
+    model: Text = Field(description="Модель, которая вынесла вердикт")
+    upgraded: Flag = Field(False, description="Вынесен после повышения модели роли на этом шаге")
+    at: Time
+
+
 class Claim(_Model):
     """Утверждение `У-n`."""
 
@@ -645,6 +660,7 @@ class Claim(_Model):
     attempt: Annotated[int, Strict(), Field(ge=1)] = Field(
         description="Номер попытки шага: при повторе прерванного шага растёт, записанное не дублируется"
     )
+    verdict: ClaimVerdict | None = Field(None, description="Подтверждает ли цитата утверждение по смыслу")
 
     @model_validator(mode="after")
     def _rules(self) -> Self:
@@ -714,6 +730,8 @@ class Claim(_Model):
             )
         if self.replaces == self.id:
             p.append("утверждение заменяет само себя")
+        if self.verdict is not None and not self.quotes:
+            p.append("вердикт о цитате у утверждения без цитат")
         _raise(p)
         return self
 

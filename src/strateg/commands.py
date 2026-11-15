@@ -2205,6 +2205,8 @@ def cmd_cost_add(args: argparse.Namespace) -> int:
 
 
 def _status_data(p: Project) -> dict[str, Any]:
+    from strateg import classify  # импорт здесь: classify импортирует этот модуль
+
     by_kind: dict[str, int] = {}
     for s in p.sources.sources:
         by_kind[s.kind] = by_kind.get(s.kind, 0) + 1
@@ -2255,6 +2257,7 @@ def _status_data(p: Project) -> dict[str, Any]:
             "total": len(p.claims.claims),
             "by_type": by_type,
             "without_quote": without_quote,
+            "verdicts": classify.summary(p),
         },
         "failures": sum(
             1 for e in p.journal if e.kind == "ошибка" or (e.kind == "действие" and e.status == "ошибка")
@@ -2486,7 +2489,14 @@ def cmd_status(args: argparse.Namespace) -> int:
         f"Источники: {d['sources']['total']}"
         + (f" ({kinds})" if kinds else "")
         + (f", недоступны: {d['sources']['unavailable']}" if d["sources"]["unavailable"] else ""),
-        f"Утверждения: {d['claims']['active']} действуют" + (f" ({types})" if types else ""),
+        f"Утверждения: {d['claims']['active']} действуют"
+        + (f" ({types})" if types else "")
+        + (
+            f"; смысл цитат проверен: {d['claims']['verdicts']['checked']}, "
+            f"без вердикта: {d['claims']['verdicts']['unchecked']}"
+            if d["claims"]["verdicts"]["checked"]
+            else ""
+        ),
         f"Время работы: {_num(d['work_minutes'])} из {d['limit_minutes']:g} мин{running} · "
         f"по часам {_num(d['clock_minutes'])} мин (с ожиданием ответов и перерывами) · стоимость: {cost}",
         "Бюджет: " + d["budget"]["text"],
@@ -2507,6 +2517,9 @@ def cmd_status(args: argparse.Namespace) -> int:
             "Внимание: признаки закрытых данных не подтверждены человеком: "
             + ", ".join(d["sources"]["closed_unconfirmed"])
         )
+    from strateg import classify  # импорт здесь: classify импортирует этот модуль
+
+    lines += [f"Внимание: {x}" for x in classify.summary_lines(d["claims"]["verdicts"])]
     if d["waiting_gates"]:
         lines.insert(
             0, "Ждём ответа на " + ", ".join(d["waiting_gates"]) + ": следующее сообщение человека — ответ"

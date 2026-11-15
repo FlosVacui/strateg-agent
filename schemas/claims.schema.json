@@ -220,6 +220,18 @@
           "minimum": 1,
           "title": "Attempt",
           "type": "integer"
+        },
+        "verdict": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClaimVerdict"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Подтверждает ли цитата утверждение по смыслу"
         }
       },
       "required": [
@@ -234,6 +246,76 @@
         "attempt"
       ],
       "title": "Claim",
+      "type": "object"
+    },
+    "ClaimVerdict": {
+      "additionalProperties": false,
+      "description": "Вердикт о смысле цитаты: текущий; прежние — в журнале (`strateg claim verdict`).",
+      "properties": {
+        "verdict": {
+          "enum": [
+            "подтверждает",
+            "частично",
+            "не подтверждает",
+            "не уверен"
+          ],
+          "title": "Verdict",
+          "type": "string"
+        },
+        "type_ok": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Верен ли тип утверждения; нет — не оценивали",
+          "title": "Type Ok"
+        },
+        "reason": {
+          "description": "Одна строка причины",
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "by": {
+          "description": "«классификатор» — роль со свежим контекстом, «агент» — запасной путь",
+          "enum": [
+            "классификатор",
+            "агент"
+          ],
+          "title": "By",
+          "type": "string"
+        },
+        "model": {
+          "description": "Модель, которая вынесла вердикт",
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        },
+        "upgraded": {
+          "default": false,
+          "description": "Вынесен после повышения модели роли на этом шаге",
+          "title": "Upgraded",
+          "type": "boolean"
+        },
+        "at": {
+          "format": "date-time",
+          "title": "At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "verdict",
+        "reason",
+        "by",
+        "model",
+        "at"
+      ],
+      "title": "ClaimVerdict",
       "type": "object"
     },
     "Dispute": {

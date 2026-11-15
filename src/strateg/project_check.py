@@ -86,6 +86,8 @@ _RELEASE_DIR = re.compile(rf"^{RELEASE_PREFIX}([1-9][0-9]*)$")
 # Часть сообщения об утверждении, которое отозвано или заменено, но стоит у рекомендации или обещания:
 # команды замены и отзыва принимают такие ошибки, потому что места использования переписывает `write`.
 STALE_REF_NOTE = "нельзя держать на отозванном или заменённом утверждении"
+# Вердикт классификатора «не подтверждает»: утверждение не основание, пока его не заменили или не отозвали.
+UNSUPPORTED_NOTE = "нельзя держать на утверждении, которое его цитата не подтверждает"
 COMMS_STRATEGY = "outputs/comms-strategy.md"
 
 
@@ -648,6 +650,24 @@ class _Claims:
                 f"{where}, поле {field}: {ref} имеет статус «{c.status}»; {live_for} {STALE_REF_NOTE}, "
                 "возьмите действующее"
             )
+        if live_for:
+            self.supported(where, field, ref, live_for)
+
+    def supported(self, where: str, field: str, ref: str, what: str) -> None:
+        """Ошибка, если у действующего утверждения вердикт «не подтверждает» (ADR-0007)."""
+        c = self.by_id.get(ref) if self.by_id is not None else None
+        if (
+            c is None
+            or c.status != "действует"
+            or c.verdict is None
+            or c.verdict.verdict != "не подтверждает"
+        ):
+            return
+        self.errors.append(
+            f"{where}, поле {field}: у {ref} вердикт «не подтверждает» ({c.verdict.by}, {c.verdict.model}); "
+            f"{what} {UNSUPPORTED_NOTE}: замените (`strateg claim replace`) "
+            "или отзовите (`strateg claim revoke`)"
+        )
 
 
 def _frame_sources(
@@ -889,6 +909,9 @@ def _check_options(opts: OptionsFile, cl: _Claims, errors: list[str]) -> None:
     own.check(errors, where, "option", rec.option)
     for ref in rec.claims:
         cl.ref(where, "claims", ref, live_for="рекомендацию", synthetic_note=_SYNTHETIC_PROOF)
+    for letter, number in dict.fromkeys(_TEXT_REF.findall(rec.why)):
+        if letter == "У":
+            cl.supported(where, "why", f"У-{number}", "довод рекомендации")
     known = [cl.type_of(ref) for ref in rec.claims]
     if None not in known and "факт" not in known:
         errors.append(
@@ -995,6 +1018,8 @@ def _check_decisions(
             opt_reg.check(errors, where, "rejected", ref)
         for ref in d.basis:
             cl.ref(where, "basis", ref, synthetic_note=_SYNTHETIC_PROOF)
+            if d.status == "действует":
+                cl.supported(where, "basis", ref, "решение")
         for ref in d.assumptions:
             cl.ref(where, "assumptions", ref, type_=("допущение", "гипотеза"))
         rows = {r.id: r for r in ver.rows} if ver else {}
