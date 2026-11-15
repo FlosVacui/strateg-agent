@@ -6,10 +6,10 @@
 | Файл | Формат | Кто пишет | Схема |
 |---|---|---|---|
 | `state.yaml` | YAML; `profile` — профиль выбора моделей (`route --profile`) | только CLI | `state.schema.json` |
-| `journal.jsonl` | JSONL, только добавление; у «выбор модели» — `role`, `model`, `level`, `effort`; хук (`actor: хук`, нужен `message`) пишет «отказ хука», «граница прав не активна», «задание исследователю», «роль выполнена» (`role` — `agent_type`), «учёт недоступен», «бюджет» | CLI и хук | `journal-event.schema.json` (строка) |
+| `journal.jsonl` | JSONL, только добавление; у «выбор модели» — `role`, `model`, `level`, `effort`; хук (`actor: хук`, нужен `message`) пишет «отказ хука», «граница прав не активна», «задание исследователю», «роль выполнена» (`role` — `agent_type`), «ответ человека», «учёт недоступен», «бюджет» | CLI и хук | `journal-event.schema.json` (строка) |
 | `cost.jsonl` | JSONL, только добавление; «по сообщению» пишут и хуки, без повторов `message_id`; `web_search_usd` — веб-поиск в `cost_usd` | CLI и хук | `cost-record.schema.json` (строка) |
 | `.tmp/cost/offsets.json` | JSON: смещения разбора, пропуски, `recounted_at`, `exhausted`; не в архиве | хук | — |
-| `sources.yaml` | YAML | только CLI | `sources.schema.json` |
+| `sources.yaml` | YAML; `other_urls`, `rechecked_at`, `refreshes` | только CLI | `sources.schema.json` |
 | `claims.yaml` | YAML | скиллы через CLI | `claims.schema.json` |
 | `sources/` | текст снимков веба; sha256 файла — хеш снимка | CLI | — |
 | `inputs/` | материалы человека (при ПДн — обезличенная копия) и их текст | человек кладёт, текст пишет CLI | — |
@@ -19,7 +19,7 @@
 | `options.yaml` | YAML: варианты `Вар-n`, возражения, сравнение, `recommendation`, `chosen` | только CLI | `options.schema.json` |
 | `promises.yaml` | YAML: «обещание → возможность → источник», `О-n` | только CLI | `promises.schema.json` |
 | `verification.yaml` | YAML: строки `ПП-n` (в том числе `from_change_mind`), `premortem`, `undesired_effects` | только CLI | `verification.schema.json` |
-| `decisions.yaml` | YAML: решения `Реш-n`; у условия отказа необязательная строка плана `row` | только CLI | `decisions.schema.json` |
+| `decisions.yaml` | YAML: решения `Реш-n`; у условия отказа необязательная строка плана `row`; у обязательства `done`, `done_note` | только CLI | `decisions.schema.json` |
 | `metrics.yaml` | YAML: значения показателей `ПП-n` (ADR-0016) | только CLI (`metric add`) | `metrics.schema.json` |
 | `completeness.yaml` | YAML: итог полноты: `by` (`критик` или `агент`), часть А, ответы части Б, `result`, `failed`, `critic_call` (вызов критика подтверждён) | только CLI (`rubric record`) | `completeness.schema.json` |
 | `history/` | прежние версии: `history/frame.v1.yaml`, `history/outputs/options.v2.md`, `history/release-1/` (выпуск) | CLI (`write`, `rubric record`, `step done 7`) | — |

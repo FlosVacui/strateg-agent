@@ -982,6 +982,9 @@ def _check_decisions(
     ver: VerificationFile | None,
     errors: list[str],
 ) -> None:
+    from strateg.project import now  # импорт здесь: project импортирует этот модуль
+
+    today = str(now().date())  # день в поясе проекта; даты хранятся строками вида 2026-11-06
     _dup_ids(DECISIONS_FILE, [d.id for d in dec.decisions], errors)
     own = _own(DECISIONS_FILE, [d.id for d in dec.decisions])
     by_id = {d.id: d for d in dec.decisions}
@@ -1016,6 +1019,12 @@ def _check_decisions(
                 errors.append(f"{where}: заменяет {old.id}, но у него статус «{old.status}», а не «заменено»")
             if old.replaced_by != d.id:
                 errors.append(f"{where}: у {old.id} нет ссылки replaced_by: {d.id}")
+        for i, cm in enumerate(d.commitments):
+            if cm.done is not None and cm.done > today:
+                errors.append(
+                    f"{where}, поле commitments[{i}].done: дата {cm.done} в будущем (сегодня {today}): "
+                    "выполнение отмечают на дату, когда оно уже было"
+                )
     cycle = _find_cycle({d.id: [d.replaced_by] if d.replaced_by else [] for d in dec.decisions})
     if cycle:
         errors.append(f"{DECISIONS_FILE}: цикл замены: {' -> '.join(cycle)}")
@@ -1280,6 +1289,13 @@ def check_project(root: Path | str) -> list[str]:
     if isinstance(sources, SourcesFile):
         for dup in sorted(_duplicates([s.id for s in sources.sources])):
             errors.append(f"{SOURCES_FILE}: номер {dup} встречается больше одного раза")
+        known = {s.id for s in sources.sources}
+        for n, s in enumerate(sources.sources, start=1):
+            if s.refreshes is not None and s.refreshes not in known:
+                errors.append(
+                    f"{SOURCES_FILE}, запись {s.id} (№{n}), поле refreshes: несуществующий источник "
+                    f"{s.refreshes}"
+                )
         _check_sources_files(root, sources, errors)
     if isinstance(sources, SourcesFile) and isinstance(claims, ClaimsFile):
         _check_claims(root, sources, claims, errors)

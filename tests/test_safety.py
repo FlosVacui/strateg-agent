@@ -2,6 +2,7 @@
 
 import pytest
 
+import safety_corpus
 from strateg import safety
 
 
@@ -27,12 +28,168 @@ def test_prices_and_years_are_not_phones():
     ("text", "marker"),
     [
         ("Документ для служебного пользования", "для служебного пользования"),
-        ("Информация составляет коммерческую тайну компании", "коммерческая тайна"),
+        ("Коммерческая тайна\nООО «Ромашка»", "коммерческая тайна"),
         ("Гриф секретности: секретно", "гриф"),
     ],
 )
 def test_closed_markers(text, marker):
     assert marker in safety.inspect_text(text).closed_markers
+
+
+# Корпус «коммерческой тайны» (ADR-0011): признак — гриф или пометка документа, а не упоминание в предложении.
+TRADE_SECRET = "коммерческая тайна"
+
+TRADE_SECRET_STAMPS = [
+    "Коммерческая тайна",
+    "КОММЕРЧЕСКАЯ ТАЙНА",
+    "  Коммерческая тайна  ",
+    "«Коммерческая тайна»",
+    '"КОММЕРЧЕСКАЯ ТАЙНА"',
+    "Коммерческая тайна, ООО «Ромашка»",
+    "Коммерческая тайна — ПАО «Пример»",
+    "КОММЕРЧЕСКАЯ ТАЙНА – ООО «Вымпел», г. Москва",
+    "Коммерческая тайна.\nООО «Ромашка», Москва",
+    "Отчёт о продажах\nКоммерческая тайна\nООО «Ромашка»\nТекст отчёта",
+    "[стр. 1]\nКОММЕРЧЕСКАЯ ТАЙНА\nЭкз. № 1",
+    "Гриф: коммерческая тайна",
+    "На каждой странице стоит гриф «Коммерческая тайна».",
+    'Документ с грифом "Коммерческая тайна" передан партнёру.',
+    "Гриф:\nкоммерческая тайна",
+    "Информация, составляющая коммерческую тайну, ООО «Ромашка», 123456, г. Москва",
+    "ИНФОРМАЦИЯ, составляющая коммерческую тайну, принадлежит ПАО «Пример»",
+    # настоящие пометки: владелец в той же строке без знака, подпись, нумерация, любой регистр
+    "Коммерческая тайна ООО «Ромашка», г. Москва",
+    "Гриф ограничения доступа: Коммерческая тайна",
+    "Пометка: «Коммерческая тайна»",
+    "Режим: Коммерческая тайна",
+    "1. Коммерческая тайна",
+    "ООО «Ромашка» — Коммерческая тайна",
+    "Приложение 1\nКоммерческая тайна ООО «Ромашка»",
+    "коммерческая тайна\nООО Ромашка",
+    "Информация, составляющая коммерческую тайну\nООО «Ромашка», 123456, г. Москва",
+    "Информация, составляющая коммерческую тайну ООО «Ромашка»\nТекст",
+    "# Коммерческая тайна\nТекст",
+    "Строго конфиденциально. Коммерческая тайна. Владелец: ООО «Ромашка»",
+    "Коммерческая тайна\r\nООО «Ромашка»",
+    "Сведения, составляющие коммерческую тайну ООО «Ромашка»",
+    "Документ содержит коммерческую тайну. Не копировать.",
+    "Материал содержит сведения, составляющие коммерческую тайну",
+]
+
+TRADE_SECRET_MENTIONS = [
+    "Компания не раскрывает число подписчиков, ссылаясь на коммерческую тайну.",
+    "Компания не раскрывает число подписчиков, ссылаясь на\nкоммерческую тайну.",
+    "Компания не раскрывает число подписчиков, ссылаясь на «коммерческую тайну».",
+    "Оператор отказался назвать выручку: «это коммерческая тайна», — сказали в пресс-службе.",
+    "КОМПАНИЯ ССЫЛАЕТСЯ НА КОММЕРЧЕСКУЮ ТАЙНУ И НЕ НАЗЫВАЕТ ЧИСЛО АБОНЕНТОВ",
+    "Коммерческая тайна не позволяет оператору назвать число абонентов.",
+    "Договор, по словам юристов, содержит коммерческую тайну обеих сторон.",
+    "Что такое коммерческая тайна и как её защитить",
+    "Данные по абонентам, по словам компании,\nэто коммерческая тайна.",
+    # слова с заглавной буквы посреди строки — не пометка
+    "Оператор промолчал, а на вопрос о цене ответил: Коммерческая тайна не раскрывается.",
+    "Представитель компании сказал «Коммерческая тайна» и отключился.",
+]
+
+
+@pytest.mark.parametrize("text", safety_corpus.KNOWN_LIMIT)
+def test_known_limit_a_mention_without_a_sign_of_news_is_marked(text):
+    """Метка с запасом (ADR-0011): без явного признака новости неизвестную форму метим, а не пропускаем."""
+    assert TRADE_SECRET in safety.inspect_text(text).closed_markers
+
+
+def test_known_limit_corpus_includes_the_brief_examples():
+    assert "Сведения составляют коммерческую тайну оператора." in KNOWN_BRIEF
+    for text in KNOWN_BRIEF:
+        assert TRADE_SECRET in safety.inspect_text(text).closed_markers
+
+
+KNOWN_BRIEF = [
+    "Сведения составляют коммерческую тайну оператора.",
+    "Информация составляет коммерческую тайну компании",
+]
+
+
+@pytest.mark.parametrize("text", safety_corpus.STAMPS)
+def test_review_corpus_stamp_is_a_closed_marker(text):
+    assert TRADE_SECRET in safety.inspect_text(text).closed_markers
+    assert TRADE_SECRET in safety.inspect_material(text).closed_markers
+
+
+@pytest.mark.parametrize("text", safety_corpus.NEWS)
+def test_review_corpus_news_is_not_a_closed_marker(text):
+    assert TRADE_SECRET not in safety.inspect_text(text).closed_markers
+    assert TRADE_SECRET not in safety.inspect_material(text).closed_markers
+
+
+def test_review_corpus_is_big_and_the_original_case_is_in_it():
+    assert len(safety_corpus.STAMPS) >= 90 and len(safety_corpus.NEWS) >= 20
+    assert "Оператор не раскрыл выручку, сославшись на коммерческую тайну." in safety_corpus.NEWS
+
+
+def test_a_stamp_and_the_next_sentence_are_two_sentences():
+    """«Не раскрывать третьим лицам» относится ко второму предложению, первое остаётся пометкой."""
+    stamp = "Коммерческая тайна. Не раскрывать третьим лицам"
+    assert TRADE_SECRET in safety.inspect_text(stamp).closed_markers
+    assert TRADE_SECRET in safety.inspect_text("Конфиденциально! Коммерческая тайна?").closed_markers
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Документ содержит коммерческую тайну, по данным газеты, и не опубликован.",
+    ],
+)
+def test_a_sentence_with_a_sign_of_news_is_not_a_stamp_even_when_it_starts_like_one(text):
+    assert TRADE_SECRET not in safety.inspect_text(text).closed_markers
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "КТ-ТАЙНА\nКоммерческая  тайна,   Вектор-2",  # неизвестная форма: нет признака новости — метка
+        "Вектор\u00a0Коммерческая\u00a0тайна\u00a03",
+        "Приложение 4. Коммерческая тайна:\tООО «Вектор»",
+    ],
+)
+def test_an_unknown_form_is_marked(text):
+    assert TRADE_SECRET in safety.inspect_text(text).closed_markers
+
+
+@pytest.mark.parametrize("text", TRADE_SECRET_STAMPS)
+def test_trade_secret_stamp_is_a_closed_marker(text):
+    assert TRADE_SECRET in safety.inspect_text(text).closed_markers
+    assert TRADE_SECRET in safety.inspect_material(text).closed_markers
+
+
+@pytest.mark.parametrize("text", TRADE_SECRET_MENTIONS)
+def test_trade_secret_mention_in_a_sentence_is_not_a_closed_marker(text):
+    assert TRADE_SECRET not in safety.inspect_text(text).closed_markers
+    assert TRADE_SECRET not in safety.inspect_material(text).closed_markers
+
+
+def test_trade_secret_corpus_has_at_least_twelve_phrases_each_way():
+    assert len(TRADE_SECRET_STAMPS) >= 12 and len(TRADE_SECRET_MENTIONS) >= 8
+
+
+def test_news_page_with_wrapped_lines_is_not_marked():
+    page = (
+        "Оператор связи не стал называть число подписчиков нового сервиса.\n"
+        "В пресс-службе сослались на\nкоммерческую тайну и закон о коммерческой тайне.\n"
+        "Подписка стоит 199 рублей."
+    )
+    assert safety.inspect_text(page).closed_markers == []
+
+
+def test_stamp_inside_a_long_document_is_still_marked():
+    page = "Тарифы оператора.\nПодписка стоит 199 рублей.\n\nКоммерческая тайна, ООО «Ромашка»\nРасчёт."
+    assert TRADE_SECRET in safety.inspect_text(page).closed_markers
+
+
+def test_secrecy_stamp_and_official_use_markers_are_unchanged():
+    assert "гриф" in safety.inspect_text("Гриф секретности: секретно").closed_markers
+    assert "гриф" in safety.inspect_text("Документ с грифом «Секретно»").closed_markers
+    assert "для служебного пользования" in safety.inspect_text("Для служебного пользования").closed_markers
 
 
 def test_open_text_has_no_closed_markers():

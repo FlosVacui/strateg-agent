@@ -1195,9 +1195,9 @@ def test_follow_up_skill_calls_due_and_metric_add_and_leaves_the_decision_to_the
     for group in ("fired", "review", "check", "manual", "stale", "commitments"):
         assert f"`{group}`" in text, f"не разобрана группа due: {group}"
     assert "Решаете вы" in text and "«Сравните вручную»" in text
-    assert "нет отметки «выполнено»" in text  # просроченное обязательство висит в due
+    assert "«Выполнено» CLI хранит" in text and "`done: <дата>`" in text  # отметку ставит человек, не агент
     assert "Значения не выдумывай" in text and "не додумывай" in text
-    assert "прежний снимок того же адреса" in text  # перепроверка по тому же адресу — не перепроверка
+    assert "перепроверка через исследователя (`update`, «Перепроверка»)" in text  # один маршрут, команды нет
     assert "Пересмотр без нового сведения" in text
     assert "`update`" in text
     # агент не меняет решение и не пишет файлы показателей сам; сводка — только в strateg
@@ -1230,7 +1230,10 @@ def test_update_skill_keeps_the_order_claim_impact_stop_recalculation_diff():
     assert text.index("uv run strateg budget check") < text.index("claim replace")
     assert "## Пересмотр без нового сведения" in text and "`replaces`" in text
     assert "не `package`" in text and "шаги 6–7" in text
-    assert "прежний снимок" in text and "inputs/" in text
+    assert (
+        "`--region` если был, `--refresh`" in text and "адрес из `sources.yaml`" in text
+    )  # задание исследователю
+    assert "inputs/" in text and "Спор и замену `impact` проходит сам" in text
     assert text.splitlines()[2].startswith('description: "Только после выпуска (шаг 7 выполнен)')
     assert (
         text.count("uv run strateg stop") == 2

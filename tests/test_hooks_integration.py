@@ -306,6 +306,7 @@ def test_settings_cover_the_events_of_the_adr_table():
         "Stop",
         "SubagentStop",
         "PostToolUseFailure",
+        "UserPromptSubmit",
     }
     assert SETTINGS["hooks"]["SessionStart"][0]["matcher"] == "startup|resume|clear|compact|fork"
 
@@ -317,6 +318,7 @@ def test_settings_commands_are_exec_form_with_utf8_and_existing_scripts():
         ("Stop", "stop.py"),
         ("SubagentStop", "subagent_stop.py"),
         ("PostToolUseFailure", "post_tool_use_failure.py"),
+        ("UserPromptSubmit", "user_prompt_submit.py"),
     ):
         (hook,) = hook_entries(event)
         assert (
@@ -331,13 +333,20 @@ def test_settings_commands_are_exec_form_with_utf8_and_existing_scripts():
 
 
 def test_hook_timeouts_are_short_so_that_a_hang_does_not_hold_the_session():
-    for event in ("SessionStart", "PreToolUse", "Stop", "SubagentStop", "PostToolUseFailure"):
+    for event in (
+        "SessionStart",
+        "PreToolUse",
+        "Stop",
+        "SubagentStop",
+        "PostToolUseFailure",
+        "UserPromptSubmit",
+    ):
         assert hook_entries(event)[0]["timeout"] == 15
 
 
 def test_permission_hook_blocks_on_failure_others_do_not():
     assert hook_entries("PreToolUse")[0]["onFailure"] == "block"
-    for event in ("SessionStart", "Stop", "SubagentStop", "PostToolUseFailure"):
+    for event in ("SessionStart", "Stop", "SubagentStop", "PostToolUseFailure", "UserPromptSubmit"):
         assert hook_entries(event)[0]["onFailure"] == "continue", event
 
 

@@ -447,6 +447,48 @@ def _next_source_number(p: Project) -> int:
     return max((int(s.id.split("-")[1]) for s in p.sources.sources), default=0) + 1
 
 
+def _same_address(s: SourceModel, url: str, region: str | None) -> bool:
+    """Источник связан с адресом и регионом: основным адресом, дополнительным или итоговым после переходов."""
+    if s.url is None or (s.fetch.region if s.fetch else None) != region:
+        return False
+    final = s.fetch.final_url if s.fetch and s.access == "получен" else None
+    return url == s.url or url in (s.other_urls or []) or url == final
+
+
+def _known_for_address(
+    p: Project, url: str, region: str | None
+) -> tuple[SourceModel | None, SourceModel | None]:
+    """Прежний источник адреса при любом `access`: (последний полученный снимок, недоступная запись).
+
+    Из цепочки перепроверок берётся последняя запись: на неё никто не ссылается через `refreshes`.
+    Второе значение есть только когда полученного снимка нет: такую запись повторная загрузка обновит.
+    """
+    matches = [s for s in p.sources.sources if _same_address(s, url, region)]
+    refreshed = {s.refreshes for s in p.sources.sources if s.refreshes}
+    heads = [s for s in matches if s.id not in refreshed] or matches
+    got_heads = [s for s in heads if s.access == "получен"]
+    tips = [s for s in got_heads if s.refreshes]  # конец цепочки перепроверок новее старых дублей
+    if got_heads:
+        return (tips[-1] if tips else got_heads[0]), None
+    return None, (matches[0] if matches else None)
+
+
+def _refresh_key(p: Project, url: str, region: str | None) -> str:
+    """Ключ перепроверки: у каждой законченной перепроверки свой номер, иначе журнал счёл бы её повтором.
+
+    Начатая и не законченная (или неудачная) перепроверка ключ сохраняет: повтор — та же попытка.
+    """
+    n = 1
+    while True:
+        h = proj.key_hash("fetch", url, region, "refresh", n)
+        done = any(
+            e.kind == "действие" and e.idempotency_hash == h and e.status == "выполнено" for e in p.journal
+        )
+        if not done:
+            return h
+        n += 1
+
+
 def cmd_fetch(args: argparse.Namespace) -> int:
     p = _open(args)
     try:
@@ -454,16 +496,19 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     except fetchlib.AddressRefused as exc:
         raise UsageError(str(exc)) from exc
     region = args.region or p.state.region
-    existing = [
-        s for s in p.sources.sources if s.url == url and ((s.fetch.region if s.fetch else None) == region)
-    ]
-    cached = next((s for s in existing if s.access == "получен"), None)
-    if cached is not None:
-        return _fetch_report(args, cached, p, cached=True, warnings=[], extra={})
-
-    h = proj.key_hash("fetch", url, region)
-    started = time.monotonic()
+    got, retry = _known_for_address(p, url, region)
+    refresh = bool(getattr(args, "refresh", False))
+    if got is not None and not refresh:
+        return _fetch_report(args, got, p, cached=True, warnings=[], extra={})
+    # `--refresh` без прежнего снимка — обычная загрузка; недоступная прежде запись обновляется на месте
+    prior = got if refresh else None
     warnings: list[str] = []
+    if refresh and prior is None:
+        warnings.append(
+            "прежнего снимка нет, загружено как обычный fetch (адрес и регион те же, что в запросе)"
+        )
+    h = _refresh_key(p, url, region) if prior is not None else proj.key_hash("fetch", url, region)
+    started = time.monotonic()
     extra: dict[str, Any] = {}
     with proj.transaction(p.root, rollback=False):
         if _find_open_action(p, h):
@@ -513,7 +558,7 @@ def cmd_fetch(args: argparse.Namespace) -> int:
             p.save_state()
         else:
             source = _store_result(
-                p, h, started, url, region, existing, access, note, final_url, page, warnings, extra
+                p, h, started, url, region, retry, prior, access, note, final_url, page, warnings, extra
             )
     if refused is not None:
         raise CliError(refused)
@@ -522,13 +567,77 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     return _fetch_report(args, source, p, cached=False, warnings=warnings, extra=extra)
 
 
+def _finish_event(p: Project, h: str, started: float, status: str, message: str | None = None) -> None:
+    """Итог загрузки в журнале: у «выполнено» есть длительность."""
+    p.add_event(
+        p.event(
+            kind="действие",
+            name="strateg fetch",
+            idempotency_hash=h,
+            status=status,  # type: ignore[arg-type]
+            duration_s=round(time.monotonic() - started, 2) if status == "выполнено" else None,
+            message=message,
+        )
+    )
+
+
+def _chain_ids(p: Project, start: SourceModel, url: str, region: str | None) -> set[str]:
+    """Источники этого адреса: его записи, `other_urls` и вся цепочка `refreshes` в обе стороны от `start`."""
+    ids = {start.id} | {s.id for s in p.sources.sources if _same_address(s, url, region)}
+    grown = True
+    while grown:
+        grown = False
+        for s in p.sources.sources:
+            linked = s.id in ids or (s.refreshes is not None and s.refreshes in ids)
+            if linked and (s.id not in ids or (s.refreshes and s.refreshes not in ids)):
+                ids.add(s.id)
+                if s.refreshes:
+                    ids.add(s.refreshes)
+                grown = True
+    return ids
+
+
+def _text_twin(
+    p: Project,
+    text_sha: str | None,
+    region: str | None,
+    skip: SourceModel | None = None,
+    within: set[str] | None = None,
+) -> SourceModel | None:
+    """Полученный веб-источник с тем же текстом снимка и тем же регионом (материалы `inputs/` не в счёт).
+
+    `within` ограничивает поиск набором номеров (цепочка одного адреса при `--refresh`).
+    """
+    return next(
+        (
+            s
+            for s in p.sources.sources
+            if s is not skip
+            and (within is None or s.id in within)
+            and s.url is not None
+            and s.text_sha256 == text_sha
+            and s.access == "получен"
+            and (s.fetch.region if s.fetch else None) == region
+        ),
+        None,
+    )
+
+
+def _standing_claims(p: Project, sid: str) -> list[str]:
+    """Действующие утверждения с цитатой из источника."""
+    return [
+        c.id for c in p.claims.claims if c.status == "действует" and any(q.source == sid for q in c.quotes)
+    ]
+
+
 def _store_result(
     p: Project,
     h: str,
     started: float,
     url: str,
     region: str | None,
-    existing: list[SourceModel],
+    retry: SourceModel | None,
+    prior: SourceModel | None,
     access: str,
     note: str | None,
     final_url: str | None,
@@ -536,16 +645,83 @@ def _store_result(
     warnings: list[str],
     extra: dict[str, Any],
 ) -> SourceModel:
-    """Записывает итог загрузки: снимок, источник в реестре, события журнала."""
+    """Записывает итог загрузки: снимок, источник в реестре, события журнала.
+
+    - `retry` — недоступная прежде запись этого адреса: обновляется на месте, номер остаётся;
+    - `prior` — полученный снимок при `--refresh`: тот же текст — отметка перепроверки у него, другой текст —
+      новый источник со ссылкой `refreshes`, недоступная страница — запись не меняется;
+    - текст нового адреса совпал со снимком другого источника — новый источник не создаётся, адрес
+      добавляется к прежнему.
+    """
     kind = "страница"
     snapshot = None
     if page is not None and access == "получен":
         access, note, kind, snapshot = _analyse(page, extra)
+    text_sha = proj.sha256_bytes(snapshot[1].encode("utf-8")) if snapshot is not None else None
 
-    number = _next_source_number(p)
-    replace_at = next((i for i, s in enumerate(p.sources.sources) if s in existing), None)
-    if replace_at is not None:
-        number = int(p.sources.sources[replace_at].id.split("-")[1])
+    if prior is not None:
+        if snapshot is None:
+            extra["refresh_failed"] = f"{access}. {note}"
+            extra["previous"] = prior.id
+            failed = "пропущено" if access == "запрещено robots.txt" else "ошибка"
+            _finish_event(p, h, started, failed, f"перепроверка {prior.id} не удалась: {access}")
+            p.save_state()
+            return prior
+        if text_sha == prior.text_sha256:
+            prior.rechecked_at = proj.now()
+            p.save_sources()
+            extra["rechecked"] = True
+            _finish_event(p, h, started, "выполнено", f"{prior.id}: перепроверка, текст тот же")
+            p.save_state()
+            return prior
+        back = _text_twin(p, text_sha, region, within=_chain_ids(p, prior, url, region))
+        # страница вернулась к тексту другого снимка этого адреса: второго источника с ним не заводим
+        if back is not None:
+            back.rechecked_at = proj.now()
+            p.save_sources()
+            extra["rechecked"] = True
+            extra["returned_to"] = back.id
+            extra["previous"] = prior.id
+            extra["claims_on_previous"] = _standing_claims(p, prior.id)
+            message = (
+                f"{back.id}: перепроверка {prior.id}, текст совпал со снимком {back.id}, нового источника нет"
+            )
+            _finish_event(p, h, started, "выполнено", message)
+            p.save_state()
+            return back
+    elif snapshot is not None:
+        twin = _text_twin(p, text_sha, region, skip=retry)
+        if twin is not None and retry is None:
+            others = list(twin.other_urls or [])
+            if url != twin.url and url not in others:
+                others.append(url)
+            twin.other_urls = others or None
+            p.save_sources()
+            extra["same_text_as"] = twin.id
+            message = f"текст совпадает с {twin.id} (другой адрес): новый источник не создан"
+            _finish_event(p, h, started, "выполнено", message)
+            p.save_state()
+            return twin
+        if twin is not None:  # недоступная прежде запись получила тот же текст: обновляем её на месте
+            warnings.append(
+                f"текст совпадает с {twin.id} (другой адрес): запись обновлена, снимок повторяет {twin.id}"
+            )
+
+    material = next(
+        (
+            s
+            for s in p.sources.sources
+            if s.url is None and s.access == "получен" and s.text_sha256 == text_sha
+        ),
+        None,
+    )
+    if snapshot is not None and material is not None:  # скачали то, что человек уже положил в inputs/
+        extra["same_text_material"] = material.id
+        warnings.append(
+            f"текст совпадает с материалом {material.id} (из inputs/): запись материала не менялась"
+        )
+
+    number = int(retry.id.split("-")[1]) if retry is not None else _next_source_number(p)
     sid = f"И-{number}"
     accessed = proj.now()
     info = FetchInfo(accessed_at=accessed, final_url=final_url, region=region)
@@ -557,6 +733,8 @@ def _store_result(
         "access_note": note,
         "untrusted": True,
     }
+    if prior is not None:
+        data["refreshes"] = prior.id
     status = "ошибка" if access != "получен" else "выполнено"
     if access == "запрещено robots.txt":
         status = "пропущено"
@@ -595,11 +773,14 @@ def _store_result(
     else:
         data["fetch"] = info
     source = SourceModel.model_validate(data)
-    if replace_at is not None:
-        p.sources.sources[replace_at] = source
+    if retry is not None:
+        p.sources.sources[p.sources.sources.index(retry)] = source
     else:
         p.sources.sources.append(source)
     p.save_sources()
+    if prior is not None:
+        extra["refreshes"] = prior.id
+        extra["claims_on_previous"] = _standing_claims(p, prior.id)
     if source.suspicious:
         signs = snapshot[0].instruction_signs if snapshot else []
         p.add_event(
@@ -614,16 +795,11 @@ def _store_result(
         warnings.append(
             "в тексте страницы найдено обращение к ИИ: источник помечен «подозрительный», оно не исполняется"
         )
-    p.add_event(
-        p.event(
-            kind="действие",
-            name="strateg fetch",
-            idempotency_hash=h,
-            status=status,
-            duration_s=round(time.monotonic() - started, 2) if status == "выполнено" else None,
-            message=note if status != "выполнено" else None,
-        )
-    )
+    if prior is not None:
+        message: str | None = f"{sid}: перепроверка {prior.id}, текст изменился"
+    else:
+        message = note if status != "выполнено" else None
+    _finish_event(p, h, started, status, message)
     p.save_state()
     return source
 
@@ -731,14 +907,66 @@ def _fetch_report(
         "closed_markers": closed,
         "warnings": warnings,
     }
+    same_text = extra.get("same_text_as")
+    if same_text:
+        data["same_text_as"] = same_text
+        data["other_urls"] = s.other_urls or []
+    if extra.get("same_text_material"):
+        data["same_text_material"] = extra["same_text_material"]
+    if extra.get("returned_to"):
+        data["returned_to"] = extra["returned_to"]
+    if getattr(args, "refresh", False):
+        data["refresh"] = (
+            "failed"
+            if extra.get("refresh_failed")
+            else "same"
+            if extra.get("rechecked")
+            else "new"
+            if extra.get("refreshes")
+            else "first"
+        )
+        data["rechecked_at"] = str(s.rechecked_at) if s.rechecked_at else None
+        data["refreshes"] = extra.get("refreshes")
+        data["claims_on_previous"] = extra.get("claims_on_previous", [])
+    if extra.get("refresh_failed"):
+        previous = extra["previous"]
+        data["previous"] = previous
+        message = (
+            f"перепроверить {previous} не удалось: {extra['refresh_failed']}. "
+            f"Запись {previous} и её снимок не изменены, цитаты по ним действуют."
+        )
+        err = CliError(message, warnings)
+        if getattr(args, "json", False):
+            print(json.dumps({"ok": False, **data, "error": err.message}, ensure_ascii=False))
+            return 1
+        return fail(args, err)
     marks = []
     if s.suspicious:
         marks.append("подозрительный")
     if closed:
         marks.append("признаки закрытых данных: " + ", ".join(closed))
     if s.access == "получен":
+        if extra.get("returned_to"):
+            head = (
+                f"Источник {s.id}: страница вернулась к тексту этого снимка (запрос шёл по адресу источника "
+                f"{extra['previous']}); новый источник не создан, отметка перепроверки поставлена у {s.id} "
+                f"({s.rechecked_at})."
+            )
+        elif extra.get("rechecked"):
+            head = f"Источник {s.id}: перепроверен, текст тот же (проверено {s.rechecked_at})."
+        elif extra.get("refreshes"):
+            head = (
+                f"Источник {s.id}: текст изменился, сохранён новый снимок; он перепроверяет "
+                f"{extra['refreshes']}, прежний снимок и его цитаты не тронуты."
+            )
+        else:
+            head = (
+                f"Источник {s.id}: "
+                + ("снимок уже сохранён" if cached or same_text else "снимок сохранён")
+                + "."
+            )
         lines = [
-            f"Источник {s.id}: " + ("снимок уже сохранён" if cached else "снимок сохранён") + ".",
+            head,
             f"Снимок: {data['snapshot_path']}",
             f"Адрес: {data['final_url'] or s.url}",
             f"Регион: {data['region'] or 'не указан'}",
@@ -748,6 +976,23 @@ def _fetch_report(
             + (" (запасной путь: весь видимый текст)" if data["extraction_fallback"] else ""),
             "Пометки: " + ("; ".join(marks) if marks else "нет"),
         ]
+        if same_text:
+            lines.append(
+                f"Новый источник не создан: текст совпадает с {same_text} (другой адрес); "
+                f"адрес добавлен к {same_text}."
+            )
+        if extra.get("refreshes") or extra.get("returned_to"):
+            on_old = extra["claims_on_previous"]
+            lines.append(
+                f"Утверждения, которые стоят на {extra.get('refreshes') or extra['previous']}: "
+                + (", ".join(on_old) if on_old else "нет")
+                + (
+                    ". Решает агент: сверить со снимком страницы, заменить (`claim replace`), "
+                    "снять (`claim revoke`) или оставить."
+                    if on_old
+                    else ""
+                )
+            )
         lines += [f"Внимание: {w}" for w in warnings]
         return emit(args, data, lines)
     data["note"] = s.access_note

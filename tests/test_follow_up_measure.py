@@ -25,6 +25,7 @@ from test_follow_up import (  # noqa: F401
     replace_decision_now,
     replace_u7_with_new_page,
 )
+from test_follow_up_again import dispute_u7_with_new_page
 
 ABSENT = frozenset()
 
@@ -221,6 +222,24 @@ AFTER_U7_REPLACED = {
 }
 
 
+# Новая страница даёт утверждение со спором к У-7 (регион другой, не замена): У-7 в силе, но под вопросом.
+AFTER_U7_DISPUTED = {
+    "source": expect(
+        claims=["У-7", "У-10"],
+        plan_questions=["ВП-1"],
+        options=["Вар-3"],
+        promises=["О-3"],
+        decisions=["Реш-1"],
+    ),
+    "new": expect(
+        claims=["У-7"], plan_questions=["ВП-1"], options=["Вар-3"], promises=["О-3"], decisions=["Реш-1"]
+    ),
+    "old": expect(
+        claims=["У-10"], plan_questions=["ВП-1"], options=["Вар-3"], promises=["О-3"], decisions=["Реш-1"]
+    ),
+}
+
+
 def score(got: set, want: set) -> tuple[int, int, int]:
     """(верно названо, лишнее, пропущено)."""
     return len(got & want), len(got - want), len(want - got)
@@ -267,3 +286,15 @@ def test_impact_finds_every_expected_record_and_the_choice_flag(cli, fu, tmp_pat
     # числа для ADR-0016: ожидалось 93 записи в 15 сценариях; выбор на В4 угадан в 15 из 15
     assert scenarios == 15
     assert (hit, extra, lost) == (93, 0, 0)
+
+
+def test_impact_of_a_new_claim_with_a_dispute_finds_the_disputed_and_the_choice(cli, fu, tmp_path):  # noqa: F811
+    hit = extra = lost = 0
+    source, new = dispute_u7_with_new_page(cli, fu, tmp_path)  # источник И-6, утверждение У-10
+    assert (source, new) == ("И-6", "У-10")
+    for seed, key in ((source, "source"), (new, "new"), ("У-7", "old")):
+        h, e, m = check_impact(cli, seed, AFTER_U7_DISPUTED[key], True)
+        hit, extra, lost = hit + h, extra + e, lost + m
+    # числа для ADR-0016: ожидалось 16 записей в 3 сценариях со спором; до обхода к оспоренному находились
+    # только 6 (обратная сторона У-7 и само новое утверждение), а выбор на В4 для нового считался не задетым
+    assert (hit, extra, lost) == (16, 0, 0)

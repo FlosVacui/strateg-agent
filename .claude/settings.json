@@ -89,6 +89,28 @@
         ]
       }
     ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv",
+            "args": [
+              "run",
+              "--frozen",
+              "--project",
+              "${CLAUDE_PROJECT_DIR}",
+              "python",
+              "-X",
+              "utf8",
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/user_prompt_submit.py"
+            ],
+            "timeout": 15,
+            "onFailure": "continue"
+          }
+        ]
+      }
+    ],
     "SubagentStop": [
       {
         "hooks": [

@@ -97,6 +97,7 @@ _URL_BARE = r"[A-Za-z0-9._~:/%+=@-]+"  # без `?`, `&`, `#`, `;`: их обо�
 _REGION = r"[A-Za-z0-9][A-Za-z0-9-]{1,15}"
 FETCH_TEMPLATE = re.compile(
     rf"uv run strateg fetch (?P<url>{_URL_QUOTED}|{_URL_BARE})(?: --region (?P<region>{_REGION}))?"
+    r"(?P<refresh> --refresh)?"
 )
 
 
@@ -108,7 +109,7 @@ class FetchCheck:
 
 
 def fetch_command(command: str) -> FetchCheck:
-    """Команда исследователя: ровно `uv run strateg fetch '<адрес>'` и необязательно `--region <код>`.
+    """Команда исследователя: `uv run strateg fetch '<адрес>'`, необязательно `--region <код>` и `--refresh`.
 
     Вне одинарных кавычек нет ни одного из `; | & $( ` > <` и перевода строки: им негде быть в шаблоне.
     Адрес — `http` или `https`.

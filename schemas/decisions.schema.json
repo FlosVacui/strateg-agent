@@ -18,6 +18,34 @@
           "minLength": 1,
           "title": "Owner",
           "type": "string"
+        },
+        "done": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Дата, когда обязательство выполнено; только по слову человека, не позже сегодня",
+          "title": "Done"
+        },
+        "done_note": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Пояснение к отметке «выполнено» со слов человека",
+          "title": "Done Note"
         }
       },
       "required": [

@@ -325,9 +325,40 @@ def _accessed_day(s: Any) -> dt.date:
     return s.fetch.accessed_at.astimezone(proj.now().tzinfo).date()
 
 
+def _fresh_days(p: Project) -> dict[str, dt.date]:
+    """Для каждого веб-источника день последней проверки по всей цепочке перепроверок (`refreshes`).
+
+    Проверка — получение или перепроверка (`fetch --refresh`) любого звена цепочки: утверждения могут стоять
+    на старом снимке, а страницу уже сверили позже. Решение «заменить или оставить» агент принимает по ответу
+    `fetch --refresh`, `due` после перепроверки не напоминает.
+    """
+    web = [s for s in p.sources.sources if s.fetch is not None]
+    parent = {s.id: s.id for s in web}
+
+    def root(x: str) -> str:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for s in web:
+        if s.refreshes in parent:
+            parent[root(s.id)] = root(s.refreshes)
+    tz = proj.now().tzinfo
+    best: dict[str, dt.date] = {}
+    for s in web:
+        days = [_accessed_day(s)]
+        if s.rechecked_at is not None:
+            days.append(s.rechecked_at.astimezone(tz).date())
+        r = root(s.id)
+        best[r] = max(best.get(r, min(days)), *days)
+    return {s.id: best[root(s.id)] for s in web}
+
+
 def _stale_items(d: Decision, p: Project, today: dt.date, max_age: int) -> list[dict[str, Any]]:
     claims = {c.id: c for c in p.claims.claims}
     sources = {s.id: s for s in p.sources.sources}
+    fresh = _fresh_days(p)
     out = []
     walked = _walk(d, claims)
     # Устаревший источник факта называем один раз — по ближайшему пути: путей к факту бывает несколько.
@@ -363,7 +394,7 @@ def _stale_items(d: Decision, p: Project, today: dt.date, max_age: int) -> list[
                 s = sources.get(sid)
                 if s is None or s.fetch is None:
                     continue  # у материала из inputs/ даты обращения нет
-                got = _accessed_day(s)
+                got = fresh[sid]
                 age = (today - got).days
                 if age > max_age and len(path) == nearest[cid] and (cid, sid) not in said:
                     said.add((cid, sid))
@@ -371,7 +402,8 @@ def _stale_items(d: Decision, p: Project, today: dt.date, max_age: int) -> list[
                     out.append(
                         _item(
                             d,
-                            f"{d.id}: {holder} держится на источнике {sid}, полученном {got}: "
+                            f"{d.id}: {holder} держится на источнике {sid}, "
+                            f"{'перепроверенном' if got != _accessed_day(s) else 'полученном'} {got}: "
                             f"прошло {age} дн., допустимо {max_age}; перепроверьте.",
                             claim=cid,
                             role=role,
@@ -388,6 +420,8 @@ def _stale_items(d: Decision, p: Project, today: dt.date, max_age: int) -> list[
 def _commitment_items(d: Decision, today: dt.date, window: int) -> list[dict[str, Any]]:
     out = []
     for cm in d.commitments:
+        if cm.done is not None:
+            continue  # человек сказал «выполнено»: решать тут нечего
         delta = (_day(cm.due) - today).days
         if delta <= window:
             out.append(
@@ -411,6 +445,7 @@ def _next_event(
     found: list[tuple[dt.date, str]] = []
     claims = {c.id: c for c in p.claims.claims}
     sources = {s.id: s for s in p.sources.sources}
+    fresh = _fresh_days(p)
     for d in active:
         for _role, _root, c, _path in _walk(d, claims):
             if c.status != "действует" or c.type != "факт":
@@ -419,7 +454,7 @@ def _next_event(
                 s = sources.get(sid)
                 if s is None or s.fetch is None:
                     continue
-                day = _accessed_day(s) + dt.timedelta(days=max_age + 1)
+                day = fresh[sid] + dt.timedelta(days=max_age + 1)
                 if day > today:
                     found.append(
                         (day, f"{d.id}: источник {sid} основания {c.id} станет старше {max_age} дн.")
@@ -433,7 +468,7 @@ def _next_event(
                     (_day(c.date), f"{d.id}: срок проверки показателя «{c.metric}» ({what}) {c.date}")
                 )
         for cm in d.commitments:
-            if _day(cm.due) - dt.timedelta(days=window) > today:
+            if cm.done is None and _day(cm.due) - dt.timedelta(days=window) > today:
                 found.append(
                     (
                         _day(cm.due) - dt.timedelta(days=window),
@@ -735,6 +770,13 @@ def compute_impact(p: Project, seed: str) -> dict[str, Any]:
             if c.id not in reached:
                 reached.add(c.id)
                 queue.append(c.id)
+        # Утверждение со спором задевает и оспоренное: прежнее сведение теперь под вопросом, как и всё на нём
+        disputed = claims[cur].dispute.claim if cur in claims and claims[cur].dispute else None
+        if disputed is not None and disputed in claims:
+            _add(dependents, disputed, f"оспаривается {cur}")
+            if disputed not in reached:
+                reached.add(disputed)
+                queue.append(disputed)
     if _CLAIM_REF.fullmatch(seed):
         dependents.pop(seed, None)  # само исходное утверждение в «задетых» не повторяется
     affected = set(seed_claims) | set(dependents)
