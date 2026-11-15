@@ -212,11 +212,11 @@ def _set_profile(args: argparse.Namespace, profile: str) -> int:
     table = load_routing()
     if profile != DEFAULT_PROFILE and profile not in table.profiles:
         raise UsageError(f"профиля «{profile}» нет в {ROUTING_FILE}: есть {', '.join(table.profiles)}")
-    old = _profile(p)
-    if old == profile:
-        return emit(args, {"profile": profile, "changed": False}, [f"Профиль уже «{profile}»."])
-    changes = sum(1 for e in p.journal if e.kind == "действие" and e.name == PROFILE_ACTION)
-    with proj.transaction(p.root):
+    with proj.transaction(p):
+        old = _profile(p)
+        if old == profile:
+            return emit(args, {"profile": profile, "changed": False}, [f"Профиль уже «{profile}»."])
+        changes = sum(1 for e in p.journal if e.kind == "действие" and e.name == PROFILE_ACTION)
         p.add_event(
             p.event(
                 kind="действие",
@@ -239,45 +239,54 @@ def _set_profile(args: argparse.Namespace, profile: str) -> int:
 def _pick(args: argparse.Namespace, role: str) -> int:
     p = _open(args)
     table = load_routing()
-    profile = _profile(p)
-    base = effective(table, role, profile)
     reason = (getattr(args, "reason", None) or "").strip()
     upgrade = bool(getattr(args, "upgrade", False))
-    chosen = base
-    sticky = False
-    if not upgrade and base.upgrade is not None and upgrades_done(p, role) and base.upgrade.to != base.level:
-        chosen = effective(table, role, profile, level=base.upgrade.to)  # повышение действует до конца шага
-        sticky = True
-    if upgrade:
-        rule = base.upgrade
-        if rule is None:
-            raise CliError(f"у роли «{role}» в {ROUTING_FILE} нет условия повышения")
-        done = upgrades_done(p, role)
-        if done >= rule.times:
-            raise CliError(
-                f"повышение роли «{role}» на шаге {p.state.step} уже записано {done} раз из {rule.times}: "
-                "предел достигнут, повышенная модель действует до конца шага"
-            )
-        guard = UPGRADE_GUARDS.get(role)
-        if guard is not None and not guard.holds(p):
-            raise CliError(
-                f"повышение роли «{role}» не по условию «{rule.when}»: {guard.refusal}",
-                ["сначала запишите проверку полноты: `strateg rubric record`"],
-            )
-        if rule.to == base.level:
-            raise CliError(f"роль «{role}» уже на уровне «{rule.to}»: повышать некуда")
-        chosen = effective(table, role, profile, level=rule.to)
-    name = UPGRADE_EVENT if upgrade else PICK_EVENT
-    parts = [reason] if reason else []
-    if upgrade:
-        assert base.upgrade is not None
-        parts.append(f"повышение: {base.level} -> {chosen.level}, условие: {base.upgrade.when}")
-    elif sticky:
-        parts.append(f"повышение на шаге {p.state.step} действует: {base.level} -> {chosen.level}")
-    elif not reason:
-        parts.append("по таблице маршрутов")
-    parts.append(f"профиль {profile}")
-    with proj.transaction(p.root):
+    # Профиль, число повышений и шаг читаются под блокировкой: выбор и событие идут по одному состоянию.
+    with proj.transaction(p):
+        profile = _profile(p)
+        base = effective(table, role, profile)
+        chosen = base
+        sticky = False
+        if (
+            not upgrade
+            and base.upgrade is not None
+            and upgrades_done(p, role)
+            and base.upgrade.to != base.level
+        ):
+            chosen = effective(
+                table, role, profile, level=base.upgrade.to
+            )  # повышение действует до конца шага
+            sticky = True
+        if upgrade:
+            rule = base.upgrade
+            if rule is None:
+                raise CliError(f"у роли «{role}» в {ROUTING_FILE} нет условия повышения")
+            done = upgrades_done(p, role)
+            if done >= rule.times:
+                raise CliError(
+                    f"повышение роли «{role}» на шаге {p.state.step} уже записано {done} раз "
+                    f"из {rule.times}: "
+                    "предел достигнут, повышенная модель действует до конца шага"
+                )
+            guard = UPGRADE_GUARDS.get(role)
+            if guard is not None and not guard.holds(p):
+                raise CliError(
+                    f"повышение роли «{role}» не по условию «{rule.when}»: {guard.refusal}",
+                    ["сначала запишите проверку полноты: `strateg rubric record`"],
+                )
+            if rule.to == base.level:
+                raise CliError(f"роль «{role}» уже на уровне «{rule.to}»: повышать некуда")
+            chosen = effective(table, role, profile, level=rule.to)
+        name = UPGRADE_EVENT if upgrade else PICK_EVENT
+        parts = [reason] if reason else []
+        if upgrade:
+            assert base.upgrade is not None
+            parts.append(f"повышение: {base.level} -> {chosen.level}, условие: {base.upgrade.when}")
+        elif sticky:
+            parts.append(f"повышение на шаге {p.state.step} действует: {base.level} -> {chosen.level}")
+        elif not reason:
+            parts.append("по таблице маршрутов")
+        parts.append(f"профиль {profile}")
         p.add_event(
             p.event(
                 kind="выбор модели",

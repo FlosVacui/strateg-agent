@@ -196,7 +196,8 @@ def personal_originals(root: Path, files: list[Path]) -> list[str]:
 
 def verify(root: Path) -> tuple[list[Path], list[str], str]:
     """Все проверки до архива: (файлы архива, причины отказа, состояние gitleaks)."""
-    problems = check_project(root)
+    with proj.locked(root):  # соседняя команда не пишет, пока проект проверяется: полузаписанного не видно
+        problems = check_project(root)
     if problems:
         reasons = ["проверка проекта нашла ошибки (`strateg check`): " + m for m in problems]
         return [], reasons, GITLEAKS_MISSING

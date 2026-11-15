@@ -199,7 +199,7 @@ def cmd_step_start(args: argparse.Namespace) -> int:
     p = _open(args)
     step = _norm_step(args.step)
     notes: list[str] = []
-    with proj.transaction(p.root):
+    with proj.transaction(p):
         open_steps = _open_steps(p)
         # длительность считается по журналу до записи «прервано»
         worked = {h: proj.interrupted_seconds(p.journal, e) for h, e in open_steps.items()}
@@ -244,28 +244,28 @@ def cmd_step_done(args: argparse.Namespace) -> int:
     p = _open(args)
     step = _norm_step(args.step)
     name = proj.step_action_name(step)
-    mine = [e for e in p.journal if e.kind == "действие" and e.name == name and e.idempotency_hash]
-    if not mine:
-        raise CliError(f"шаг {step} не начат: выполните `strateg step start {step}`")
-    last_hash = mine[-1].idempotency_hash
-    last = [e for e in mine if e.idempotency_hash == last_hash][-1]
-    if last.status == "выполнено":
-        return emit(
-            args,
-            {"step": step, "already_done": True},
-            [f"Шаг {step} уже отмечен выполненным."],
-        )
-    if last.status != "начато":
-        raise CliError(
-            f"шаг {step} не начат заново после «{last.status}»: выполните `strateg step start {step}`"
-        )
-    start = next(e for e in mine if e.idempotency_hash == last_hash and e.status == "начато")
-    end = proj.now()
-    total = max((end - start.time).total_seconds(), 0.0)
-    waited = proj.waited_seconds(start.time, end, proj.human_waits(p.journal))
-    duration = round(max(total - waited, 0.0), 1)
     release_no = 0
-    with proj.transaction(p.root):
+    with proj.transaction(p):
+        mine = [e for e in p.journal if e.kind == "действие" and e.name == name and e.idempotency_hash]
+        if not mine:
+            raise CliError(f"шаг {step} не начат: выполните `strateg step start {step}`")
+        last_hash = mine[-1].idempotency_hash
+        last = [e for e in mine if e.idempotency_hash == last_hash][-1]
+        if last.status == "выполнено":
+            return emit(
+                args,
+                {"step": step, "already_done": True},
+                [f"Шаг {step} уже отмечен выполненным."],
+            )
+        if last.status != "начато":
+            raise CliError(
+                f"шаг {step} не начат заново после «{last.status}»: выполните `strateg step start {step}`"
+            )
+        start = next(e for e in mine if e.idempotency_hash == last_hash and e.status == "начато")
+        end = proj.now()
+        total = max((end - start.time).total_seconds(), 0.0)
+        waited = proj.waited_seconds(start.time, end, proj.human_waits(p.journal))
+        duration = round(max(total - waited, 0.0), 1)
         message = None
         if step == "7":  # выпуск: снимок файлов выхода и документов, с ним потом сравнивает `strateg diff`
             release_no, kept = releaselib.take_snapshot(p)
@@ -303,14 +303,14 @@ def cmd_gate_open(args: argparse.Namespace) -> int:
     gate = _norm_gate(args.gate)
     if args.questions < 0:
         raise UsageError("число вопросов не может быть отрицательным")
-    if p.state.gates[gate] == "ждут ответа":  # type: ignore[index]
-        return emit(
-            args,
-            {"gate": gate, "status": "ждут ответа", "already_open": True},
-            [f"Ворота {gate} уже открыты."],
-        )
     status = "пройдены автоматически" if args.questions == 0 else "ждут ответа"
-    with proj.transaction(p.root):
+    with proj.transaction(p):
+        if p.state.gates[gate] == "ждут ответа":  # type: ignore[index]
+            return emit(
+                args,
+                {"gate": gate, "status": "ждут ответа", "already_open": True},
+                [f"Ворота {gate} уже открыты."],
+            )
         opened = proj.now()
         p.add_event(
             p.event(
@@ -335,22 +335,22 @@ def cmd_gate_answer(args: argparse.Namespace) -> int:
     answer = args.answer
     if not answer.strip():
         raise UsageError('ответ пустой: укажите --answer "<текст>"')
-    events = [e for e in p.journal if e.gate is not None and e.gate.gate == gate]
-    status = p.state.gates[gate]  # type: ignore[index]
-    if status == "отвечено" and events and events[-1].gate and events[-1].gate.answer == answer:
-        return emit(
-            args,
-            {"gate": gate, "status": status, "already_answered": True},
-            [f"Ответ на ворота {gate} уже записан."],
-        )
-    opened = next((e.gate for e in reversed(events) if e.gate and e.gate.answered_at is None), None)
-    if status != "ждут ответа" or opened is None:
-        raise CliError(
-            f"ворота {gate} не ждут ответа (статус: {status}): "
-            f"откройте их командой `strateg gate open {gate} --questions N`"
-        )
-    frame = _current_frame(p) if gate == "В1" else None  # рамка, на которую отвечает человек
-    with proj.transaction(p.root):
+    with proj.transaction(p):
+        events = [e for e in p.journal if e.gate is not None and e.gate.gate == gate]
+        status = p.state.gates[gate]  # type: ignore[index]
+        if status == "отвечено" and events and events[-1].gate and events[-1].gate.answer == answer:
+            return emit(
+                args,
+                {"gate": gate, "status": status, "already_answered": True},
+                [f"Ответ на ворота {gate} уже записан."],
+            )
+        opened = next((e.gate for e in reversed(events) if e.gate and e.gate.answered_at is None), None)
+        if status != "ждут ответа" or opened is None:
+            raise CliError(
+                f"ворота {gate} не ждут ответа (статус: {status}): "
+                f"откройте их командой `strateg gate open {gate} --questions N`"
+            )
+        frame = _current_frame(p) if gate == "В1" else None  # рамка, на которую отвечает человек
         answered = proj.now()
         p.add_event(
             p.event(
@@ -390,9 +390,9 @@ def _current_frame(p: Project) -> FrameBody:
 def cmd_mode(args: argparse.Namespace) -> int:
     p = _open(args)
     mode = args.mode.strip()
-    if p.state.mode == mode:
-        return emit(args, {"mode": mode, "changed": False}, [f"Режим уже «{mode}»."])
-    with proj.transaction(p.root):
+    with proj.transaction(p):
+        if p.state.mode == mode:
+            return emit(args, {"mode": mode, "changed": False}, [f"Режим уже «{mode}»."])
         old = p.state.mode
         p.add_event(
             p.event(kind="смена режима", mode=mode, message=f"режим изменён: {old} -> {mode}")  # type: ignore[arg-type]
@@ -407,8 +407,8 @@ def cmd_stop(args: argparse.Namespace) -> int:
     reason = args.reason.strip()
     if not reason:
         raise UsageError('причина остановки пустая: укажите --reason "<текст>"')
-    stops = sum(1 for e in p.journal if e.kind == "действие" and e.name == "внеплановая остановка")
-    with proj.transaction(p.root):
+    with proj.transaction(p):
+        stops = sum(1 for e in p.journal if e.kind == "действие" and e.name == "внеплановая остановка")
         p.add_event(
             p.event(
                 kind="действие",
@@ -443,8 +443,24 @@ def _find_open_action(p: Project, h: str) -> bool:
     return last is not None and last.status == "начато"
 
 
-def _next_source_number(p: Project) -> int:
-    return max((int(s.id.split("-")[1]) for s in p.sources.sources), default=0) + 1
+def _orphan_snapshot_number(p: Project, text: str) -> int | None:
+    """Номер снимка без записи, в котором лежит этот же текст: запись о нём потеряна (параллельной командой).
+
+    Новая запись встаёт на тот же номер и тот же файл, и `check` перестаёт видеть лишний снимок.
+    Берётся наименьший такой номер, которого нет в реестре.
+    """
+    folder = p.root / "sources"
+    if not folder.is_dir():
+        return None
+    known = {s.id for s in p.sources.sources} | {s.text_path for s in p.sources.sources if s.text_path}
+    data = text.replace("\r\n", "\n").encode("utf-8")  # как пишет `write_text`
+    found = []
+    for path in folder.iterdir():
+        m = re.fullmatch(r"i-([1-9][0-9]*)\.txt", path.name)
+        if m and f"sources/{path.name}" not in known and f"И-{m[1]}" not in known and path.is_file():
+            if path.read_bytes() == data:
+                found.append(int(m[1]))
+    return min(found, default=None)
 
 
 def _same_address(s: SourceModel, url: str, region: str | None) -> bool:
@@ -489,28 +505,46 @@ def _refresh_key(p: Project, url: str, region: str | None) -> str:
         n += 1
 
 
+def _fetch_done(p: Project, h: str) -> bool:
+    """В журнале уже есть «выполнено» с этим ключом: такую загрузку закончила другая команда."""
+    return any(
+        e.kind == "действие" and e.idempotency_hash == h and e.status == "выполнено" for e in p.journal
+    )
+
+
 def cmd_fetch(args: argparse.Namespace) -> int:
+    """Загрузка страницы в три приёма (ADR-0002, «Параллельные команды»).
+
+    1. Под блокировкой папки: адрес уже записан? иначе ключ загрузки и событие «начато».
+    2. Без блокировки: сеть и разбор страницы. Параллельные исследователи не ждут друг друга.
+    3. Под блокировкой: проект перечитан заново, повтор адреса и текста проверен ещё раз, номер `И-n`,
+       снимок, запись источника и события. Файл снимка пишется только здесь, лишнего не остаётся.
+    """
     p = _open(args)
     try:
         url = fetchlib.normalize_url(args.url)
     except fetchlib.AddressRefused as exc:
         raise UsageError(str(exc)) from exc
     region = args.region or p.state.region
-    got, retry = _known_for_address(p, url, region)
     refresh = bool(getattr(args, "refresh", False))
-    if got is not None and not refresh:
+    got, _retry = _known_for_address(p, url, region)
+    if got is not None and not refresh:  # источники не пропадают: прежний ответ верен и без блокировки
         return _fetch_report(args, got, p, cached=True, warnings=[], extra={})
-    # `--refresh` без прежнего снимка — обычная загрузка; недоступная прежде запись обновляется на месте
-    prior = got if refresh else None
     warnings: list[str] = []
-    if refresh and prior is None:
-        warnings.append(
-            "прежнего снимка нет, загружено как обычный fetch (адрес и регион те же, что в запросе)"
-        )
-    h = _refresh_key(p, url, region) if prior is not None else proj.key_hash("fetch", url, region)
-    started = time.monotonic()
     extra: dict[str, Any] = {}
-    with proj.transaction(p.root, rollback=False):
+    started = time.monotonic()
+
+    with proj.transaction(p, rollback=False):
+        got, _retry = _known_for_address(p, url, region)
+        if got is not None and not refresh:  # пока ждали блокировку, адрес записала другая команда
+            return _fetch_report(args, got, p, cached=True, warnings=[], extra={})
+        # `--refresh` без прежнего снимка — обычная загрузка; недоступная прежде запись обновляется на месте
+        prior = got if refresh else None
+        if refresh and prior is None:
+            warnings.append(
+                "прежнего снимка нет, загружено как обычный fetch (адрес и регион те же, что в запросе)"
+            )
+        h = _refresh_key(p, url, region) if prior is not None else proj.key_hash("fetch", url, region)
         if _find_open_action(p, h):
             p.add_event(
                 p.event(
@@ -522,29 +556,37 @@ def cmd_fetch(args: argparse.Namespace) -> int:
                 )
             )
         p.add_event(p.event(kind="действие", name="strateg fetch", idempotency_hash=h, status="начато"))
-        fetcher = make_fetcher(p.root / proj.CACHE_DIR / "fetch.json")
-        access, note, final_url, page = "получен", None, None, None
-        refused: str | None = None
-        try:
-            page = fetcher.get(url)
-            final_url = page.url
-        except fetchlib.AddressRefused as exc:
-            refused = str(exc)
-        except fetchlib.RobotsDenied as exc:
-            access = "запрещено robots.txt"
-            if exc.unavailable:
-                note = (
-                    "robots.txt недоступен (ошибка сервера или нет связи): по RFC 9309 загрузка запрещена; "
-                    "повторите позже или сохраните страницу вручную в папку inputs/ проекта"
-                )
-            else:
-                note = (
-                    f"robots.txt сайта запрещает загрузку {exc.url} для strateg; сохраните страницу вручную "
-                    "в папку inputs/ проекта и добавьте её как материал"
-                )
-        except fetchlib.FetchProblem as exc:
-            access, note = exc.access, exc.note
 
+    # Сеть и разбор страницы: папка проекта свободна.
+    fetcher = make_fetcher(p.root / proj.CACHE_DIR / "fetch.json")
+    access, note, final_url, page = "получен", None, None, None
+    refused: str | None = None
+    try:
+        page = fetcher.get(url)
+        final_url = page.url
+    except fetchlib.AddressRefused as exc:
+        refused = str(exc)
+    except fetchlib.RobotsDenied as exc:
+        access = "запрещено robots.txt"
+        if exc.unavailable:
+            note = (
+                "robots.txt недоступен (ошибка сервера или нет связи): по RFC 9309 загрузка запрещена; "
+                "повторите позже или сохраните страницу вручную в папку inputs/ проекта"
+            )
+        else:
+            note = (
+                f"robots.txt сайта запрещает загрузку {exc.url} для strateg; сохраните страницу вручную "
+                "в папку inputs/ проекта и добавьте её как материал"
+            )
+    except fetchlib.FetchProblem as exc:
+        access, note = exc.access, exc.note
+    kind: str = "страница"
+    snapshot: tuple[safety.SafetyReport, str, str] | None = None
+    if page is not None and access == "получен":
+        access, note, kind, snapshot = _analyse(page, extra)
+
+    with proj.transaction(p, rollback=False):
+        known, retry = _known_for_address(p, url, region)
         if refused is not None:
             p.add_event(
                 p.event(
@@ -556,13 +598,55 @@ def cmd_fetch(args: argparse.Namespace) -> int:
                 )
             )
             p.save_state()
+        elif known is not None and (not refresh or _fetch_done(p, h)):
+            # Пока шла загрузка, этот адрес записала другая команда: второго источника и второй отметки
+            # «выполнено» с тем же ключом нет, отдаём прежний номер.
+            _finish_event(
+                p,
+                h,
+                started,
+                "пропущено",
+                f"{known.id}: адрес записан параллельной командой, повтор не записан",
+            )
+            p.save_state()
+            if refresh:
+                extra["parallel"] = True
+            return _fetch_report(
+                args,
+                known,
+                p,
+                cached=True,
+                warnings=[f"адрес записала параллельная команда: {known.id}"],
+                extra=extra,
+            )
         else:
+            prior = known if refresh else None
             source = _store_result(
-                p, h, started, url, region, retry, prior, access, note, final_url, page, warnings, extra
+                p,
+                h,
+                started,
+                url,
+                region,
+                retry,
+                prior,
+                access,
+                note,
+                final_url,
+                page,
+                kind,
+                snapshot,
+                warnings,
+                extra,
             )
     if refused is not None:
         raise CliError(refused)
-    for err in check_project(p.root):
+    # Папку проверяют без блокировки (она держится только на запись): ошибки перепроверяются под ней, чтобы
+    # не принять за ошибку то, что соседняя команда пишет прямо сейчас.
+    found = check_project(p.root)
+    if found:
+        with proj.locked(p.root):
+            found = check_project(p.root)
+    for err in found:
         warnings.append("проверка проекта: " + err)
     return _fetch_report(args, source, p, cached=False, warnings=warnings, extra=extra)
 
@@ -642,10 +726,15 @@ def _store_result(
     note: str | None,
     final_url: str | None,
     page: fetchlib.Page | None,
+    kind: str,
+    snapshot: tuple[safety.SafetyReport, str, str] | None,
     warnings: list[str],
     extra: dict[str, Any],
 ) -> SourceModel:
-    """Записывает итог загрузки: снимок, источник в реестре, события журнала.
+    """Записывает итог загрузки: снимок, источник в реестре, события журнала. Зовут под блокировкой папки.
+
+    Страница к этому моменту разобрана (`_analyse`: вид и текст снимка); здесь только сверка с реестром,
+    номер и запись.
 
     - `retry` — недоступная прежде запись этого адреса: обновляется на месте, номер остаётся;
     - `prior` — полученный снимок при `--refresh`: тот же текст — отметка перепроверки у него, другой текст —
@@ -653,10 +742,6 @@ def _store_result(
     - текст нового адреса совпал со снимком другого источника — новый источник не создаётся, адрес
       добавляется к прежнему.
     """
-    kind = "страница"
-    snapshot = None
-    if page is not None and access == "получен":
-        access, note, kind, snapshot = _analyse(page, extra)
     text_sha = proj.sha256_bytes(snapshot[1].encode("utf-8")) if snapshot is not None else None
 
     if prior is not None:
@@ -721,7 +806,11 @@ def _store_result(
             f"текст совпадает с материалом {material.id} (из inputs/): запись материала не менялась"
         )
 
-    number = int(retry.id.split("-")[1]) if retry is not None else _next_source_number(p)
+    if retry is not None:
+        number = int(retry.id.split("-")[1])
+    else:
+        orphan = _orphan_snapshot_number(p, snapshot[1]) if snapshot is not None else None
+        number = orphan if orphan is not None else proj.next_source_number(p)
     sid = f"И-{number}"
     accessed = proj.now()
     info = FetchInfo(accessed_at=accessed, final_url=final_url, region=region)
@@ -742,7 +831,11 @@ def _store_result(
         rep, text, encoding = snapshot
         rel = f"sources/i-{number}.txt"
         data_bytes = text.encode("utf-8")
-        proj.write_text(p.root / rel, text)
+        target = p.root / rel
+        if not (
+            target.is_file() and target.read_bytes() == text.replace("\r\n", "\n").encode("utf-8")
+        ):  # тот же снимок на месте — не трогаем
+            proj.write_text(target, text)
         info = FetchInfo(
             accessed_at=accessed,
             final_url=page.url,
@@ -919,6 +1012,8 @@ def _fetch_report(
         data["refresh"] = (
             "failed"
             if extra.get("refresh_failed")
+            else "parallel"
+            if extra.get("parallel")
             else "same"
             if extra.get("rechecked")
             else "new"
@@ -1007,16 +1102,16 @@ def cmd_source_confirm(args: argparse.Namespace) -> int:
     """Человек подтвердил, что материал с признаками закрытых данных общедоступный."""
     p = _open(args)
     sid = args.id.strip()
-    source = next((s for s in p.sources.sources if s.id == sid), None)
-    if source is None:
-        raise CliError(f"источника {sid} нет в реестре")
-    if not source.closed_markers:
-        return emit(
-            args, {"source": sid, "changed": False}, [f"У источника {sid} нет признаков закрытых данных."]
-        )
-    if source.closed_confirmed:
-        return emit(args, {"source": sid, "changed": False}, [f"Источник {sid} уже подтверждён."])
-    with proj.transaction(p.root):
+    with proj.transaction(p):
+        source = next((s for s in p.sources.sources if s.id == sid), None)
+        if source is None:
+            raise CliError(f"источника {sid} нет в реестре")
+        if not source.closed_markers:
+            return emit(
+                args, {"source": sid, "changed": False}, [f"У источника {sid} нет признаков закрытых данных."]
+            )
+        if source.closed_confirmed:
+            return emit(args, {"source": sid, "changed": False}, [f"Источник {sid} уже подтверждён."])
         source.closed_confirmed = True
         p.save_sources()
         p.add_event(
@@ -1402,54 +1497,55 @@ def cmd_claim_add(args: argparse.Namespace) -> int:
         raise CliError("утверждения не записаны: файл не по схеме", errors)
 
     started = time.monotonic()
-    recorded = {_key_of_claim(c): (c.id, _extras(c)) for c in p.claims.claims}
     results: list[dict[str, Any]] = []
-    new_claims: list[tuple[Claim, str]] = []
-    batch_keys: dict[str, str] = {}
-    next_no = max((int(c.id.split("-")[1]) for c in p.claims.claims), default=0) + 1
-    attempt = max(_attempts(p, p.state.step), 1)
-    for c, label in prepared:
-        key = _key_of_input(c)
-        if key in recorded:
-            cid, extras = recorded[key]
-            field = _differs(extras, _extras(c))
-            if field:
-                errors.append(
-                    f"{label}: такое утверждение уже записано как {cid}, но поле {field} отличается; "
-                    "записанное в этой версии не исправляется: запишите новое утверждение "
-                    "с другим текстом, предметом, периодом или цитатой"
-                )
-            else:
-                results.append({"id": cid, "duplicate": True, "type": c.type})
-            continue
-        cid = f"У-{next_no}"
-        known_ids = {x.id for x in p.claims.claims} | set(batch_keys.values())
-        claim = _make_claim(p, c, label, cid, known_ids, errors, attempt=attempt)
-        if claim is None:
-            continue
-        next_no += 1
-        batch_keys[key] = cid
-        recorded[key] = (cid, _extras(c))
-        new_claims.append((claim, key))
-        results.append({"id": cid, "duplicate": False, "type": c.type, "suspicious": claim.suspicious})
-    if errors:
-        raise CliError("утверждения не записаны", errors)
-
-    if new_claims:
-        with proj.transaction(p.root):
-            for claim, key in new_claims:
-                p.claims.claims.append(claim)
-                p.add_event(
-                    p.event(
-                        step=claim.step,
-                        kind="действие",
-                        name="strateg claim add",
-                        idempotency_hash=key,
-                        status="выполнено",
-                        duration_s=round(time.monotonic() - started, 2),
-                        message=claim.id,
+    # Номера У-n, повторы и цитаты строятся по реестру, перечитанному под блокировкой: параллельная команда
+    # не получит тот же номер и не затрёт чужое утверждение.
+    with proj.transaction(p):
+        recorded = {_key_of_claim(c): (c.id, _extras(c)) for c in p.claims.claims}
+        new_claims: list[tuple[Claim, str]] = []
+        batch_keys: dict[str, str] = {}
+        next_no = max((int(c.id.split("-")[1]) for c in p.claims.claims), default=0) + 1
+        attempt = max(_attempts(p, p.state.step), 1)
+        for c, label in prepared:
+            key = _key_of_input(c)
+            if key in recorded:
+                cid, extras = recorded[key]
+                field = _differs(extras, _extras(c))
+                if field:
+                    errors.append(
+                        f"{label}: такое утверждение уже записано как {cid}, но поле {field} отличается; "
+                        "записанное в этой версии не исправляется: запишите новое утверждение "
+                        "с другим текстом, предметом, периодом или цитатой"
                     )
+                else:
+                    results.append({"id": cid, "duplicate": True, "type": c.type})
+                continue
+            cid = f"У-{next_no}"
+            known_ids = {x.id for x in p.claims.claims} | set(batch_keys.values())
+            claim = _make_claim(p, c, label, cid, known_ids, errors, attempt=attempt)
+            if claim is None:
+                continue
+            next_no += 1
+            batch_keys[key] = cid
+            recorded[key] = (cid, _extras(c))
+            new_claims.append((claim, key))
+            results.append({"id": cid, "duplicate": False, "type": c.type, "suspicious": claim.suspicious})
+        if errors:
+            raise CliError("утверждения не записаны", errors)
+        for claim, key in new_claims:
+            p.claims.claims.append(claim)
+            p.add_event(
+                p.event(
+                    step=claim.step,
+                    kind="действие",
+                    name="strateg claim add",
+                    idempotency_hash=key,
+                    status="выполнено",
+                    duration_s=round(time.monotonic() - started, 2),
+                    message=claim.id,
                 )
+            )
+        if new_claims:
             p.save_claims()
             p.save_state()
     lines = []
@@ -1612,7 +1708,7 @@ def _correction_event(p: Project, by: str, message: str) -> None:
 
 def cmd_claim_replace(args: argparse.Namespace) -> int:
     p = _open(args)
-    old = _find_claim(p, _claim_ref(args.id))
+    ref = _claim_ref(args.id)
     by = _by(args)
     raw = _read_input(args.file)
     if isinstance(raw, list) and len(raw) == 1:
@@ -1626,57 +1722,60 @@ def cmd_claim_replace(args: argparse.Namespace) -> int:
         raise CliError("замена не записана: файл не по схеме", _format(label, exc)) from exc
 
     key = _key_of_input(c)
-    if old.status == "заменено":
-        new = next((x for x in p.claims.claims if x.id == old.replaced_by), None)
-        if new is not None and _key_of_claim(new) == key:
-            field = _differs(_extras(new), _extras(c))
-            if field:
-                raise CliError(
-                    f"{old.id} уже заменено на {new.id}, но поле {field} отличается; записанное не "
-                    "исправляется: запишите новое утверждение с другим текстом или цитатой"
-                )
-            return emit(
-                args,
-                {"id": new.id, "replaced": old.id, "already_replaced": True},
-                [f"{old.id} уже заменено на {new.id}, повтор ничего не меняет."],
-            )
-        raise CliError(
-            f"{old.id} уже заменено на {old.replaced_by}: заменить можно только действующее утверждение"
-        )
-    if old.status != "действует":
-        raise CliError(f"{old.id} имеет статус «{old.status}»: заменить можно только действующее утверждение")
-    twin = next((x for x in p.claims.claims if _key_of_claim(x) == key), None)
-    if twin is not None and _differs(_extras(twin), _extras(c)) is None:
-        # полностью то же утверждение: нового номера не будет
-        if twin.id == old.id:
-            return emit(
-                args,
-                {"id": old.id, "replaced": old.id, "already_replaced": False, "unchanged": True},
-                [f"{old.id}: такое утверждение уже записано, замена не нужна."],
-            )
-        raise CliError(
-            f"такое утверждение уже записано как {twin.id}: замена не создаёт дубль; "
-            "перепишите текст, предмет, период, цитату или другое поле"
-        )
-
     started = time.monotonic()
-    errors: list[str] = []
-    cid = f"У-{max(int(x.id.split('-')[1]) for x in p.claims.claims) + 1}"
-    claim = _make_claim(
-        p,
-        c,
-        label,
-        cid,
-        {x.id for x in p.claims.claims},
-        errors,
-        attempt=max(_attempts(p, p.state.step), 1),
-        by=by,
-        replaces=old.id,
-    )
-    if claim is None:
-        raise CliError("замена не записана", errors)
+    with proj.transaction(p, tolerate=_stale_only):
+        old = _find_claim(p, ref)
+        if old.status == "заменено":
+            new = next((x for x in p.claims.claims if x.id == old.replaced_by), None)
+            if new is not None and _key_of_claim(new) == key:
+                field = _differs(_extras(new), _extras(c))
+                if field:
+                    raise CliError(
+                        f"{old.id} уже заменено на {new.id}, но поле {field} отличается; записанное не "
+                        "исправляется: запишите новое утверждение с другим текстом или цитатой"
+                    )
+                return emit(
+                    args,
+                    {"id": new.id, "replaced": old.id, "already_replaced": True},
+                    [f"{old.id} уже заменено на {new.id}, повтор ничего не меняет."],
+                )
+            raise CliError(
+                f"{old.id} уже заменено на {old.replaced_by}: заменить можно только действующее утверждение"
+            )
+        if old.status != "действует":
+            raise CliError(
+                f"{old.id} имеет статус «{old.status}»: заменить можно только действующее утверждение"
+            )
+        twin = next((x for x in p.claims.claims if _key_of_claim(x) == key), None)
+        if twin is not None and _differs(_extras(twin), _extras(c)) is None:
+            # полностью то же утверждение: нового номера не будет
+            if twin.id == old.id:
+                return emit(
+                    args,
+                    {"id": old.id, "replaced": old.id, "already_replaced": False, "unchanged": True},
+                    [f"{old.id}: такое утверждение уже записано, замена не нужна."],
+                )
+            raise CliError(
+                f"такое утверждение уже записано как {twin.id}: замена не создаёт дубль; "
+                "перепишите текст, предмет, период, цитату или другое поле"
+            )
 
-    with proj.transaction(p.root, tolerate=_stale_only):
+        errors: list[str] = []
+        cid = f"У-{max(int(x.id.split('-')[1]) for x in p.claims.claims) + 1}"
+        claim = _make_claim(
+            p,
+            c,
+            label,
+            cid,
+            {x.id for x in p.claims.claims},
+            errors,
+            attempt=max(_attempts(p, p.state.step), 1),
+            by=by,
+            replaces=old.id,
+        )
+        if claim is None:
+            raise CliError("замена не записана", errors)
+
         at = proj.now()
         old.status = "заменено"
         old.replaced_by = cid
@@ -1699,7 +1798,7 @@ def cmd_claim_replace(args: argparse.Namespace) -> int:
         _correction_event(p, by, message)
         p.save_claims()
         p.save_state()
-    places = claim_usages(p, old.id)
+        places = claim_usages(p, old.id)
     return emit(
         args,
         {"id": cid, "replaced": old.id, "already_replaced": False, "used_in": places, "by": by},
@@ -1709,22 +1808,24 @@ def cmd_claim_replace(args: argparse.Namespace) -> int:
 
 def cmd_claim_revoke(args: argparse.Namespace) -> int:
     p = _open(args)
-    claim = _find_claim(p, _claim_ref(args.id))
+    ref = _claim_ref(args.id)
     by = _by(args)
     reason = args.reason.strip()
     if not reason:
         raise UsageError('причина отзыва пустая: укажите --reason "<текст>"')
-    if claim.status == "отозвано":
-        return emit(
-            args,
-            {"id": claim.id, "already_revoked": True},
-            [f"{claim.id} уже отозвано, повтор ничего не меняет."],
-        )
-    if claim.status == "заменено":
-        raise CliError(
-            f"{claim.id} уже заменено на {claim.replaced_by}: отозвать можно только действующее утверждение"
-        )
-    with proj.transaction(p.root, tolerate=_stale_only):
+    with proj.transaction(p, tolerate=_stale_only):
+        claim = _find_claim(p, ref)
+        if claim.status == "отозвано":
+            return emit(
+                args,
+                {"id": claim.id, "already_revoked": True},
+                [f"{claim.id} уже отозвано, повтор ничего не меняет."],
+            )
+        if claim.status == "заменено":
+            raise CliError(
+                f"{claim.id} уже заменено на {claim.replaced_by}: "
+                "отозвать можно только действующее утверждение"
+            )
         claim.status = "отозвано"
         claim.status_history.append(
             StatusChange(status="отозвано", at=proj.now(), by=by, reason=reason)  # type: ignore[arg-type]
@@ -1743,7 +1844,7 @@ def cmd_claim_revoke(args: argparse.Namespace) -> int:
         _correction_event(p, by, message)
         p.save_claims()
         p.save_state()
-    places = claim_usages(p, claim.id)
+        places = claim_usages(p, claim.id)
     return emit(
         args,
         {"id": claim.id, "already_revoked": False, "used_in": places, "by": by},
@@ -1787,39 +1888,48 @@ def cmd_write(args: argparse.Namespace) -> int:
     if errors:
         raise CliError("файлы выхода не записаны: вход не по схеме", errors)
 
-    _keep_released_decisions(p, models)
-    changes, same = outputs.plan_changes(p, models)
-    report = [
-        {
-            "kind": ch.kind.name,
-            "file": ch.kind.file,
-            "changed": True,
-            "version": ch.version,
-            "history": ch.history,
-        }
-        for ch in changes
-    ] + [{"kind": k.name, "file": k.file, "changed": False, "version": None, "history": None} for k in same]
-    if not changes:
-        return emit(
-            args,
-            {"changed": False, "files": report, "warnings": []},
-            [f"{k.file}: без изменений" for k in same] + ["Ничего не записано: содержимое то же."],
-        )
-
     started = time.monotonic()
-    written = [ch.kind.file for ch in changes] + [k.file for k in same]
-    mine = re.compile("^(?:" + "|".join(re.escape(f) for f in written) + ")[,:]")
+    # Что менять, номера версий и `history/` определяются по файлам, перечитанным под блокировкой.
+    # Ошибки в самих записываемых файлах мешают записи, даже если были до неё.
+    changes: list[outputs.Change] = []
+    same: list[outputs.Kind] = []
+    report: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    mine: re.Pattern[str] | None = None
     try:
-        # ошибки в самих записываемых файлах мешают записи, даже если были до неё
-        with proj.transaction(p.root, block=lambda e: mine.match(e) is not None):
+        with proj.transaction(p, block=lambda e: mine is not None and mine.match(e) is not None):
+            _keep_released_decisions(p, models)
+            changes, same = outputs.plan_changes(p, models)
+            report = [
+                {
+                    "kind": ch.kind.name,
+                    "file": ch.kind.file,
+                    "changed": True,
+                    "version": ch.version,
+                    "history": ch.history,
+                }
+                for ch in changes
+            ] + [
+                {"kind": k.name, "file": k.file, "changed": False, "version": None, "history": None}
+                for k in same
+            ]
+            if not changes:
+                return emit(
+                    args,
+                    {"changed": False, "files": report, "warnings": []},
+                    [f"{k.file}: без изменений" for k in same] + ["Ничего не записано: содержимое то же."],
+                )
+            written = [ch.kind.file for ch in changes] + [k.file for k in same]
+            mine = re.compile("^(?:" + "|".join(re.escape(f) for f in written) + ")[,:]")
             for ch in changes:
                 outputs.apply_change(p, ch, started, by)
             p.save_state()
     except CliError as err:
+        written = [ch.kind.file for ch in changes] + [k.file for k in same]
         raise CliError(err.message, outputs.add_hints(err.details, written)) from err
 
-    warnings: list[str] = []
-    old_errors = check_project(p.root)  # новых ошибок нет: иначе запись откатилась бы
+    with proj.locked(p.root):  # соседняя команда не пишет, пока проект проверяется
+        old_errors = check_project(p.root)  # новых ошибок нет: иначе запись откатилась бы
     if old_errors:
         warnings.append(
             f"в проекте остались прежние ошибки проверки: {len(old_errors)}; запись их не добавила "
@@ -1842,21 +1952,21 @@ def cmd_step_fail(args: argparse.Namespace) -> int:
     if not reason:
         raise UsageError('причина пустая: укажите --reason "<текст>"')
     name = proj.step_action_name(step)
-    mine = [e for e in p.journal if e.kind == "действие" and e.name == name and e.idempotency_hash]
-    if not mine:
-        raise CliError(f"шаг {step} не начат: выполните `strateg step start {step}`")
-    last = mine[-1]
-    if last.status == "ошибка":
-        return emit(
-            args,
-            {"step": step, "already_failed": True},
-            [f"Шаг {step} уже отмечен ошибкой, повтор ничего не меняет."],
-        )
-    if last.status != "начато":
-        raise CliError(
-            f"шаг {step} не идёт (последняя отметка: «{last.status}»): ошибку отмечают у начатого шага"
-        )
-    with proj.transaction(p.root):
+    with proj.transaction(p):
+        mine = [e for e in p.journal if e.kind == "действие" and e.name == name and e.idempotency_hash]
+        if not mine:
+            raise CliError(f"шаг {step} не начат: выполните `strateg step start {step}`")
+        last = mine[-1]
+        if last.status == "ошибка":
+            return emit(
+                args,
+                {"step": step, "already_failed": True},
+                [f"Шаг {step} уже отмечен ошибкой, повтор ничего не меняет."],
+            )
+        if last.status != "начато":
+            raise CliError(
+                f"шаг {step} не идёт (последняя отметка: «{last.status}»): ошибку отмечают у начатого шага"
+            )
         p.add_event(
             p.event(
                 step=step,
@@ -1880,9 +1990,9 @@ def cmd_event_error(args: argparse.Namespace) -> int:
     message = args.message.strip()
     if not message:
         raise UsageError('текст ошибки пустой: укажите --message "<текст>"')
-    step = _norm_step(args.step) if args.step else p.state.step
     tool = args.tool.strip() if args.tool else None
-    with proj.transaction(p.root):
+    with proj.transaction(p):
+        step = _norm_step(args.step) if args.step else p.state.step
         p.add_event(
             p.event(
                 step=step,
@@ -1956,7 +2066,14 @@ def cmd_add(args: argparse.Namespace) -> int:
         return emit(args, res, lines)
     if not args.path:
         raise UsageError("укажите файл: `strateg add <путь>` или `strateg add --confirm И-n`")
-    outcome = materials.register(p, materials.resolve_material(p, args.path), args.kind)
+    try:
+        file = materials.resolve_material(p, args.path)
+    except CliError:
+        outcome = materials.moved_duplicate(p, Path(args.path).name)  # исходник с ПДн унёс соседний `add`
+        if outcome is None:
+            raise
+    else:
+        outcome = materials.register(p, file, args.kind)
     s, rep = outcome.source, outcome.report
     data = _add_data(p, outcome)
     if outcome.duplicate:
@@ -2013,21 +2130,21 @@ def cmd_budget_set(args: argparse.Namespace) -> int:
     minutes = _positive("--minutes", args.minutes)
     if usd is None and minutes is None:
         raise UsageError("укажите --usd и/или --minutes: новый лимит денег и времени работы агента")
-    b = p.state.budget
-    changes: list[str] = []
-    if usd is not None and usd != b.limit_usd:
-        was = "без лимита" if b.limit_usd is None else _usd(b.limit_usd)
-        changes.append(f"деньги {was} -> {_usd(usd)}")
-    if minutes is not None and minutes != b.limit_minutes:
-        changes.append(f"время {b.limit_minutes:g} -> {minutes:g} мин")
-    if not changes:
-        return emit(
-            args,
-            {"changed": False, "budget": budgetlib.as_dict(budgetlib.measure(p), _warn_share())},
-            ["Бюджет уже такой, ничего не изменено."],
-        )
-    message = "бюджет изменён: " + "; ".join(changes)
-    with proj.transaction(p.root):
+    with proj.transaction(p):
+        b = p.state.budget
+        changes: list[str] = []
+        if usd is not None and usd != b.limit_usd:
+            was = "без лимита" if b.limit_usd is None else _usd(b.limit_usd)
+            changes.append(f"деньги {was} -> {_usd(usd)}")
+        if minutes is not None and minutes != b.limit_minutes:
+            changes.append(f"время {b.limit_minutes:g} -> {minutes:g} мин")
+        if not changes:
+            return emit(
+                args,
+                {"changed": False, "budget": budgetlib.as_dict(budgetlib.measure(p), _warn_share())},
+                ["Бюджет уже такой, ничего не изменено."],
+            )
+        message = "бюджет изменён: " + "; ".join(changes)
         if usd is not None:
             b.limit_usd = usd
         if minutes is not None:
@@ -2075,9 +2192,9 @@ def cmd_budget_check(args: argparse.Namespace) -> int:
     message = f"{head} {summary}"
     # Один отказ по одной причине, пока лимит не менялся: числа в тексте растут и не сравниваются,
     # а событие «бюджет изменён» (и любое другое событие вида «бюджет») начинает счёт заново.
-    last = next((e for e in reversed(p.journal) if e.kind == "бюджет"), None)
-    if not (last is not None and (last.message or "").startswith(head)):
-        with proj.transaction(p.root):
+    with proj.transaction(p):
+        last = next((e for e in reversed(p.journal) if e.kind == "бюджет"), None)
+        if not (last is not None and (last.message or "").startswith(head)):
             p.add_event(p.event(kind="бюджет", message=message))
             p.save_state()
     options = (
@@ -2137,7 +2254,8 @@ def cmd_pack(args: argparse.Namespace) -> int:
 
 def cmd_check(args: argparse.Namespace) -> int:
     root = proj.resolve_project(getattr(args, "project", None))
-    errors = check_project(root)
+    with proj.locked(root):  # соседняя команда не пишет, пока проект читается: полузаписанного не видно
+        errors = check_project(root)
     if errors:
         return fail(args, CliError(f"проверка проекта {root.name}: ошибок {len(errors)}", errors))
     return emit(args, {"project": root.name, "errors": []}, [f"Проект {root.name} в порядке: ошибок нет."])
@@ -2160,30 +2278,31 @@ def cmd_cost_add(args: argparse.Namespace) -> int:
         raise UsageError("число токенов не может быть отрицательным")
     entry = "итог сессии" if args.total else "по сообщению"
     message_id = None
-    if not args.total:
-        # Без --message-id каждая запись новая, даже одинаковая: время и число записей (часы Windows грубые).
-        message_id = args.message_id or f"auto-{time.time_ns() // 1000}-{len(p.costs)}"
-        if any(r.session_id == args.session and r.message_id == message_id for r in p.costs):
-            return emit(
-                args,
-                {"duplicate": True, "message_id": message_id},
-                ["Эта запись уже учтена, повтор не добавлен."],
-            )
-    record = CostRecord(
-        schema_version=SCHEMA_VERSION,
-        time=proj.now(),
-        session_id=args.session,
-        role=args.role,
-        model=args.model,
-        environment=args.environment,
-        step=p.state.step,
-        entry=entry,  # type: ignore[arg-type]
-        message_id=message_id,
-        cost_usd=args.usd,
-        cost_source=(args.source or "оценка") if args.usd is not None else "нет данных",  # type: ignore[arg-type]
-        **tokens,
-    )
-    with proj.transaction(p.root):
+    with proj.transaction(p):
+        if not args.total:
+            # Без --message-id каждая запись новая, даже одинаковая: время и число записей
+            # (часы Windows грубые).
+            message_id = args.message_id or f"auto-{time.time_ns() // 1000}-{len(p.costs)}"
+            if any(r.session_id == args.session and r.message_id == message_id for r in p.costs):
+                return emit(
+                    args,
+                    {"duplicate": True, "message_id": message_id},
+                    ["Эта запись уже учтена, повтор не добавлен."],
+                )
+        record = CostRecord(
+            schema_version=SCHEMA_VERSION,
+            time=proj.now(),
+            session_id=args.session,
+            role=args.role,
+            model=args.model,
+            environment=args.environment,
+            step=p.state.step,
+            entry=entry,  # type: ignore[arg-type]
+            message_id=message_id,
+            cost_usd=args.usd,
+            cost_source=(args.source or "оценка") if args.usd is not None else "нет данных",  # type: ignore[arg-type]
+            **tokens,
+        )
         p.add_cost(record)
         _refresh_budget(p)
         p.save_state()
@@ -2342,20 +2461,21 @@ def _resume(p: Project) -> list[JournalEvent]:
     действия уже не «начато». «Изменено вне агента» пишет `save_state` (так же, как у любой команды).
     Возвращает прерванные действия.
     """
-    last: dict[str, JournalEvent] = {}
-    for e in p.journal:
-        if e.kind == "действие" and e.idempotency_hash:
-            last[e.idempotency_hash] = e
-    paused = _paused_steps(p)
-    interrupted = [(h, e) for h, e in last.items() if e.status == "начато" and h not in paused]
-    if not interrupted and not p.outside:
-        return []
-    # длительность считается по журналу до записи «прервано»: иначе концом работы стало бы время возобновления
-    seconds = {
-        h: proj.interrupted_seconds(p.journal, e) if (e.name or "").startswith("шаг ") else None
-        for h, e in interrupted
-    }
-    with proj.transaction(p.root, rollback=False):
+    with proj.transaction(p, rollback=False):
+        last: dict[str, JournalEvent] = {}
+        for e in p.journal:
+            if e.kind == "действие" and e.idempotency_hash:
+                last[e.idempotency_hash] = e
+        paused = _paused_steps(p)
+        interrupted = [(h, e) for h, e in last.items() if e.status == "начато" and h not in paused]
+        if not interrupted and not p.outside:
+            return []
+        # длительность считается по журналу до записи «прервано»: иначе концом работы
+        # стало бы время возобновления
+        seconds = {
+            h: proj.interrupted_seconds(p.journal, e) if (e.name or "").startswith("шаг ") else None
+            for h, e in interrupted
+        }
         for h, e in interrupted:
             p.add_event(
                 p.event(

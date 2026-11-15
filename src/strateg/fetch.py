@@ -32,7 +32,7 @@ import charset_normalizer
 import httpx
 from protego import Protego
 
-from strateg import __version__
+from strateg import __version__, storage
 
 PRODUCT_TOKEN = "strateg"
 MAX_BYTES = 5 * 1024 * 1024
@@ -222,7 +222,10 @@ class Fetcher:
 
     def _save(self, data: dict) -> None:
         self.cache_file.parent.mkdir(parents=True, exist_ok=True)
-        self.cache_file.write_text(json.dumps(data, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+        text = json.dumps(data, ensure_ascii=False, indent=1) + "\n"
+        # атомарно: соседний процесс не увидит обрывка; кэш необязателен, занятый файл загрузку не ломает
+        with contextlib.suppress(storage.FileBusy):
+            storage.atomic_write_bytes(self.cache_file, text.encode("utf-8"), 2.0)
 
     def _throttle(self, host: str) -> None:
         data = self._load()

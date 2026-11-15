@@ -586,30 +586,30 @@ def cmd_metric_add(args: argparse.Namespace) -> int:
     day = _parse_day(args.date)
     if day > proj.now().date():
         raise CliError(f"дата {day} в будущем: показатель вносят на дату, когда он уже измерен")
-    ver = _read(p, "verification")
-    if ver is None or row_id not in {r.id for r in ver.rows}:
-        raise CliError(
-            f"строки {row_id} нет в {VERIFICATION_FILE}: показатель вносят по строке плана проверки; "
-            "номера строк видны в условиях отказа решения"
-        )
-    expected = _expected_units(p, row_id)
-    if expected and unit is None:
-        shown = " или ".join(sorted(expected))
-        raise CliError(
-            f"у значения нет единицы, а порог строки {row_id} задан в «{shown}»: напишите единицу вместе "
-            f"с числом, например --value '{th.show_number(number)} {sorted(expected)[0]}'"
-        )
-    if expected and unit not in expected:
-        raise CliError(
-            f"единицы не совпадают: значение в «{unit}», а порог строки {row_id} задан в "
-            f"«{' или '.join(sorted(expected))}»; процент и рубли не сравниваются — внесите значение "
-            "в единицах порога"
-        )
     note = args.note.strip() if args.note and args.note.strip() else None
     shown = th.show_amount(number, unit)
     started = time.monotonic()
     # Чтение, поиск повтора и запись — под одной блокировкой папки: иначе параллельный вызов затрёт запись.
-    with proj.locked(p.root):
+    with proj.transaction(p):
+        ver = _read(p, "verification")
+        if ver is None or row_id not in {r.id for r in ver.rows}:
+            raise CliError(
+                f"строки {row_id} нет в {VERIFICATION_FILE}: показатель вносят по строке плана проверки; "
+                "номера строк видны в условиях отказа решения"
+            )
+        expected = _expected_units(p, row_id)
+        if expected and unit is None:
+            shown_units = " или ".join(sorted(expected))
+            raise CliError(
+                f"у значения нет единицы, а порог строки {row_id} задан в «{shown_units}»: напишите единицу "
+                f"вместе с числом, например --value '{th.show_number(number)} {sorted(expected)[0]}'"
+            )
+        if expected and unit not in expected:
+            raise CliError(
+                f"единицы не совпадают: значение в «{unit}», а порог строки {row_id} задан в "
+                f"«{' или '.join(sorted(expected))}»; процент и рубли не сравниваются — внесите значение "
+                "в единицах порога"
+            )
         metrics = load_metrics(p)
         same = next(
             (
@@ -629,20 +629,19 @@ def cmd_metric_add(args: argparse.Namespace) -> int:
                 origin="пользователь",
                 recorded_at=proj.now(),
             )
-            with proj.transaction(p.root):
-                metrics.values.append(record)
-                proj.write_text(p.root / METRICS_FILE, proj.dump_yaml(metrics))
-                p.add_event(
-                    p.event(
-                        kind="действие",
-                        name="strateg metric add",
-                        idempotency_hash=proj.key_hash("metric add", row_id, number, unit, str(day)),
-                        status="выполнено",
-                        duration_s=round(time.monotonic() - started, 2),
-                        message=f"{row_id}: {shown} на {day}",
-                    )
+            metrics.values.append(record)
+            proj.write_text(p.root / METRICS_FILE, proj.dump_yaml(metrics))
+            p.add_event(
+                p.event(
+                    kind="действие",
+                    name="strateg metric add",
+                    idempotency_hash=proj.key_hash("metric add", row_id, number, unit, str(day)),
+                    status="выполнено",
+                    duration_s=round(time.monotonic() - started, 2),
+                    message=f"{row_id}: {shown} на {day}",
                 )
-                p.save_state()
+            )
+            p.save_state()
     if same is not None:
         note = same.note
     # Что значение говорит по условиям отказа этой строки.

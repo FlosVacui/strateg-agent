@@ -17,7 +17,7 @@ import pytest
 from helpers import journal_of
 from strateg import project as proj
 from strateg import storage
-from strateg.hooks import effects, rules
+from strateg.hooks import effects, rules, runner
 from strateg.models import CostRecord
 from strateg.project_check import check_project
 from transcripts import assistant
@@ -462,7 +462,7 @@ def test_windows_reader_holding_state_yaml_does_not_leave_the_hash_behind(race, 
     assert_consistent(race)
 
 
-# --- откат ждёт блокировку дольше; не дождался — называет файлы --------------------
+# --- откат идёт под той же блокировкой, что и тело команды --------------------
 
 
 def start_holder(race: Path, projects: Path) -> subprocess.Popen:
@@ -476,40 +476,38 @@ def start_holder(race: Path, projects: Path) -> subprocess.Popen:
     return p
 
 
-def test_rollback_waits_longer_than_an_ordinary_command():
-    assert proj.ROLLBACK_LOCK_TIMEOUT > storage.LOCK_TIMEOUT
+def test_rollback_rewrites_only_files_the_command_changed(race, monkeypatch):
+    written: list[str] = []
+    real = storage.atomic_write_bytes
 
+    def spy(path, data, timeout=None):
+        written.append(path.name)
+        real(path, data, timeout)
 
-def test_rollback_that_cannot_take_the_lock_names_the_files_left_written(race, projects, monkeypatch):
-    monkeypatch.setenv(storage.LOCK_TIMEOUT_ENV, "0.5")
-    claims = race / "claims.yaml"
-    holder = None
-    try:
-        with pytest.raises(proj.CliError) as err, proj.transaction(race):
-            claims.write_text("garbage: [\n", encoding="utf-8")
-            holder = start_holder(race, projects)
-            raise RuntimeError("команда упала")
-        text = str(err.value)
-        assert "откат не выполнен" in text and "claims.yaml" in text and "команда упала" in text
-        assert claims.read_text(encoding="utf-8") == "garbage: [\n"
-    finally:
-        if holder is not None:
-            holder.stdin.close()
-            holder.wait(timeout=30)
-
-
-def test_rollback_waits_for_a_lock_released_soon(race, projects, monkeypatch):
-    monkeypatch.setenv(storage.LOCK_TIMEOUT_ENV, "10")
+    monkeypatch.setattr(storage, "atomic_write_bytes", spy)
     claims = race / "claims.yaml"
     original = claims.read_bytes()
-    holder = None
     with pytest.raises(RuntimeError), proj.transaction(race):
-        claims.write_text("garbage: [\n", encoding="utf-8")
-        holder = start_holder(race, projects)
-        threading.Timer(0.7, holder.stdin.close).start()
+        claims.write_text("garbage: [", encoding="utf-8")
         raise RuntimeError("команда упала")
-    holder.wait(timeout=30)
-    assert claims.read_bytes() == original  # дождался и откатил
+    assert claims.read_bytes() == original
+    assert written == ["claims.yaml"]  # state.yaml, sources.yaml и журнал не тронуты
+
+
+def test_rollback_that_cannot_replace_a_file_names_the_files_left_written(race, monkeypatch):
+    claims = race / "claims.yaml"
+
+    def busy(path, data, timeout=None):
+        raise storage.FileBusy(path, 1)
+
+    with pytest.raises(proj.CliError) as err, proj.transaction(race):
+        claims.write_text("garbage: [", encoding="utf-8")
+        monkeypatch.setattr(storage, "atomic_write_bytes", busy)
+        raise RuntimeError("команда упала")
+    text = str(err.value)
+    assert "откат не выполнен" in text and "claims.yaml" in text and "команда упала" in text
+    monkeypatch.undo()
+    assert claims.read_text(encoding="utf-8") == "garbage: ["
 
 
 def test_transaction_snapshot_and_add_cost_take_the_lock(race, projects, monkeypatch):
@@ -543,13 +541,13 @@ def test_transaction_snapshot_and_add_cost_take_the_lock(race, projects, monkeyp
 
 def test_timeout_values_match_the_documentation(monkeypatch):
     monkeypatch.delenv(storage.LOCK_TIMEOUT_ENV, raising=False)
-    assert storage.LOCK_TIMEOUT == 10.0 and storage.HOOK_LOCK_TIMEOUT == 5.0
-    assert storage.lock_timeout() == 10.0
+    assert storage.LOCK_TIMEOUT == 30.0 and storage.HOOK_LOCK_TIMEOUT == 5.0
+    assert storage.lock_timeout() == 30.0
     assert storage.lock_timeout(storage.HOOK_LOCK_TIMEOUT) == 5.0
     monkeypatch.setenv(storage.LOCK_TIMEOUT_ENV, "0.7")
     assert storage.lock_timeout() == 0.7 and storage.lock_timeout(storage.HOOK_LOCK_TIMEOUT) == 0.7
     monkeypatch.setenv(storage.LOCK_TIMEOUT_ENV, "не число")
-    assert storage.lock_timeout() == 10.0
+    assert storage.lock_timeout() == 30.0
 
 
 def test_two_hook_waits_fit_into_the_hook_timeout_of_the_environment():
@@ -683,3 +681,143 @@ def test_parallel_foreign_hooks_of_one_session_write_one_event(race, projects):
     events = [e for e in journal_of(race) if e["kind"] == "граница прав не активна"]
     assert len(events) == 1 and events[0]["name"] == "s-cursor"
     assert_consistent(race)
+
+
+# --- сводка SessionStart ждёт меньше, чем CLI --------------------
+
+
+def test_session_start_summary_waits_less_than_the_hook_timeout_of_the_environment(monkeypatch):
+    settings = json.loads((ROOT / ".claude" / "settings.json").read_text(encoding="utf-8"))
+    hook_timeout = settings["hooks"]["SessionStart"][0]["hooks"][0]["timeout"]
+    assert runner.SESSION_LOCK_TIMEOUT < hook_timeout < storage.LOCK_TIMEOUT
+    seen = []
+    monkeypatch.delenv(storage.LOCK_TIMEOUT_ENV, raising=False)
+    monkeypatch.setattr(runner, "active_project", lambda: True)
+    monkeypatch.setattr(runner, "_run_cli", lambda argv: seen.append(storage.lock_timeout()) or (0, "ok", ""))
+    assert "ok" in runner.session_summary("startup")
+    assert seen == [pytest.approx(runner.SESSION_LOCK_TIMEOUT, abs=0.5)]  # остаток общего срока
+    assert storage.LOCK_TIMEOUT_ENV not in os.environ  # срок не остаётся в среде процесса
+
+
+def test_session_start_summary_keeps_a_wait_set_by_the_person(monkeypatch):
+    seen = []
+    monkeypatch.setenv(storage.LOCK_TIMEOUT_ENV, "2")
+    monkeypatch.setattr(runner, "active_project", lambda: True)
+    monkeypatch.setattr(runner, "_run_cli", lambda argv: seen.append(storage.lock_timeout()) or (0, "ok", ""))
+    runner.session_summary("startup")
+    assert seen == [pytest.approx(2.0, abs=0.01)] and os.environ[storage.LOCK_TIMEOUT_ENV] == "2"
+
+
+# --- каждый хук ждёт папку меньше своего тайм-аута --------------------
+
+
+def test_every_hook_waits_for_the_folder_less_than_its_own_timeout_in_settings():
+    settings = json.loads((ROOT / ".claude" / "settings.json").read_text(encoding="utf-8"))
+    waits = {  # сколько хук может ждать папку в сумме, секунд
+        "SessionStart": runner.SESSION_LOCK_TIMEOUT,
+        "PostToolUseFailure": runner.SESSION_LOCK_TIMEOUT,
+        "Stop": runner.STOP_LOCK_TIMEOUT,
+        "SubagentStop": runner.STOP_LOCK_TIMEOUT,
+        "UserPromptSubmit": storage.HOOK_LOCK_TIMEOUT,
+        "PreToolUse": 2 * storage.HOOK_LOCK_TIMEOUT,  # чтение проекта и запись события
+    }
+    assert set(settings["hooks"]) == set(waits), "новому хуку нужен заявленный срок ожидания папки"
+    for event, entries in settings["hooks"].items():
+        for entry in entries:
+            for hook in entry["hooks"]:
+                assert waits[event] < hook["timeout"], event
+    assert storage.LOCK_TIMEOUT > min(
+        h["timeout"] for e in settings["hooks"].values() for x in e for h in x["hooks"]
+    )
+
+
+def test_failure_hook_writes_through_the_cli_with_the_hook_wait(monkeypatch):
+    seen = []
+    monkeypatch.delenv(storage.LOCK_TIMEOUT_ENV, raising=False)
+    monkeypatch.setattr(runner, "active_project", lambda: True)
+    monkeypatch.setattr(runner, "_run_cli", lambda argv: seen.append(storage.lock_timeout()) or (0, "", ""))
+    event = json.dumps({"hook_event_name": "PostToolUseFailure", "tool_name": "Bash", "error": "сбой"})
+    runner.run_post_tool_use_failure(event.encode("utf-8"), {})
+    assert seen == [pytest.approx(runner.SESSION_LOCK_TIMEOUT, abs=0.5)]  # остаток общего срока
+    assert storage.LOCK_TIMEOUT_ENV not in os.environ
+
+
+def test_subagent_stop_waits_for_a_busy_folder_one_shared_term_for_all_its_records(
+    race, projects, monkeypatch
+):
+    holder = start_holder(race, projects)
+    try:
+        monkeypatch.delenv(storage.LOCK_TIMEOUT_ENV, raising=False)
+        monkeypatch.setattr(runner, "STOP_LOCK_TIMEOUT", 1.0)
+        event = {
+            "agent_type": "critic",
+            "agent_id": "a-1",
+            "session_id": "s",
+            "hook_event_name": "SubagentStop",
+        }
+        monkeypatch.setattr(runner, "_stop_context", lambda raw, env: (event, race))
+        start = time.monotonic()
+        runner.run_subagent_stop(b"{}", {})
+        elapsed = time.monotonic() - start
+        assert elapsed < 3.5  # след роли, учёт и событие «учёт недоступен» делят один срок, а не 3 по 5 с
+    finally:
+        holder.stdin.close()
+        holder.wait(timeout=30)
+
+
+# --- один срок на весь хук --------------------
+
+
+def run_wrapper(name: str, projects: Path, event: dict) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, "-X", "utf8", str(ROOT / ".claude" / "hooks" / name)],
+        input=json.dumps(event).encode("utf-8"),
+        capture_output=True,
+        env=child_env(projects),
+        cwd=ROOT,
+        timeout=120,
+    )
+
+
+def test_one_deadline_covers_every_wait_inside_it(held):
+    with storage.deadline(1.0):
+        time.sleep(0.7)
+        assert storage.lock_timeout() <= 0.35  # остаток, а не полный срок
+        start = time.monotonic()
+        with pytest.raises(storage.LockTimeout), storage.project_lock(held, timeout=5):
+            pass
+        assert time.monotonic() - start < 0.8
+        with storage.deadline(30):  # вложенный срок внешний не продлевает
+            assert storage.lock_timeout() <= 0.35
+    assert storage.lock_timeout() == storage.LOCK_TIMEOUT  # после блока срока нет
+
+
+def test_stop_hook_with_a_real_transcript_fits_its_timeout_on_a_folder_busy_for_30_seconds(
+    held, projects, tmp_path
+):
+    settings = json.loads((ROOT / ".claude" / "settings.json").read_text(encoding="utf-8"))
+    timeout = settings["hooks"]["Stop"][0]["hooks"][0]["timeout"]
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(assistant("m1", out=10) + chr(10), encoding="utf-8")
+    event = {"hook_event_name": "Stop", "session_id": "s-stop", "cwd": "", "transcript_path": str(transcript)}
+    start = time.monotonic()
+    proc = run_wrapper("stop.py", projects, event)  # папка занята: учёт ждёт, затем событие о сбое учёта
+    elapsed = time.monotonic() - start
+    assert proc.returncode == 0
+    assert elapsed < timeout - 2.5, elapsed  # и учёт, и событие о сбое — в одном сроке 9 с, а не 9 + 9
+
+
+def test_failure_hook_fits_its_timeout_on_a_folder_busy_for_30_seconds(held, projects):
+    settings = json.loads((ROOT / ".claude" / "settings.json").read_text(encoding="utf-8"))
+    timeout = settings["hooks"]["PostToolUseFailure"][0]["hooks"][0]["timeout"]
+    event = {
+        "hook_event_name": "PostToolUseFailure",
+        "session_id": "s-fail",
+        "cwd": "",
+        "tool_name": "Bash",
+        "error": "сбой",
+    }
+    start = time.monotonic()
+    proc = run_wrapper("post_tool_use_failure.py", projects, event)
+    assert proc.returncode == 0
+    assert time.monotonic() - start < timeout - 2.5

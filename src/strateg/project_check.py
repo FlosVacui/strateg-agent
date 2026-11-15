@@ -93,6 +93,12 @@ def sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def key_hash(*parts: object) -> str:
+    """Ключ идемпотентности: хеш команды и входов (общий для команд и проверки журнала)."""
+    payload = json.dumps(list(parts), ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 # ---------------------------------------------------------------------------
 # Сообщения pydantic по-русски
 # ---------------------------------------------------------------------------
@@ -377,6 +383,30 @@ def _check_sources_files(root: Path, sources: SourcesFile, errors: list[str]) ->
             )
 
 
+_SNAPSHOT_NAME = re.compile(r"^i-[1-9][0-9]*\.txt$")
+
+
+def _check_unreferenced_files(root: Path, sources: SourcesFile, errors: list[str]) -> None:
+    """Снимки `sources/i-<n>.txt`, на которые не ссылается ни одна запись реестра.
+
+    Так видна потеря записи: `fetch` записал снимок, а запись об источнике затёрта соседней командой.
+    Считаются только имена снимков; мусор ОС (`Thumbs.db`, `desktop.ini`) и временные файлы записи не в счёт.
+    В `inputs/` потерь не ищется: там лежат файлы человека, а запись `add` не теряется (блокировка папки).
+    """
+    referenced = {s.text_path for s in sources.sources if s.text_path}
+    snapshots = root / "sources"
+    if not snapshots.is_dir():
+        return
+    for p in sorted(snapshots.iterdir()):
+        rel = f"sources/{p.name}"
+        if p.is_file() and _SNAPSHOT_NAME.match(p.name) and rel not in referenced:
+            errors.append(
+                f"{rel}: снимок, на который не ссылается ни одна запись {SOURCES_FILE} "
+                "(запись об источнике потеряна, например параллельной командой). "
+                "Загрузите адрес заново: `strateg fetch <адрес>`; лишний файл уберите вручную"
+            )
+
+
 def _find_cycle(edges: dict[str, list[str]]) -> list[str] | None:
     """Первый цикл в графе ссылок без рекурсии: список номеров по кругу или None."""
     state: dict[str, int] = {}  # 1 — на текущем пути, 2 — разобран
@@ -512,7 +542,72 @@ def _check_claims(root: Path, sources: SourcesFile, claims: ClaimsFile, errors: 
         errors.append(f"{CLAIMS_FILE}: цикл замены: {' -> '.join(cycle)}")
 
 
+def _intact(root: Path, s: Source) -> bool:
+    """Источник получен, а его снимок или материал на месте и совпадает с записанным хешем."""
+    if s.access != "получен" or (s.text_path is None and s.path is None):
+        return False
+    for rel in (s.text_path, s.path):
+        if rel is not None and not (root / rel).is_file():
+            return False
+    return s.text_path is None or not s.text_sha256 or sha256_file(root / s.text_path) == s.text_sha256
+
+
+def _one_source(root: Path, group: list[Source], refreshed: set[str]) -> bool:
+    """Источники одного адреса — по сути один: звенья одной цепочки перепроверок (`refreshes`).
+
+    Новый номер после `fetch --refresh` с изменившимся текстом — законное второе звено, а не двойной источник.
+    Нужен один последний источник (на него никто не ссылается через `refreshes`), он цел, а остальные звенья
+    связаны с ним цепочкой. Два несвязанных источника на адрес — двойной источник.
+    """
+    ids = {s.id for s in group}
+    tips = [s for s in group if s.id not in refreshed]
+    if len(tips) != 1 or not _intact(root, tips[0]):
+        return False
+    by_id = {s.id: s for s in group}
+    reached = {tips[0].id}
+    link = tips[0]
+    while link.refreshes in ids and link.refreshes not in reached:
+        reached.add(link.refreshes)
+        link = by_id[link.refreshes]
+    return reached == ids
+
+
+def _harmless_repeats(root: Path, sources: SourcesFile | None) -> set[str]:
+    """Ключи, у которых повторное «выполнено» в журнале безвредно.
+
+    Повтор остаётся от гонки параллельных команд (или от повторной загрузки после неё): команда записала
+    «выполнено» второй раз с тем же ключом. Он безвреден, когда в реестре один источник на этот адрес
+    (`fetch`; цепочка перепроверок `refreshes` — один источник) или на этот файл (`add`) и его снимок цел:
+    двойного источника и потерянной записи за ним нет.
+    Журнал только дописывается, поэтому строки повтора остаются, а проверка их принимает.
+    """
+    if sources is None:
+        return set()
+    by_address: dict[tuple[str, str | None], list[Source]] = {}
+    by_material: dict[str, list[Source]] = {}
+    for s in sources.sources:
+        if s.url is not None:
+            region = s.fetch.region if s.fetch else None
+            for url in {s.url, *(s.other_urls or [])}:
+                by_address.setdefault((url, region), []).append(s)
+        if s.material_sha256:
+            by_material.setdefault(s.material_sha256, []).append(s)
+    refreshed = {s.refreshes for s in sources.sources if s.refreshes}
+    keys = {
+        key_hash("fetch", url, region)
+        for (url, region), group in by_address.items()
+        if _one_source(root, group, refreshed)
+    }
+    keys |= {
+        key_hash("add", sha)
+        for sha, group in by_material.items()
+        if len(group) == 1 and _intact(root, group[0])
+    }
+    return keys
+
+
 def _check_events(
+    root: Path,
     events: list[JournalEvent],
     sources: SourcesFile | None,
     errors: list[str],
@@ -520,10 +615,11 @@ def _check_events(
 ) -> None:
     done: dict[str, int] = {}
     ids = {s.id for s in sources.sources} if sources else None
+    harmless = _harmless_repeats(root, sources)
     for n, e in enumerate(events, start=1):
         h = e.idempotency_hash
         if e.kind == "действие" and e.status == "выполнено" and h:
-            if h in done:
+            if h in done and h not in harmless:
                 errors.append(
                     f"{JOURNAL_FILE}, строка {n}: действие уже выполнено (строка {done[h]}), "
                     "повторная отметка выполнения с тем же ключом"
@@ -1297,6 +1393,7 @@ def check_project(root: Path | str) -> list[str]:
                     f"{s.refreshes}"
                 )
         _check_sources_files(root, sources, errors)
+        _check_unreferenced_files(root, sources, errors)
     if isinstance(sources, SourcesFile) and isinstance(claims, ClaimsFile):
         _check_claims(root, sources, claims, errors)
 
@@ -1316,7 +1413,7 @@ def check_project(root: Path | str) -> list[str]:
             continue
         if check == "events":
             known_sources = sources if isinstance(sources, SourcesFile) else None
-            _check_events(records, known_sources, errors, frame_present)
+            _check_events(root, records, known_sources, errors, frame_present)
             _check_journal_rules(
                 state if isinstance(state, ProjectState) else None, known_sources, records, errors
             )

@@ -372,24 +372,41 @@ def _move(src: Path, folder: Path) -> Path:
     return target
 
 
-def _next_number(p: Project) -> int:
-    return max((int(s.id.split("-")[1]) for s in p.sources.sources), default=0) + 1
-
-
 def _text_rel(p: Project, name: str, number: int, *, pii: bool) -> str:
     """Где лежит извлечённый текст. У материала с персональными данными имя нейтральное: в имени файла
-    тоже бывают фамилии и номера."""
+    тоже бывают фамилии и номера.
+
+    Занятое имя обходится номером; занятый файл не перезаписывается никогда, даже если записи о нём нет.
+    """
     if pii:
-        return f"{INPUTS}/i-{number}.txt"
+        return f"{INPUTS}/i-{number}.txt"  # номер выбран мимо занятых `i-<n>.txt` (`next_source_number`)
     used = {s.text_path for s in p.sources.sources}
     rel = f"{INPUTS}/{name}.txt"
     if rel in used or (p.root / rel).exists():
-        rel = f"{INPUTS}/{name}.{number}.txt"
+        k = number
+        while (p.root / f"{INPUTS}/{name}.{k}.txt").exists():
+            k += 1
+        rel = f"{INPUTS}/{name}.{k}.txt"
     return rel
 
 
+def _known_material(p: Project, rel: str, sha: str) -> Source | None:
+    """Источник с тем же файлом (sha256); текст, который CLI уже извлёк, материалом не считается."""
+    for s in p.sources.sources:
+        if s.text_path == rel:
+            raise CliError(
+                f"{rel} — текст, который CLI уже извлёк для {s.id}, а не материал: добавляйте исходные файлы"
+            )
+    return next((s for s in p.sources.sources if s.material_sha256 == sha), None)
+
+
 def register(p: Project, file: Path, forced_kind: str | None) -> Outcome:
-    """Регистрирует материал из `inputs/`; повтор того же файла (sha256) отдаёт прежний источник."""
+    """Регистрирует материал из `inputs/`; повтор того же файла (sha256) отдаёт прежний источник.
+
+    Файл читается и разбирается (DOCX, PDF, проверки текста) без блокировки папки проекта. Под блокировкой —
+    сверка с реестром заново (параллельная команда могла записать тот же файл), номер `И-n`, текст материала,
+    запись в реестр и события (ADR-0002, «Параллельные команды»).
+    """
     started = time.monotonic()
     rel = inputs_relpath(p, file)
     ext = file.suffix.lower()
@@ -401,17 +418,20 @@ def register(p: Project, file: Path, forced_kind: str | None) -> Outcome:
             "в имени файла есть персональные данные (телефон, почта или номер документа): "
             "переименуйте файл и добавьте его снова"
         )
-    if file.stat().st_size > MAX_FILE_BYTES:
-        raise CliError(f"файл больше {MAX_FILE_BYTES // 1024 // 1024} МБ: разделите его на части")
-    body = file.read_bytes()
+    try:
+        if file.stat().st_size > MAX_FILE_BYTES:
+            raise CliError(f"файл больше {MAX_FILE_BYTES // 1024 // 1024} МБ: разделите его на части")
+        body = file.read_bytes()
+    except FileNotFoundError:  # исходник с ПДн только что унёс сосед, который добавлял тот же файл
+        moved = moved_duplicate(p, file.name)
+        if moved is None:
+            raise CliError(
+                f"файл {file.name} исчез из inputs/ во время добавления: повторите `strateg add`"
+            ) from None
+        return moved
     sha = proj.sha256_bytes(body)
 
-    for s in p.sources.sources:
-        if s.text_path == rel:
-            raise CliError(
-                f"{rel} — текст, который CLI уже извлёк для {s.id}, а не материал: добавляйте исходные файлы"
-            )
-    twin = next((s for s in p.sources.sources if s.material_sha256 == sha), None)
+    twin = _known_material(p, rel, sha)  # источники не пропадают: повтор виден и без блокировки
     if twin is not None:
         return _duplicate(p, twin, file, rel)
 
@@ -421,42 +441,47 @@ def register(p: Project, file: Path, forced_kind: str | None) -> Outcome:
         report = safety.inspect_material(extract_text(body, ext, kind))
         text = report.text
     pii = bool(report and report.replacements) or name_hit
-    number = _next_number(p)
-    sid = f"И-{number}"
-    text_rel = _text_rel(p, file.name, number, pii=pii) if text is not None else None
 
-    data: dict[str, object] = {
-        "id": sid,
-        "kind": kind,
-        "path": text_rel if pii else rel,
-        "access": "получен",
-        "untrusted": kind != "заметка пользователя",
-        "material_sha256": sha,
-    }
-    if report is not None and text_rel is not None and text is not None:
-        data.update(
-            text_path=text_rel,
-            text_sha256=proj.sha256_bytes(text.encode("utf-8")),
-            suspicious=bool(report.instruction_signs),
-            anonymized=[*report.anonymized, *([NAME_CATEGORY] if name_hit else [])],
-            closed_markers=report.closed_markers,
-        )
-    try:
-        source = Source.model_validate(data)
-    except ValidationError as exc:
-        raise CliError(
-            f"материал нельзя зарегистрировать: путь «{rel}» не подходит (пробелы по краям, "
-            "точка в конце имени "
-            "или запрещённые знаки); переименуйте файл"
-        ) from exc
+    outcome: Outcome | None = None
+    with proj.transaction(p, rollback=False):
+        twin = _known_material(p, rel, sha)
+        if twin is not None:  # пока разбирали файл, его записала другая команда
+            return _duplicate(p, twin, file, rel)
+        number = proj.next_source_number(p)
+        sid = f"И-{number}"
+        text_rel = _text_rel(p, file.name, number, pii=pii) if text is not None else None
 
-    outcome = Outcome(source=source, report=report)
-    original_moved: Path | None = None
-    written = False
-    try:
-        if pii:
-            original_moved = _move(file, pending_dir(p, sid))
-        with proj.transaction(p.root, rollback=False):
+        data: dict[str, object] = {
+            "id": sid,
+            "kind": kind,
+            "path": text_rel if pii else rel,
+            "access": "получен",
+            "untrusted": kind != "заметка пользователя",
+            "material_sha256": sha,
+        }
+        if report is not None and text_rel is not None and text is not None:
+            data.update(
+                text_path=text_rel,
+                text_sha256=proj.sha256_bytes(text.encode("utf-8")),
+                suspicious=bool(report.instruction_signs),
+                anonymized=[*report.anonymized, *([NAME_CATEGORY] if name_hit else [])],
+                closed_markers=report.closed_markers,
+            )
+        try:
+            source = Source.model_validate(data)
+        except ValidationError as exc:
+            raise CliError(
+                f"материал нельзя зарегистрировать: путь «{rel}» не подходит (пробелы по краям, "
+                "точка в конце имени "
+                "или запрещённые знаки); переименуйте файл"
+            ) from exc
+
+        outcome = Outcome(source=source, report=report)
+        original_moved: Path | None = None
+        written = False
+        try:
+            if pii:
+                original_moved = _move(file, pending_dir(p, sid))
             if text is not None and text_rel is not None:
                 proj.write_text(p.root / text_rel, text)
                 written = True
@@ -491,21 +516,49 @@ def register(p: Project, file: Path, forced_kind: str | None) -> Outcome:
                 )
             )
             p.save_state()
-    except BaseException:
-        if written and text_rel:
-            (p.root / text_rel).unlink(missing_ok=True)
-        if original_moved is not None and not file.exists():
-            shutil.move(str(original_moved), str(file))
-        raise
+        except BaseException:
+            if written and text_rel:
+                (p.root / text_rel).unlink(missing_ok=True)
+            if original_moved is not None and not file.exists():
+                shutil.move(str(original_moved), str(file))
+            raise
     _warnings(outcome)
     return outcome
+
+
+def moved_duplicate(p: Project, name: str) -> Outcome | None:
+    """Файла в `inputs/` уже нет: его перенёс сосед (исходник с ПДн). Отдаёт прежний источник без переноса.
+
+    Источник узнаётся по содержимому: в `.tmp/pending/` или в папке подтверждённых лежит файл с таким именем
+    (перенос мог добавить к имени номер), и его sha256 равен `material_sha256` источника. Одно имя у разных
+    материалов не путает их; если подходят несколько, берётся последний по номеру.
+    """
+    with proj.locked(p.root):
+        p.refresh()
+    stem, suffix = Path(name).stem, Path(name).suffix
+    found: list[Source] = []
+    for s in p.sources.sources:
+        if not (s.anonymized and s.material_sha256):
+            continue
+        for folder in (pending_dir(p, s.id), private_dir(p.id, s.id)):
+            candidates = [f for f in folder.glob("*") if f.is_file()] if folder.is_dir() else []
+            if any(
+                (f.name == name or (f.name.startswith(f"{stem}.") and f.name.endswith(suffix)))
+                and proj.sha256_bytes(f.read_bytes()) == s.material_sha256
+                for f in candidates
+            ):
+                found.append(s)
+                break
+    if not found:
+        return None
+    return Outcome(source=max(found, key=lambda x: int(x.id.split("-")[1])), duplicate=True)
 
 
 def _duplicate(p: Project, twin: Source, file: Path, rel: str) -> Outcome:
     """Тот же файл уже зарегистрирован. Лишняя копия исходника с персональными данными в `inputs/` уходит
     туда же, где лежит исходник: в `inputs/` ей делать нечего."""
     outcome = Outcome(source=twin, duplicate=True)
-    if twin.anonymized and twin.path != rel:
+    if twin.anonymized and twin.path != rel and file.is_file():  # исходник мог унести сосед
         if twin.anonymization_confirmed:
             _move(file, private_dir(p.id, twin.id))
             outcome.moved = private_label(p.id, twin.id)
@@ -559,18 +612,18 @@ def line_context(text: str, line: int, width: int = 110) -> str:
 
 def confirm(p: Project, sid: str) -> dict[str, object]:
     """Человек подтвердил замены (или то, что на изображении нет персональных данных)."""
-    source = next((s for s in p.sources.sources if s.id == sid), None)
-    if source is None:
-        raise CliError(f"источника {sid} нет в реестре")
-    if source.path is None:
-        raise CliError(f"{sid} — веб-источник: подтверждать нечего")
-    pending = source.anonymized and not source.anonymization_confirmed
-    image = source.kind == "изображение" and not source.no_personal_data_confirmed
-    if not pending and not image:
-        return {"source": sid, "changed": False, "moved": None, "note": f"у {sid} нечего подтверждать"}
     moved_to: str | None = None
     note = ""
-    with proj.transaction(p.root, rollback=False):
+    with proj.transaction(p, rollback=False):
+        source = next((s for s in p.sources.sources if s.id == sid), None)
+        if source is None:
+            raise CliError(f"источника {sid} нет в реестре")
+        if source.path is None:
+            raise CliError(f"{sid} — веб-источник: подтверждать нечего")
+        pending = source.anonymized and not source.anonymization_confirmed
+        image = source.kind == "изображение" and not source.no_personal_data_confirmed
+        if not pending and not image:
+            return {"source": sid, "changed": False, "moved": None, "note": f"у {sid} нечего подтверждать"}
         if pending:
             holder = pending_dir(p, sid)
             files = sorted(f for f in holder.glob("*") if f.is_file()) if holder.is_dir() else []

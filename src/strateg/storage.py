@@ -31,18 +31,47 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 
 LOCK_REL = ".tmp/lock"
-LOCK_TIMEOUT = 10.0  # CLI; хук берёт меньше: его собственный таймаут в настройках — 15 с
+LOCK_TIMEOUT = (
+    30.0  # CLI: в очереди пять исследователей и главный агент; хук берёт меньше (15 с в настройках)
+)
 HOOK_LOCK_TIMEOUT = 5.0
 LOCK_TIMEOUT_ENV = "STRATEG_LOCK_TIMEOUT"  # секунды; для тестов и для разбора зависшей блокировки
 STATE_FILE, JOURNAL_FILE = "state.yaml", "journal.jsonl"
 COST_FILE = "cost.jsonl"
 
 
-def lock_timeout(default: float = LOCK_TIMEOUT) -> float:
+_DEADLINE: float | None = None  # общий срок хука: момент (time.monotonic), позже которого папку не ждут
+
+
+@contextlib.contextmanager
+def deadline(seconds: float) -> Iterator[None]:
+    """Один срок на всё ожидание блока: каждый следующий захват папки и замена файла ждут только остаток.
+
+    Для хуков: их тайм-аут один на весь вызов, а захватов папки в нём несколько (открыть проект, записать
+    событие, записать учёт). Момент окончания считается один раз; вложенный срок не продлевает внешний.
+    """
+    global _DEADLINE
+    previous = _DEADLINE
+    end = time.monotonic() + seconds
+    _DEADLINE = end if previous is None else min(previous, end)
     try:
-        return float(os.environ[LOCK_TIMEOUT_ENV])
+        yield
+    finally:
+        _DEADLINE = previous
+
+
+def _remaining(seconds: float) -> float:
+    if _DEADLINE is None:
+        return seconds
+    return min(seconds, max(_DEADLINE - time.monotonic(), 0.0))
+
+
+def lock_timeout(default: float = LOCK_TIMEOUT) -> float:
+    """Сколько ждать: срок из среды (`STRATEG_LOCK_TIMEOUT`) или `default`, не дольше остатка общего срока."""
+    try:
+        return _remaining(float(os.environ[LOCK_TIMEOUT_ENV]))
     except (KeyError, ValueError):
-        return default
+        return _remaining(default)
 
 
 class LockTimeout(Exception):
@@ -145,10 +174,18 @@ def _acquire_file(root: Path, deadline: float, timeout: float) -> int:
     return fd
 
 
+def lock_held(root: Path) -> bool:
+    """Этот процесс сейчас держит блокировку папки `root` (внутри `project_lock`)."""
+    key = os.path.normcase(os.path.abspath(root))
+    with _ENTRIES_GUARD:
+        entry = _ENTRIES.get(key)
+    return entry is not None and entry.depth > 0 and entry.fd is not None
+
+
 @contextlib.contextmanager
 def project_lock(root: Path, timeout: float | None = None) -> Iterator[None]:
     """Занимает папку проекта на время блока. Вложенный вызов в том же процессе блокировку не повторяет."""
-    timeout = lock_timeout() if timeout is None else timeout
+    timeout = lock_timeout() if timeout is None else _remaining(timeout)
     if not root.is_dir():  # проект создаётся или его нет: защищать нечего, и папку блокировка не создаёт
         yield
         return

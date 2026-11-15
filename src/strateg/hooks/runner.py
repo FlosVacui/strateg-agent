@@ -10,15 +10,19 @@ from __future__ import annotations
 import contextlib
 import io
 import json
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from strateg import storage
 from strateg.hooks import cost, effects, flags, rules
 
 NO_PROJECT_TEXT = "Проекта нет, начни с `strateg new`."
 MAX_REASON_CHARS = 300
 PEEK_SOURCES = frozenset({"compact", "fork"})
+# Сроки ожидания папки: каждый хук ждёт меньше своего тайм-аута из `.claude/settings.json` (15 с).
+SESSION_LOCK_TIMEOUT = 10.0  # хуки через CLI: SessionStart (сводка) и PostToolUseFailure; CLI ждёт 30 с
+STOP_LOCK_TIMEOUT = 9.0  # общий срок на все записи хуков Stop и SubagentStop
 
 
 @dataclass(frozen=True)
@@ -129,6 +133,14 @@ def active_project() -> bool:
     return True
 
 
+@contextlib.contextmanager
+def _session_lock_wait() -> Iterator[None]:
+    """Команда хука (сводка, запись ошибки) ждёт папку не дольше `SESSION_LOCK_TIMEOUT` на всё: открытие
+    проекта и запись вместе, а не по 10 с каждое. Срок из среды, если он меньше, главнее."""
+    with storage.deadline(SESSION_LOCK_TIMEOUT):
+        yield
+
+
 def session_summary(source: str) -> str:
     """Сводка «где остановились». После сжатия контекста и в ответвлённой сессии — `--peek`.
 
@@ -138,7 +150,8 @@ def session_summary(source: str) -> str:
         return NO_PROJECT_TEXT
     peek = source in PEEK_SOURCES
     argv = ["status", "--brief", *(["--peek"] if peek else [])]
-    code, out, err = _run_cli(argv)
+    with _session_lock_wait():
+        code, out, err = _run_cli(argv)
     title = "Сводка «где остановились» (`strateg status --brief" + (" --peek`):" if peek else "`):")
     if code != 0:
         return f"{title}\nне получена: {err or out}. Выполни `uv run strateg status`."
@@ -183,7 +196,8 @@ def run_post_tool_use_failure(raw: bytes, env: Mapping[str, str]) -> HookResult:
         argv = ["event", "error", "--message=" + error_message(event)]
         if isinstance(tool, str) and tool.strip():
             argv.append("--tool=" + tool.strip())
-        _run_cli(argv)
+        with _session_lock_wait():
+            _run_cli(argv)
     except Exception:
         pass  # сбой учёта работу не блокирует
     return HookResult()
@@ -231,7 +245,8 @@ def run_stop(raw: bytes, env: Mapping[str, str]) -> HookResult:
         found = _stop_context(raw, env)
         if found is not None:
             event, root = found
-            cost.refresh(event, root, main=True, sweep=True)
+            with storage.deadline(STOP_LOCK_TIMEOUT):  # один срок на учёт и событие о сбое учёта
+                cost.refresh(event, root, main=True, sweep=True)
     except Exception:  # noqa: BLE001 - сбой учёта работу не блокирует
         pass
     return HookResult()
@@ -243,8 +258,9 @@ def run_subagent_stop(raw: bytes, env: Mapping[str, str]) -> HookResult:
         found = _stop_context(raw, env)
         if found is not None:
             event, root = found
-            cost.role_done(event, root)
-            cost.refresh(event, root, main=False, sweep=False, own_required=True)
+            with storage.deadline(STOP_LOCK_TIMEOUT):  # один срок на след роли, учёт и событие о сбое учёта
+                cost.role_done(event, root)
+                cost.refresh(event, root, main=False, sweep=False, own_required=True)
     except Exception:  # noqa: BLE001 - сбой учёта работу не блокирует
         pass
     return HookResult()
