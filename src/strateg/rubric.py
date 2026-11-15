@@ -335,12 +335,6 @@ def cmd_rubric_record(args: argparse.Namespace) -> int:
             ["значения по умолчанию нет: иначе проверка, сделанная самим агентом, пройдёт как независимая"],
         )
     p = _open(args)
-    if STEP_INDEX[p.state.step] < STEP_INDEX[FIRST_FULL_STEP]:
-        raise UsageError(
-            f"проверка полноты — шаг {FIRST_FULL_STEP}, а проект на шаге {p.state.step}: "
-            "до шага 6 часть А проверена не полностью и итог «пройдено» не выносится; "
-            f"сверить файлы до шага 6 можно командой `strateg rubric check --step {p.state.step}`"
-        )
     rubric = load_rubric()
     try:
         answers = parse_answers(_read_input(args.file), rubric)
@@ -349,36 +343,43 @@ def cmd_rubric_record(args: argparse.Namespace) -> int:
     except CliError as err:  # вход не по формату — ошибка входа (код 2), а не итог проверки
         raise UsageError(err.message, err.details) from err
     started = time.monotonic()
-    results = run_checks(p.root, rubric, p.state.step)
-    new = _build(p, rubric, results, answers, by)
+    # Проверка файлов, прежний итог и номер записи читаются под блокировкой: запись не потеряется.
+    with proj.transaction(p):
+        if STEP_INDEX[p.state.step] < STEP_INDEX[FIRST_FULL_STEP]:
+            raise UsageError(
+                f"проверка полноты — шаг {FIRST_FULL_STEP}, а проект на шаге {p.state.step}: "
+                "до шага 6 часть А проверена не полностью и итог «пройдено» не выносится; "
+                f"сверить файлы до шага 6 можно командой `strateg rubric check --step {p.state.step}`"
+            )
+        results = run_checks(p.root, rubric, p.state.step)
+        new = _build(p, rubric, results, answers, by)
 
-    path = p.root / COMPLETENESS_FILE
-    old_bytes = path.read_bytes() if path.is_file() else None
-    old: CompletenessFile | None = None
-    if old_bytes is not None:
-        try:
-            old = CompletenessFile.model_validate(proj.read_yaml(path), by_name=False)
-        except (CliError, ValidationError):
-            old = None
-    call = critic_call(p) if by == "критик" else None
-    upgraded = call == "подтверждён" and old is not None and old.critic_call != "подтверждён"
-    if (
-        old is not None and _same(old, new) and not upgraded
-    ):  # новый вызов критика — запись не «без изменений»
-        same = new.model_copy(update={"critic_call": old.critic_call})
-        return _emit_record(
-            args,
-            {"changed": False, **_record_data(rubric, same)},
-            [f"{COMPLETENESS_FILE}: без изменений", *_summary_lines(rubric, same)],
-        )
-    if call is not None:
-        new = new.model_copy(update={"critic_call": call})
-    data = _record_data(rubric, new)
+        path = p.root / COMPLETENESS_FILE
+        old_bytes = path.read_bytes() if path.is_file() else None
+        old: CompletenessFile | None = None
+        if old_bytes is not None:
+            try:
+                old = CompletenessFile.model_validate(proj.read_yaml(path), by_name=False)
+            except (CliError, ValidationError):
+                old = None
+        call = critic_call(p) if by == "критик" else None
+        upgraded = call == "подтверждён" and old is not None and old.critic_call != "подтверждён"
+        if (
+            old is not None and _same(old, new) and not upgraded
+        ):  # новый вызов критика — запись не «без изменений»
+            same = new.model_copy(update={"critic_call": old.critic_call})
+            return _emit_record(
+                args,
+                {"changed": False, **_record_data(rubric, same)},
+                [f"{COMPLETENESS_FILE}: без изменений", *_summary_lines(rubric, same)],
+            )
+        if call is not None:
+            new = new.model_copy(update={"critic_call": call})
+        data = _record_data(rubric, new)
 
-    text = proj.dump_yaml(new)
-    history = _history_path(p) if old_bytes is not None else None
-    runs = sum(1 for e in p.journal if e.kind == "действие" and e.name == "strateg rubric record")
-    with proj.transaction(p.root):
+        text = proj.dump_yaml(new)
+        history = _history_path(p) if old_bytes is not None else None
+        runs = sum(1 for e in p.journal if e.kind == "действие" and e.name == "strateg rubric record")
         if history is not None and old_bytes is not None:
             dest = p.root / history
             dest.parent.mkdir(parents=True, exist_ok=True)

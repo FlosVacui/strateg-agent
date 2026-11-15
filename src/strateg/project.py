@@ -3,7 +3,8 @@
 Все файлы пишутся через модели из `strateg.models` (UTF-8 без BOM, окончания LF), состояние и реестры —
 целиком через временный файл, журналы — только добавлением строки. После изменения хеши файлов
 попадают в `state.yaml` (поле `files`), а `transaction` откатывает изменение, если проверка проекта
-нашла новые ошибки.
+нашла новые ошибки. `transaction` держит блокировку папки на всё тело блока (ADR-0002, «Параллельные
+команды»).
 """
 
 from __future__ import annotations
@@ -44,9 +45,9 @@ from strateg.project_check import (
     TRACKED_OUTPUTS,
     _explain,
     check_project,
+    key_hash,
 )
 
-ROLLBACK_LOCK_TIMEOUT = 30.0  # откат ждёт блокировку дольше обычного
 HOOK_ACTOR = "хук"  # исполнитель событий, которые пишут хуки Claude Code
 ACTIVE_FILE = ".active"
 PROJECTS_ENV = "STRATEG_PROJECTS_DIR"  # где лежат проекты (по умолчанию — projects/ репозитория)
@@ -83,12 +84,6 @@ def now() -> dt.datetime:
 
 def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
-
-
-def key_hash(*parts: object) -> str:
-    """Ключ идемпотентности: хеш команды и входов."""
-    payload = json.dumps(list(parts), ensure_ascii=False, separators=(",", ":"))
-    return sha256_bytes(payload.encode("utf-8"))
 
 
 def history_path(rel_path: str, version: int) -> str:
@@ -249,6 +244,7 @@ class Project:
     # Событие «изменено вне агента» по ним пишет первое `save_state` команды.
     outside: list[tuple[str, str]] = field(default_factory=list)
     _outside_written: bool = False
+    _tx_depth: int = field(default=0, repr=False)  # вложенность `transaction` этого объекта
 
     @property
     def id(self) -> str:
@@ -284,6 +280,16 @@ class Project:
         project.outside = project.find_outside_changes()
         return project
 
+    def refresh(self) -> None:
+        """Перечитывает файлы проекта в этот же объект: записи, которые успели добавить соседние процессы.
+
+        Звать только под блокировкой папки: `transaction` делает это сама. Всё, что команда держала в памяти
+        до вызова (источники, утверждения, журнал), заменяется свежим; ссылки на прежние записи устаревают.
+        """
+        fresh = type(self)._load(self.root)
+        self.state, self.sources, self.claims = fresh.state, fresh.sources, fresh.claims
+        self.journal, self.costs, self.outside = fresh.journal, fresh.costs, fresh.outside
+
     # --- запись ---
     def find_outside_changes(self) -> list[tuple[str, str]]:
         """Файлы, изменённые не командой CLI: хеш не совпал с `state.files`, файл удалён или файл выхода
@@ -318,10 +324,19 @@ class Project:
             self.state.files = self._hashes()
             write_text(self.root / STATE_FILE, dump_yaml(self.state))
 
+    def _require_lock(self, what: str) -> None:
+        """Реестры пишут целиком, поэтому только под блокировкой папки и по перечитанному состоянию."""
+        if not storage.lock_held(self.root):
+            raise RuntimeError(
+                f"{what} записан вне блокировки папки проекта: изменение идёт внутри `transaction(project)`"
+            )
+
     def save_sources(self) -> None:
+        self._require_lock(SOURCES_FILE)
         write_text(self.root / SOURCES_FILE, dump_yaml(self.sources))
 
     def save_claims(self) -> None:
+        self._require_lock(CLAIMS_FILE)
         write_text(self.root / CLAIMS_FILE, dump_yaml(self.claims))
 
     def add_event(self, event: JournalEvent) -> None:
@@ -365,6 +380,18 @@ class Project:
         kw.setdefault("actor", "CLI")
         kw.setdefault("step", self.state.step)
         return JournalEvent(schema_version=SCHEMA_VERSION, **kw)
+
+
+def next_source_number(p: Project) -> int:
+    """Номер нового источника: после наибольшего в реестре и мимо занятых файлов `i-<n>.txt`.
+
+    Файл без записи — след потерянной записи: его не перезаписывают, пока `check` не покажет потерю и человек
+    её не разберёт. Звать под блокировкой папки.
+    """
+    n = max((int(s.id.split("-")[1]) for s in p.sources.sources), default=0) + 1
+    while any((p.root / folder / f"i-{n}.txt").exists() for folder in ("sources", "inputs")):
+        n += 1
+    return n
 
 
 # ---------------------------------------------------------------------------
@@ -491,71 +518,87 @@ def _changed_files(root: Path, before: dict[Path, bytes | None]) -> list[str]:
 
 @contextlib.contextmanager
 def transaction(
-    root: Path,
+    target: Project | Path,
     *,
     rollback: bool = True,
     tolerate: Callable[[str], bool] | None = None,
     block: Callable[[str], bool] | None = None,
-) -> Iterator[None]:
-    """Изменения внутри блока откатываются при исключении и при новых ошибках проверки проекта.
+) -> Iterator[Project | None]:
+    """Изменение проекта целиком под блокировкой папки: от чтения состояния до последней записи.
 
-    С `rollback=False` откатывается только исключение; новые ошибки проверки сообщает сам вызывающий код.
-    `tolerate` называет новые ошибки, которые откат не вызывают (команда сама поправит их следующей записью);
-    `block` называет ошибки, которые вызывают откат, даже если были до записи.
-    После отката папка такая же, как до блока: новые файлы и пустые папки в `history/` убраны.
+    Блок идёт под блокировкой, поэтому записи соседних процессов (другая команда, хук) не вклиниваются
+    между чтением и записью. Если передан открытый проект, под блокировкой он перечитывается в тот же объект
+    (`Project.refresh`): номер, запись и повтор строятся по тому, что лежит в папке сейчас, а не по снимку,
+    снятому при открытии. Долгую работу (сеть, разбор PDF и DOCX) делают до блока.
+
+    Изменения внутри блока откатываются при исключении и при новых ошибках проверки проекта. Блокировка
+    держится и во время отката, поэтому откат не стирает чужих записей. С `rollback=False` откатывается только
+    исключение; новые ошибки проверки сообщает сам вызывающий код. `tolerate` называет новые ошибки, которые
+    откат не вызывают (команда сама поправит их следующей записью); `block` называет ошибки, которые вызывают
+    откат, даже если были до записи. После отката папка такая же, как до блока: новые файлы и пустые папки
+    в `history/` убраны.
+
+    Вложенный блок того же проекта в том же процессе проект не перечитывает: в памяти уже лежат правки
+    внешнего блока.
     """
+    project = target if isinstance(target, Project) else None
+    root = project.root if project is not None else Path(target)
     with locked(root):
+        if project is not None and project._tx_depth == 0:
+            project.refresh()
         before = {p: (p.read_bytes() if p.is_file() else None) for p in _tracked_files(root)}
-        baseline = set(check_project(root))
-    history_existed = (root / HISTORY_DIR).is_dir()
+        baseline = set(check_project(root)) if rollback else set()
+        history_existed = (root / HISTORY_DIR).is_dir()
 
-    def restore_files() -> None:
-        journal = root / JOURNAL_FILE
-        foreign = _hook_lines_after(journal, before.get(journal))
-        for p in _tracked_files(root):
-            if p not in before:
-                p.unlink(missing_ok=True)
-        for p, data in before.items():
-            if data is None:
-                p.unlink(missing_ok=True)
-            else:
-                storage.atomic_write_bytes(p, data)
-        if foreign:  # события хука, записанные за время команды, откат не трогает
-            kept = (before[journal] or b"") + foreign
-            storage.append_bytes(journal, foreign)
-            _rehash_journal(root, before[journal] or b"", kept)
-        _drop_empty_history(root, keep_root=history_existed)
+        def restore_files() -> None:
+            journal = root / JOURNAL_FILE
+            foreign = _hook_lines_after(journal, before.get(journal))
+            for p in _tracked_files(root):
+                if p not in before:
+                    p.unlink(missing_ok=True)
+            for p, data in before.items():
+                if data is None:
+                    p.unlink(missing_ok=True)
+                elif not p.is_file() or p.read_bytes() != data:  # нетронутые файлы не переписываем
+                    storage.atomic_write_bytes(p, data)
+            if foreign:  # события хука, записанные за время команды (тем же процессом), откат не трогает
+                kept = (before[journal] or b"") + foreign
+                storage.append_bytes(journal, foreign)
+                _rehash_journal(root, before[journal] or b"", kept)
+            _drop_empty_history(root, keep_root=history_existed)
 
-    def restore(why: str = "") -> None:
-        try:
-            with locked(root, storage.lock_timeout(ROLLBACK_LOCK_TIMEOUT)):
+        def restore(why: str = "") -> None:
+            try:
                 restore_files()
-        except CliError as exc:
-            if not isinstance(exc.__cause__, storage.LockTimeout):
-                raise
-            left = ", ".join(_changed_files(root, before)) or "нет"
-            raise CliError(
-                "откат не выполнен: папка проекта занята другим процессом, изменения команды остались "
-                f"записанными. Остались записанными: {left}. Проверь `strateg check`, когда папку отпустят."
-                + (f" Исходная ошибка: {why}" if why else "")
-            ) from exc
+            except storage.FileBusy as exc:
+                left = ", ".join(_changed_files(root, before)) or "нет"
+                raise CliError(
+                    f"откат не выполнен: {exc} Остались записанными: {left}. "
+                    "Проверь `strateg check`, когда файл отпустят."
+                    + (f" Исходная ошибка: {why}" if why else "")
+                ) from exc
 
-    try:
-        yield
-    except BaseException as original:
-        restore(str(original))
-        raise
-    if rollback:
-        with locked(root):  # не читаем журнал в момент дозаписи хука
-            errors = check_project(root)
-        new = [
-            e
-            for e in errors
-            if (e not in baseline or (block and block(e))) and not (tolerate and tolerate(e))
-        ]
-        if new:
-            restore("проверка проекта нашла ошибки: " + "; ".join(new))
-            raise CliError("проверка проекта нашла ошибки, изменения не записаны", new)
+        if project is not None:
+            project._tx_depth += 1
+        try:
+            try:
+                yield project
+            except BaseException as original:
+                restore(str(original))
+                raise
+            if rollback and _changed_files(root, before):
+                errors = check_project(root)
+                new = [
+                    e
+                    for e in errors
+                    if (e not in baseline or (block and block(e))) and not (tolerate and tolerate(e))
+                ]
+                if new:
+                    restore("проверка проекта нашла ошибки: " + "; ".join(new))
+                    raise CliError("проверка проекта нашла ошибки, изменения не записаны", new)
+        finally:
+            if project is not None:
+                project._tx_depth -= 1
 
 
 # ---------------------------------------------------------------------------
