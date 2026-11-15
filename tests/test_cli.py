@@ -105,3 +105,44 @@ def test_doctor_without_git_is_warning(capsys, monkeypatch):
     out = capsys.readouterr().out
     line = next(x for x in out.splitlines() if "git" in x and x.startswith("["))
     assert line.startswith("[ПРЕД]")
+
+
+def test_doctor_shows_sqlite_version_and_gitleaks(capsys, monkeypatch):
+    """ADR-0011: `strateg doctor` показывает версию SQLite и наличие gitleaks."""
+    import sqlite3
+
+    _utf8_console(monkeypatch)
+    real_which = cli.shutil.which
+    monkeypatch.setattr(
+        cli.shutil, "which", lambda name: "/opt/bin/gitleaks" if name == "gitleaks" else real_which(name)
+    )
+    assert main(["doctor"]) == 0
+    out = capsys.readouterr().out
+    assert any(x.startswith("[OK  ] SQLite") and sqlite3.sqlite_version in x for x in out.splitlines())
+    assert any(x.startswith("[OK  ] gitleaks") and "/opt/bin/gitleaks" in x for x in out.splitlines())
+
+
+def test_doctor_without_gitleaks_is_a_warning_with_the_consequence(capsys, monkeypatch):
+    _utf8_console(monkeypatch)
+    real_which = cli.shutil.which
+    monkeypatch.setattr(cli.shutil, "which", lambda name: None if name == "gitleaks" else real_which(name))
+    assert main(["doctor"]) == 0  # предупреждение код не меняет
+    line = next(x for x in capsys.readouterr().out.splitlines() if "gitleaks" in x and x.startswith("["))
+    assert line.startswith("[ПРЕД]") and "встроенными шаблонами" in line
+
+
+def test_doctor_without_sqlite_module_is_a_warning(capsys, monkeypatch):
+    import builtins
+
+    _utf8_console(monkeypatch)
+    real_import = builtins.__import__
+
+    def no_sqlite(name, *args, **kwargs):
+        if name == "sqlite3":
+            raise ImportError("нет")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_sqlite)
+    assert main(["doctor"]) == 0
+    line = next(x for x in capsys.readouterr().out.splitlines() if "SQLite" in x and x.startswith("["))
+    assert line.startswith("[ПРЕД]")

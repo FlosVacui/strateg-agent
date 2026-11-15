@@ -93,10 +93,31 @@ def _report(name: str, level: str, detail: str) -> str:
     return level
 
 
-def cmd_doctor(args: argparse.Namespace) -> int:
-    """Проверка среды: Python, uv, git, кодировка, запись в `projects/`.
+def _sqlite_line() -> tuple[str, str, str]:
+    """Версия SQLite из стандартной библиотеки Python: её нет — предупреждение, CLI на SQLite не стоит."""
+    try:
+        import sqlite3
+    except ImportError:
+        return "SQLite", WARN, "модуль sqlite3 не найден в этой сборке Python"
+    return "SQLite", OK, sqlite3.sqlite_version
 
-    Ошибки дают код 1. Предупреждения (нет git, не UTF-8 в консоли) код не меняют.
+
+def _gitleaks_line() -> tuple[str, str, str]:
+    """`gitleaks` нужен `pack` как второй сканер секретов и коммитам; встроенные шаблоны работают без него."""
+    exe = shutil.which("gitleaks")
+    if exe:
+        return "gitleaks", OK, exe
+    return (
+        "gitleaks",
+        WARN,
+        "не найден; `strateg pack` ищет секреты встроенными шаблонами; перед коммитом сканер лучше поставить",
+    )
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    """Проверка среды: Python, uv, git, SQLite, gitleaks, кодировка, запись в `projects/`.
+
+    Ошибки дают код 1. Предупреждения (нет git, нет gitleaks, не UTF-8 в консоли) код не меняют.
     """
     levels = []
     levels.append(_report("Python", OK if sys.version_info >= (3, 12) else ERR, platform.python_version()))
@@ -110,6 +131,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             "git", WARN, "не найден; для работы с проектом не обязателен, но нужен для истории изменений"
         )
     )
+    levels.append(_report(*_sqlite_line()))
+    levels.append(_report(*_gitleaks_line()))
     console = getattr(args, "console", None) or detect_console_encoding()
     levels.append(_report("Кодировка консоли", *console))
     root = find_repo_root()
