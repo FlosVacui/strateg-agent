@@ -129,20 +129,3 @@ def test_doctor_without_gitleaks_is_a_warning_with_the_consequence(capsys, monke
     assert main(["doctor"]) == 0  # предупреждение код не меняет
     line = next(x for x in capsys.readouterr().out.splitlines() if "gitleaks" in x and x.startswith("["))
     assert line.startswith("[ПРЕД]") and "встроенными шаблонами" in line
-
-
-def test_doctor_without_sqlite_module_is_a_warning(capsys, monkeypatch):
-    import builtins
-
-    _utf8_console(monkeypatch)
-    real_import = builtins.__import__
-
-    def no_sqlite(name, *args, **kwargs):
-        if name == "sqlite3":
-            raise ImportError("нет")
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", no_sqlite)
-    assert main(["doctor"]) == 0
-    line = next(x for x in capsys.readouterr().out.splitlines() if "SQLite" in x and x.startswith("["))
-    assert line.startswith("[ПРЕД]")

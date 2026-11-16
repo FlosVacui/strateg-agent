@@ -595,3 +595,31 @@ def test_search_is_allowed_project_data_is_closed_above_the_plan_question_stays_
     # Запрос поиска хуком не читается и разрешён. Данные проекта закрыты тестами выше. Остаточный канал,
     # названный в ADR-0011: вопрос плана, который виден исследователю в задании; он записывается в журнал.
     allowed(decide("WebSearch", {"query": "тарифы подписок 2026"}, "researcher"))
+
+
+# --- strateg search видит материалы человека, поэтому он только у основного агента (ADR-0011, ADR-0012) ---
+
+SEARCH_COMMANDS = [
+    'uv run strateg search "доставка"',
+    "uv run strateg search 'доставка' --in материалы --json",
+    "uv run strateg search доставка --also цена --in все",
+]
+
+
+@pytest.mark.parametrize("command", SEARCH_COMMANDS)
+def test_search_is_refused_to_researcher_and_critic_and_open_to_the_main_agent(command):
+    refused(decide("Bash", {"command": command}, "researcher"), "fetch")
+    refused(decide("Bash", {"command": command}, "critic"), "Критику закрыто")
+    allowed(decide("Bash", {"command": command}))
+
+
+@pytest.mark.parametrize("tool", ["Bash", "PowerShell"])
+def test_search_is_refused_to_researcher_in_any_shell_tool(tool):
+    refused(decide(tool, {"command": 'uv run strateg search "доставка"'}, "researcher"))
+
+
+@pytest.mark.parametrize("agent", ["researcher", "critic"])
+def test_roles_cannot_read_the_search_index_with_materials_in_it(agent):
+    for path in ("projects/demo/.tmp/search.sqlite", "projects/demo/.tmp"):
+        refused(read(path, agent, svc=with_active("demo")))
+    allowed(read("projects/demo/.tmp/search.sqlite", svc=with_active("demo")))
