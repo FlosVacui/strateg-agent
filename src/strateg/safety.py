@@ -112,6 +112,35 @@ def count_kinds(hits: list[keys.KeyHit]) -> dict[str, int]:
     return out
 
 
+def snapshots_before_masking(sources) -> dict[str, str]:
+    """Прежние снимки, снятые до замены авторов отзывов: {прежний И-n: новый И-n, который его перепроверил}.
+
+    Признак: у нового снимка (`refreshes` — на прежний) в `anonymized` есть «авторы отзывов», а у прежнего
+    нет. Имена и ники в таком прежнем снимке остались; он лежит в `sources/` и уходит в архив.
+    """
+    by_id = {s.id: s for s in sources}
+    out: dict[str, str] = {}
+    for s in sources:
+        old = by_id.get(s.refreshes) if getattr(s, "refreshes", None) else None
+        if (
+            old is not None
+            and old.text_path
+            and AUTHORS_CATEGORY in s.anonymized
+            and AUTHORS_CATEGORY not in old.anonymized
+        ):
+            out.setdefault(old.id, s.id)
+    return out
+
+
+def stale_snapshot_note(old: str, new: str) -> str:
+    """Фраза для `fetch --refresh`, `status` и `pack`: прежний снимок остался, в нём могут быть имена."""
+    return (
+        f"прежний снимок {old} снят до замены авторов отзывов и остался в sources/: в нём могут быть имена "
+        f"и ники, "
+        f"он попадёт в архив `pack`; новый снимок {new} с метками. Если утверждений на {old} нет, он не нужен"
+    )
+
+
 def found_what(categories: list[str]) -> str:
     """Что найдено, по-русски: персональные данные, строки, похожие на ключи, или и то и другое."""
     pii = [c for c in categories if c != KEYS_CATEGORY]
@@ -174,7 +203,10 @@ def inspect_text(text: str) -> SafetyReport:
     """Все проверки до записи снимка: текст после замены контактов и найденные признаки."""
     text = clean_text(text)
     text, key_hits = keys.mask_keys(text)  # ключи первыми: цифры в ключе не должны сойти за телефон
+    text, numbers = mask_page_numbers(text)  # до телефонов: группы цифр карты не должны сойти за номер
     masked, anonymized = mask_contacts(text)
+    if numbers:
+        anonymized.append(_NUMBERS)
     if key_hits:
         anonymized.append(KEYS_CATEGORY)
     return SafetyReport(
@@ -196,8 +228,9 @@ CARD_LABEL = "[карта]"
 _NUMBERS = "номера документов и карт"
 
 _CARD_GROUPED = re.compile(r"(?<![\w-])\d{4}(?:[ -]\d{4}){2,3}(?:[ -]\d{1,3})?(?![\w-])")
-# без разделителей — только номера платёжных систем (первая цифра 2–6), иначе под замену идут штрихкоды
-_CARD_PLAIN = re.compile(r"(?<![\w-])[2-6]\d{12,18}(?![\w-])")
+# без разделителей — только номера платёжных систем: первая цифра 2–6 и от 14 цифр; тринадцать цифр — штрихкод
+# EAN-13 (сумма Луна подходит у каждого десятого), карты в 13 цифр практически не выпускаются
+_CARD_PLAIN = re.compile(r"(?<![\w-])[2-6]\d{13,18}(?![\w-])")
 _SNILS = re.compile(r"(?<![\w-])(?:\d{3}[ -]\d{3}[ -]\d{3}[ -]\d{2}|\d{11})(?![\w-])")
 _INN = re.compile(r"(?<![\w-])\d{10}(?:\d{2})?(?![\w-])")
 _NAME_WORD = re.compile(r"[А-ЯЁ][а-яё]+(?:-[А-ЯЁ][а-яё]+)?")
@@ -257,32 +290,53 @@ def _digits(text: str) -> str:
     return re.sub(r"\D", "", text)
 
 
+class _Taken:
+    """Занятые отрезки текста: упорядоченные непересекающиеся, проверка свободы — бинарным поиском."""
+
+    def __init__(self) -> None:
+        self.starts: list[int] = []
+        self.ends: list[int] = []
+
+    def free(self, a: int, b: int) -> bool:
+        i = bisect.bisect_right(self.starts, a)
+        if i > 0 and self.ends[i - 1] > a:
+            return False
+        return not (i < len(self.starts) and self.starts[i] < b)
+
+    def add(self, a: int, b: int) -> None:
+        i = bisect.bisect_right(self.starts, a)
+        self.starts.insert(i, a)
+        self.ends.insert(i, b)
+
+
+def _line_of(newlines: list[int], pos: int) -> int:
+    """Номер строки (с единицы) для позиции в тексте; список переводов строк считается один раз."""
+    return bisect.bisect_left(newlines, pos) + 1
+
+
 def mask_personal(text: str) -> tuple[str, list[Replacement], list[str]]:
     """Обезличивание материала: ключи, почта, телефоны, ИНН человека, СНИЛС, номера карт.
 
     Возвращает (текст с метками, замены с номером строки, категории для реестра). Номера 8-800 и ИНН из
     10 цифр (организация) не трогаются, но и не принимаются за другой номер. Строки не склеиваются:
-    номер строки в списке замен — номер строки текста.
+    номер строки в списке замен — номер строки текста. Время растёт почти линейно от числа замен.
     """
-    taken: list[tuple[int, int]] = []
+    taken = _Taken()
     found: list[tuple[int, int, str, str, str]] = []  # начало, конец, метка, категория, вид ключа
 
-    def free(a: int, b: int) -> bool:
-        return all(b <= x or a >= y for x, y in taken)
-
     def take(a: int, b: int, label: str | None, category: str | None, kind: str = "") -> None:
-        taken.append((a, b))
+        taken.add(a, b)
         if label and category:
             found.append((a, b, label, category, kind))
 
     for hit in keys.find_keys(text):  # ключи первыми: их цифры не должны сойти за телефон или номер
         take(hit.start, hit.end, KEY_LABEL, KEYS_CATEGORY, hit.kind)
     for m in _EMAIL.finditer(text):
-        if free(m.start(), m.end()):
+        if taken.free(m.start(), m.end()):
             take(m.start(), m.end(), EMAIL_LABEL, "адреса почты")
     for pattern in _PHONES:
         for m in pattern.finditer(text):
-            if free(m.start(), m.end()):
+            if taken.free(m.start(), m.end()):
                 if _is_org_phone(m.group()):
                     take(m.start(), m.end(), None, None)
                 else:
@@ -290,20 +344,21 @@ def mask_personal(text: str) -> tuple[str, list[Replacement], list[str]]:
     for pattern in (_CARD_GROUPED, _CARD_PLAIN):
         for m in pattern.finditer(text):
             digits = _digits(m.group())
-            if 13 <= len(digits) <= 19 and luhn_ok(digits) and free(m.start(), m.end()):
+            if 13 <= len(digits) <= 19 and luhn_ok(digits) and taken.free(m.start(), m.end()):
                 take(m.start(), m.end(), CARD_LABEL, _NUMBERS)
     for m in _SNILS.finditer(text):
-        if snils_ok(_digits(m.group())) and free(m.start(), m.end()):
+        if snils_ok(_digits(m.group())) and taken.free(m.start(), m.end()):
             take(m.start(), m.end(), SNILS_LABEL, _NUMBERS)
     for m in _INN.finditer(text):
         digits = m.group()
-        if free(m.start(), m.end()) and inn_ok(digits):
+        if taken.free(m.start(), m.end()) and inn_ok(digits):
             if len(digits) == 12:
                 take(m.start(), m.end(), INN_LABEL, _NUMBERS)
             else:
                 take(m.start(), m.end(), None, None)  # ИНН организации: не персональные данные
 
     found.sort()
+    newlines = [i for i, ch in enumerate(text) if ch == "\n"] if found else []
     out: list[str] = []
     replacements: list[Replacement] = []
     categories: list[str] = []
@@ -311,12 +366,45 @@ def mask_personal(text: str) -> tuple[str, list[Replacement], list[str]]:
     for a, b, label, category, kind in found:
         out.append(text[pos:a])
         out.append(label)
-        replacements.append(Replacement(label, text.count("\n", 0, a) + 1, kind))
+        replacements.append(Replacement(label, _line_of(newlines, a), kind))
         if category not in categories:
             categories.append(category)
         pos = b
     out.append(text[pos:])
     return "".join(out), replacements, categories
+
+
+# На странице заменяются только узкие формы с разделителями: СНИЛС «ddd-ddd-ddd dd» (с контрольным числом)
+# и номер карты группами (с суммой Луна). ИНН и цифры подряд — публичные сведения реестров, номера заказов и
+# артикулы: не трогаются.
+_SNILS_SEPARATED = re.compile(r"(?<![\w-])\d{3}[ -]\d{3}[ -]\d{3}[ -]\d{2}(?![\w-])")
+
+
+def mask_page_numbers(text: str) -> tuple[str, int]:
+    """СНИЛС с разделителями и номер карты группами в тексте страницы; возвращает текст и число замен."""
+    spans: list[tuple[int, int, str]] = []
+    for m in _CARD_GROUPED.finditer(text):
+        digits = _digits(m.group())
+        if 13 <= len(digits) <= 19 and luhn_ok(digits):
+            spans.append((m.start(), m.end(), CARD_LABEL))
+    for m in _SNILS_SEPARATED.finditer(text):
+        if snils_ok(_digits(m.group())):
+            spans.append((m.start(), m.end(), SNILS_LABEL))
+    if not spans:
+        return text, 0
+    spans.sort()
+    out: list[str] = []
+    pos = 0
+    count = 0
+    for a, b, label in spans:
+        if a < pos:
+            continue
+        out.append(text[pos:a])
+        out.append(label)
+        pos = b
+        count += 1
+    out.append(text[pos:])
+    return "".join(out), count
 
 
 _morph = None

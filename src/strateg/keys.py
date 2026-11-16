@@ -24,6 +24,17 @@ SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ),
     ("токен GitHub (ghp_…)", re.compile(r"(?<![A-Za-z0-9])gh[pousr]_[A-Za-z0-9]{30,}")),
     ("токен GitHub (github_pat_…)", re.compile(r"(?<![A-Za-z0-9])github_pat_[A-Za-z0-9_]{22,}")),
+    ("ключ Stripe (sk_live_…)", re.compile(r"(?<![A-Za-z0-9])(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}")),
+    ("токен npm (npm_…)", re.compile(r"(?<![A-Za-z0-9])npm_[A-Za-z0-9]{30,}")),
+    ("токен Hugging Face (hf_…)", re.compile(r"(?<![A-Za-z0-9])hf_[A-Za-z0-9]{30,}")),
+    (
+        "ключ SendGrid (SG.….…)",
+        re.compile(r"(?<![A-Za-z0-9])SG\.[A-Za-z0-9_\-]{16,}\.[A-Za-z0-9_\-]{16,}(?![A-Za-z0-9_\-])"),
+    ),
+    (
+        "ключ учётной записи Azure (AccountKey=…)",
+        re.compile(r"(?<![A-Za-z0-9])AccountKey=(?P<v>[A-Za-z0-9+/]{40,}={0,2})"),
+    ),
     ("токен GitLab (glpat-…)", re.compile(r"(?<![A-Za-z0-9])glpat-[A-Za-z0-9_\-]{20,}")),
     ("ключ AWS (AKIA…)", re.compile(r"(?<![A-Za-z0-9])(?:AKIA|ASIA)[0-9A-Z]{16}(?![A-Za-z0-9])")),
     (
@@ -60,9 +71,10 @@ SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         re.compile(r"(?i:Authorization)\s*:\s*Basic\s+(?P<v>[A-Za-z0-9+/]{16,}={0,2})(?![A-Za-z0-9+/=])"),
     ),
     (
-        "строка password= или token= с длинным значением",
+        "строка password=, token=, secret=, api_key= и подобная с длинным значением",
         re.compile(
-            r"""(?<![A-Za-z0-9])(?:password|passwd|token)["']?\s*[=:]\s*["']?(?P<v>[^\s"',;]{12,})""",
+            r"""(?<![A-Za-z0-9])(?:password|passwd|token|secret|api[_-]?key|apikey|client[_-]?secret|"""
+            r"""x-api-key|access[_-]?key|private[_-]?key)["']?\s*[=:]\s*["']?(?P<v>[^\s"',;]{12,})""",
             re.IGNORECASE,
         ),
     ),
@@ -73,10 +85,67 @@ _PLACEHOLDER = re.compile(r"^(?:\$\{?\w+\}?$|<[^>]*>?|\{\{|%\w+%$|\*{4,}|(.)\1{5
 _WORD_PASSWORDS = frozenset({"password", "passwd", "secret", "changeme", "pass1234", "yourpassword"})
 
 
+# самый короткий ключ из шаблонов (`xoxb-` и десять знаков) — 15 знаков
+_MIN_KEY_LINE = 14
+
+
+# Слова, без которых шаблон не сработает (в нижнем регистре): шаблон запускается, только если одно из них есть
+# в тексте. Шаблоны без записи (токен Telegram) запускаются всегда.
+_NEEDLES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("sk-ant-", ("sk-ant-",)),
+    ("sk-…", ("sk-",)),
+    ("Stripe", ("sk_", "rk_")),
+    ("npm", ("npm_",)),
+    ("Hugging", ("hf_",)),
+    ("SendGrid", ("sg.",)),
+    ("Azure", ("accountkey=",)),
+    ("ghp_", ("ghp_", "gho_", "ghu_", "ghs_", "ghr_")),
+    ("github_pat_", ("github_pat_",)),
+    ("GitLab", ("glpat-",)),
+    ("AWS", ("akia", "asia")),
+    ("Slack", ("xox",)),
+    ("Google", ("aiza",)),
+    ("JWT", ("eyj",)),
+    ("PRIVATE KEY", ("private key",)),
+    ("подключения", ("://",)),
+    ("Bearer", ("bearer",)),
+    ("Basic", ("basic",)),
+    ("password=", ("password", "passwd", "token", "secret", "key")),
+)
+
+
+def _needles(name: str) -> tuple[str, ...] | None:
+    for fragment, needles in _NEEDLES:
+        if fragment in name:
+            return needles
+    return None
+
+
+_PATTERN_NEEDLES = tuple(_needles(name) for name, _ in SECRET_PATTERNS)
+
+
+def _active(text: str) -> list[tuple[str, re.Pattern[str]]]:
+    low = text.lower()
+    return [
+        item
+        for item, needles in zip(SECRET_PATTERNS, _PATTERN_NEEDLES, strict=True)
+        if needles is None or any(n in low for n in needles)
+    ]
+
+
 class KeyHit(NamedTuple):
     start: int
     end: int
     kind: str
+
+
+_PREFIX = re.compile(r"^[A-Za-z]{2,}[_-](?:[a-z]+[_-])?")
+
+
+def _placeholder_body(match: str) -> bool:
+    """Токен с префиксом, у которого после префикса почти один знак: `ghp_` и 36 `x`, `sk-` и нули."""
+    core = _PREFIX.sub("", match, count=1)
+    return len(core) >= 8 and len(set(core.lower())) <= 3
 
 
 def _is_placeholder(value: str) -> bool:
@@ -90,7 +159,7 @@ def find_keys(text: str) -> list[KeyHit]:
     Пересекающиеся места не повторяются: берётся то, что нашлось раньше и длиннее.
     """
     hits: list[KeyHit] = []
-    for name, pattern in SECRET_PATTERNS:
+    for name, pattern in _active(text):
         for m in pattern.finditer(text):
             if "v" in pattern.groupindex:
                 value = m.group("v")
@@ -98,6 +167,8 @@ def find_keys(text: str) -> list[KeyHit]:
                     continue
                 hits.append(KeyHit(m.start("v"), m.end("v"), name))
             else:
+                if _placeholder_body(m.group()):
+                    continue
                 hits.append(KeyHit(m.start(), m.end(), name))
     hits.sort(key=lambda h: (h.start, -(h.end - h.start)))
     out: list[KeyHit] = []
@@ -112,11 +183,15 @@ def scan_lines(text: str) -> list[tuple[int, str]]:
     """Совпадения шаблонов по строкам: (номер строки, название вида). Одно совпадение на строку и шаблон."""
     hits: list[tuple[int, str]] = []
     for n, line in enumerate(text.split("\n"), start=1):
-        for name, pattern in SECRET_PATTERNS:
+        if len(line) < _MIN_KEY_LINE:  # пустые и короткие строки ключа не несут: миллион строк — доли секунды
+            continue
+        for name, pattern in _active(line):
             for m in pattern.finditer(line):
                 value = m.groupdict().get("v")
                 if value is not None and _is_placeholder(value):
                     continue  # «${TOKEN}», «<ключ>», «xxxxxxxxxxxx» — подстановка, не значение
+                if value is None and _placeholder_body(m.group()):
+                    continue
                 hits.append((n, name))
                 break
     return hits

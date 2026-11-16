@@ -558,13 +558,13 @@ def cmd_fetch(args: argparse.Namespace) -> int:
         p.add_event(p.event(kind="действие", name="strateg fetch", idempotency_hash=h, status="начато"))
 
     # Сеть и разбор страницы: папка проекта свободна.
-    fetcher = make_fetcher(p.root / proj.CACHE_DIR / "fetch.json")
     access, note, final_url, page = "получен", None, None, None
     refused: str | None = None
     try:
+        fetcher = make_fetcher(p.root / proj.CACHE_DIR / "fetch.json")
         page = fetcher.get(url)
         final_url = page.url
-    except fetchlib.AddressRefused as exc:
+    except (fetchlib.AddressRefused, fetchlib.PinningUnavailable) as exc:
         refused = str(exc)
     except fetchlib.RobotsDenied as exc:
         access = "запрещено robots.txt"
@@ -887,6 +887,9 @@ def _store_result(
     if prior is not None:
         extra["refreshes"] = prior.id
         extra["claims_on_previous"] = _standing_claims(p, prior.id)
+        if safety.AUTHORS_CATEGORY in source.anonymized and safety.AUTHORS_CATEGORY not in prior.anonymized:
+            extra["prior_unmasked"] = prior.id
+            warnings.append(safety.stale_snapshot_note(prior.id, source.id))
     if source.suspicious:
         signs = snapshot[0].instruction_signs if snapshot else []
         p.add_event(
@@ -1036,6 +1039,7 @@ def _fetch_report(
         "suspicious": s.suspicious,
         "closed_markers": closed,
         "authors_masked": extra.get("authors", 0),
+        "prior_unmasked": extra.get("prior_unmasked"),
         "warnings": warnings,
     }
     same_text = extra.get("same_text_as")
@@ -2282,12 +2286,17 @@ def cmd_pack(args: argparse.Namespace) -> int:
             "files": packed.files,
             "bytes": packed.bytes,
             "gitleaks": packed.gitleaks,
+            "unmasked_snapshots": [old for old, _ in packed.stale],
         },
         [
             f"Проект {root.name} упакован: {packed.archive}",
             f"Файлов: {packed.files}, размер: {max(packed.bytes // 1024, 1)} КБ.",
-            "В архиве нет .tmp/, кэша fetch и исходников с персональными данными.",
+            "В архиве нет .tmp/, кэша fetch и исходников материалов с персональными данными."
+            if not packed.stale
+            else "В архиве нет .tmp/, кэша fetch и исходников материалов с персональными данными; "
+            "но есть прежние снимки до замены авторов отзывов, имена в них не заменены.",
             f"Секретов не найдено: встроенные шаблоны, {scanner}.",
+            *[f"Внимание: {safety.stale_snapshot_note(old, new)}" for old, new in packed.stale],
         ],
     )
 
@@ -2410,6 +2419,7 @@ def _status_data(p: Project) -> dict[str, Any]:
             "by_kind": by_kind,
             "unavailable": sum(1 for s in p.sources.sources if s.access != "получен"),
             "suspicious": [s.id for s in p.sources.sources if s.suspicious],
+            "unmasked_snapshots": sorted(safety.snapshots_before_masking(p.sources.sources)),
             "closed_unconfirmed": [
                 s.id for s in p.sources.sources if s.closed_markers and not s.closed_confirmed
             ],
@@ -2667,6 +2677,8 @@ def cmd_status(args: argparse.Namespace) -> int:
         lines.append(
             "Внимание: источники с пометкой «подозрительный»: " + ", ".join(d["sources"]["suspicious"])
         )
+    for old, new in safety.snapshots_before_masking(p.sources.sources).items():
+        lines.append("Внимание: " + safety.stale_snapshot_note(old, new))
     if d["sources"]["closed_unconfirmed"]:
         lines.append(
             "Внимание: признаки закрытых данных не подтверждены человеком: "

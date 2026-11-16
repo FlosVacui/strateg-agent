@@ -46,6 +46,13 @@ def build(name: str) -> str:
         "bearer": "Bearer " + "abcdef0123456789abcdef0123",
         "basic": "Basic " + "dXNlcjpwYXNzd29yZDEyMw==",
         "conn-pass": "S3cr3t" + "Passw0rd",
+        "plain": "aB3dE5gH7jK9mN1pQ3sT5vW",
+        "stripe": "sk" + "_live_" + "aB3dE5gH7jK9mN1pQ3sT5vW",
+        "stripe-test": "sk" + "_test_" + "aB3dE5gH7jK9mN1pQ3sT5vW",
+        "npm": "npm" + "_" + "aB3dE5gH7jK9mN1pQ3sT5vWaB3dE5gH7jK9mN",
+        "hf": "hf" + "_" + "aB3dE5gH7jK9mN1pQ3sT5vWaB3dE5gH7jK9mN",
+        "sendgrid": "SG" + "." + "aB3dE5gH7jK9mN1pQ3sT5v" + "." + "aB3dE5gH7jK9mN1pQ3sT5vWaB3dE5gH7jK9mN",
+        "azure": "aB3dE5gH7jK9mN1pQ3sT5vWaB3dE5gH7jK9mNaB3dE5gH7j==",
     }[name]
 
 
@@ -72,6 +79,25 @@ POSITIVE = [
     ("private", "{v}", "PRIVATE KEY"),
     ("bearer", "Authorization: {v}", "Bearer"),
     ("basic", "Authorization: {v}", "Basic"),
+    ("stripe", "STRIPE={v}", "Stripe"),
+    ("stripe-test", "STRIPE={v}", "Stripe"),
+    ("npm", "//registry:_authToken={v}", "npm"),
+    ("hf", "HF={v}", "Hugging Face"),
+    ("sendgrid", "mail key {v}", "SendGrid"),
+]
+# записи вида «имя = значение»: имя называет ключ, значение — любая строка от 12 знаков
+ASSIGNMENTS = [
+    "api_key={v}",
+    "API_KEY={v}",
+    "api-key: {v}",
+    "apikey: {v}",
+    "client_secret={v}",
+    "CLIENT_SECRET: {v}",
+    "secret={v}",
+    "X-API-Key: {v}",
+    "x-api-key={v}",
+    '"apiKey": "{v}"',
+    "access_key={v}",
 ]
 
 NEGATIVE = [
@@ -113,6 +139,24 @@ NEGATIVE = [
     "ftp://host:21/dir@x",
     "mailto:ivan@example.com",
     "Описание: токен — это маленькая строка, а ключ — большая.",
+    # подстановка проверяется и у токенов с префиксом
+    "ghp_" + "x" * 36,
+    "ghp_" + "X" * 36,
+    "gho_" + "0" * 36,
+    "sk-" + "0" * 30,
+    "sk" + "_live_" + "x" * 24,
+    "npm" + "_" + "x" * 36,
+    "hf" + "_" + "a" * 34,
+    "github" + "_pat_" + "x" * 30,
+    "glpat-" + "x" * 20,
+    # записи без значения или с подстановкой
+    "api_key=<ваш ключ>",
+    "api_key=${API_KEY}",
+    "secret: подписка",
+    "client_secret=xxxxxxxxxxxx",
+    "X-API-Key: %API_KEY%",
+    "AccountKey=<key>",
+    "secret=короткое",
 ]
 
 
@@ -351,3 +395,30 @@ def test_a_key_on_a_page_is_replaced_before_the_snapshot_is_written(cli, net, ho
     assert value not in everything(home / "demo", skip_tmp=False)
     code, out, err = cli("pack")
     assert code == 0, err
+
+
+@pytest.mark.parametrize("template", ASSIGNMENTS)
+def test_assignments_by_the_name_of_the_key_are_replaced(template):
+    value = build("plain")
+    masked, hits = keys.mask_keys("в конфиге " + template.format(v=value) + " и дальше")
+    assert value not in masked and len(hits) == 1 and keys.KEY_LABEL in masked
+
+
+@pytest.mark.parametrize("name", ["stripe", "stripe-test", "npm", "hf", "sendgrid", "azure"])
+def test_new_kinds_have_a_value_that_is_replaced(name):
+    value = build(name)
+    text = {"azure": "AccountKey=" + value}.get(name, "k " + value)
+    masked, hits = keys.mask_keys(text)
+    assert value not in masked and len(hits) == 1
+
+
+def test_scan_text_is_fast_on_a_million_empty_and_short_lines():
+    for chunk in ("\n", "ab\n", "\r\n"):
+        started = time.perf_counter()
+        assert pack.scan_text(chunk * 1_000_000) == []
+        assert time.perf_counter() - started < 3.0, repr(chunk)
+
+
+def test_scan_text_still_reports_line_numbers_after_skipping_short_lines():
+    text = "\n" * 5 + build("ghp") + "\nкороткая\n" + "password=" + "Sup3rS3cretValue"
+    assert [n for n, _ in pack.scan_text(text)] == [6, 8]

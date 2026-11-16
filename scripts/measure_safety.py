@@ -33,6 +33,14 @@ def timing() -> float:
     return (time.perf_counter() - started) / 3
 
 
+def timing_mask() -> float:
+    """Секунды на обезличивание списка из 40 000 адресов почты (`mask_personal`)."""
+    text = "a@b.ru " * 40_000
+    started = time.perf_counter()
+    safety.mask_personal(text)
+    return time.perf_counter() - started
+
+
 def main() -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
@@ -43,6 +51,7 @@ def main() -> int:
         false = f"{kind.false} из {kind.negatives}" if kind.negatives else "—"
         print(f"| {kind.name} | {found} | {false} |")
     print(f"\nПроверка текста в 200 КБ: {timing() * 1000:.0f} мс")
+    print(f"Обезличивание 40 000 адресов почты: {timing_mask():.2f} с")
     return 0
 
 

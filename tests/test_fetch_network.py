@@ -68,6 +68,19 @@ def test_https_connection_also_goes_to_the_address_and_the_url_keeps_the_name(ne
     assert request.url.host == "site.example.com" and request.headers["host"] == "site.example.com"
 
 
+def test_empty_dns_answer_is_refused_with_a_message(net, monkeypatch):
+    monkeypatch.setattr(fetch, "resolve_host", lambda host: [])
+    client, recorder = pinned_client()
+    with (
+        pytest.raises(AddressRefused, match="не дало ни одного адреса"),
+        client.stream("GET", "http://empty.example.com/"),
+    ):
+        pass
+    assert recorder.calls == []
+    with pytest.raises(AddressRefused, match="не дало ни одного адреса"):
+        fetch.check_address("http://empty.example.com/")
+
+
 def test_dns_changed_between_the_check_and_the_connection_is_refused_before_any_connect(net, monkeypatch):
     """Подмена DNS: проверка адреса видит публичный адрес, при соединении имя уже указывает на внутренний."""
     answers = iter([[PUBLIC_IP], ["10.0.0.5"]])
@@ -149,8 +162,26 @@ def test_transport_is_not_created_when_httpx_changed_its_pool(monkeypatch):
         pass
 
     monkeypatch.setattr(httpx.HTTPTransport, "__init__", bare)
-    with pytest.raises(RuntimeError, match="закрепление"):
+    with pytest.raises(fetch.PinningUnavailable, match="закрепление"):
         fetch.PinnedTransport()
+
+
+def test_cli_says_it_in_words_when_the_pinning_cannot_be_connected(cli, net, home, monkeypatch):
+    """Смена устройства httpx — сообщение CLI и «ошибка» в журнале, а не трассировка Python."""
+    from helpers import journal_of
+    from strateg import commands
+
+    def bare(self, **kwargs):
+        pass
+
+    monkeypatch.setattr(httpx.HTTPTransport, "__init__", bare)
+    monkeypatch.setattr(commands, "make_fetcher", lambda cache: fetch.Fetcher(cache))
+    assert cli("new", "demo")[0] == 0
+    code, out, err = cli("fetch", "https://example.com/x")
+    assert code == 1 and "закрепление проверенного адреса не подключено" in err
+    assert "Traceback" not in err + out and "RuntimeError" not in err + out
+    events = [e for e in journal_of(home / "demo") if e.get("name") == "strateg fetch"]
+    assert events[-1]["status"] == "ошибка"
 
 
 # --- robots.txt и переход с https на http ---------------------------------------------------------

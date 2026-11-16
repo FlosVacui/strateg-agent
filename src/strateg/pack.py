@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
 
-from strateg import keys
+from strateg import keys, safety
 from strateg import project as proj
 from strateg.project import CliError, UsageError
 from strateg.project_check import check_project
@@ -195,6 +195,9 @@ class Packed(NamedTuple):
     files: int
     bytes: int
     gitleaks: str  # «использован», «не найден», «не отработал»
+    stale: tuple[
+        tuple[str, str], ...
+    ] = ()  # (прежний снимок до замены авторов отзывов, новый): имена могли остаться
 
 
 def pack(root: Path, out: Path | None) -> Packed:
@@ -211,4 +214,7 @@ def pack(root: Path, out: Path | None) -> Packed:
         count = build_archive(root, files, target)
     except OSError as exc:
         raise CliError(f"архив не записан в {target}: {exc.strerror or exc}") from exc
-    return Packed(target, count, target.stat().st_size, scanner)
+    from strateg.project import Project
+
+    stale = tuple(safety.snapshots_before_masking(Project.load(root).sources.sources).items())
+    return Packed(target, count, target.stat().st_size, scanner, stale)

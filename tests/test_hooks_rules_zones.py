@@ -591,7 +591,7 @@ def test_researcher_cannot_pull_the_users_data_through_the_shell(command):
     refused(decide("Bash", {"command": command}, "researcher"))
 
 
-def test_researcher_search_is_allowed_but_has_nothing_of_the_project_to_put_into_it():
-    # запрос поиска хуком не читается: это остаточный канал из ADR-0011, он записан в журнал; данные проекта
-    # исследователю недоступны ни через чтение, ни через оболочку (тесты выше)
+def test_search_is_allowed_project_data_is_closed_above_the_plan_question_stays_a_channel():
+    # Запрос поиска хуком не читается и разрешён. Данные проекта закрыты тестами выше. Остаточный канал,
+    # названный в ADR-0011: вопрос плана, который виден исследователю в задании; он записывается в журнал.
     allowed(decide("WebSearch", {"query": "тарифы подписок 2026"}, "researcher"))

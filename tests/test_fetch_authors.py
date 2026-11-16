@@ -42,7 +42,11 @@ EXPECTED_CLASSES_IN_BLOCK = {
     "displayname",
     "profilename",
     "fn",
+    "pauthor",
+    "hcard",
+    "vcard",
 }
+EXPECTED_TAGS = {"cite"}
 EXPECTED_ATTRS = (
     "data-author",
     "data-author-name",
@@ -59,6 +63,7 @@ EXPECTED_ITEMTYPES = {"review", "comment", "usercomments", "userreview", "questi
 def test_the_lists_of_markers_are_the_ones_the_tests_cover():
     assert fetchlib.AUTHOR_CLASSES == EXPECTED_CLASSES
     assert fetchlib.AUTHOR_CLASSES_IN_BLOCK == EXPECTED_CLASSES_IN_BLOCK
+    assert fetchlib.AUTHOR_TAGS_IN_BLOCK == EXPECTED_TAGS
     assert tuple(fetchlib.AUTHOR_ATTRS) == EXPECTED_ATTRS
     assert fetchlib.REVIEW_ITEMTYPES == EXPECTED_ITEMTYPES
 
@@ -136,11 +141,13 @@ def test_the_comment_inside_an_article_changes_but_the_article_author_does_not()
 
 
 @pytest.mark.parametrize("attr", EXPECTED_ATTRS)
-def test_each_author_attribute_names_the_author_for_the_block(attr):
+def test_each_author_attribute_names_the_author_node_of_the_block(attr):
     html, _ = masked(
         f'<div class="comment" {attr}="{NAME}"><b>{NAME}</b><p>{BODY} Пишет {NAME.lower()}.</p></div>'
     )
-    assert NAME not in html and NAME.lower() not in html and BODY in html
+    # узел автора заменён, имя ушло и из атрибута; такие же слова в тексте отзыва остаются
+    assert NAME not in html and BODY in html and f"Пишет {NAME.lower()}." in html
+    assert fetchlib.AUTHOR_LABEL in html
 
 
 @pytest.mark.parametrize("attr", EXPECTED_ATTRS)
@@ -304,3 +311,195 @@ def test_a_snapshot_taken_before_the_masking_is_rechecked_by_refresh(cli, review
     assert refreshed["refresh"] == "new" and refreshed["refreshes"] == first["source"]
     new_text = (root / refreshed["snapshot"]).read_text(encoding="utf-8")
     assert "Иван Котов" not in new_text and refreshed["source"] != first["source"]
+
+
+# --- блок отзыва: слова класса и id, а не подстрока -----------------------------------------------
+
+ARTICLE_AUTHOR = "Мария Иванова"
+
+
+@pytest.mark.parametrize(
+    "wrapper",
+    [
+        'class="article-preview"',
+        'class="commentary"',
+        'class="comments-enabled"',
+        'class="review-article"',
+        'id="review-2026"',
+        'class="page comments-open"',
+        'class="no-comments"',
+        'class="comment-form"',
+        'class="reviewer-guide"',
+    ],
+)
+def test_the_author_of_an_article_inside_a_wrapper_that_only_looks_like_a_review_block_stays(wrapper):
+    html, _ = masked(
+        f'<div {wrapper}><article><h1>З</h1><span class="author">{ARTICLE_AUTHOR}</span>'
+        f"<p>{BODY}</p></article></div>"
+    )
+    assert ARTICLE_AUTHOR in html and fetchlib.AUTHOR_LABEL not in html
+
+
+@pytest.mark.parametrize(
+    "wrapper",
+    [
+        'class="comments"',
+        'class="comment-list"',
+        'class="reviews"',
+        'class="review-item"',
+        'class="commentList"',
+        'class="user_reviews"',
+        'class="otzyv"',
+        'id="comments"',
+        'id="review-48213"',
+        'class="comments-wrap"',
+    ],
+)
+def test_the_wrapper_with_a_whole_word_of_a_review_block_is_a_block(wrapper):
+    html, _ = masked(f'<div {wrapper}><span class="author">{NAME}</span><p>{BODY}</p></div>')
+    assert NAME not in html and fetchlib.AUTHOR_LABEL in html
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("comments", True),
+        ("Comments", True),
+        ("commentAuthor-list", True),
+        ("review_item", True),
+        ("preview", False),
+        ("commentary", False),
+        ("comments-enabled", False),
+        ("review-article", False),
+        ("review-2026", False),
+        ("review-2026-list", False),
+        ("review-48213", True),
+        ("overview", False),
+    ],
+)
+def test_name_is_a_block_by_whole_words(value, expected):
+    assert fetchlib._name_is_block(value) is expected
+
+
+def test_attribute_name_is_replaced_only_in_the_author_node_and_not_in_text():
+    html, _ = masked(
+        '<div class="comments"><div class="comment" data-author="ан"><b>ан</b>'
+        "<p>Апрельский план: язык, ананас и банан остаются.</p></div></div>"
+    )
+    assert "Апрельский план: язык, ананас и банан остаются." in html and fetchlib.AUTHOR_LABEL in html
+
+
+def test_attribute_name_on_a_wrapper_does_not_touch_the_news_text():
+    html, _ = masked(
+        f'<div class="comments-wrap" data-author="{ARTICLE_AUTHOR}"><article>'
+        f"<p>Директор {ARTICLE_AUTHOR} сообщила о планах.</p></article></div>"
+    )
+    assert f"Директор {ARTICLE_AUTHOR} сообщила о планах." in html
+
+
+# --- ещё признаки автора внутри блока отзыва ------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "author",
+    [
+        f"<cite>{NAME}</cite>",
+        f'<span class="p-author h-card">{NAME}</span>',
+        f'<span class="h-card">{NAME}</span>',
+        f'<span class="vcard">{NAME}</span>',
+        f'<a class="u-url p-name" href="/u/ivan">{NAME}</a>',
+        f'<a rel="author" href="/u/ivan">{NAME}</a>',
+        f'<a rel="nofollow author" href="/u/ivan">{NAME}</a>',
+    ],
+)
+def test_microformats_cite_and_rel_author_inside_a_review_block_are_authors(author):
+    html, _ = masked(f'<div class="comments"><div class="comment">{author}<p>{BODY}</p></div></div>')
+    assert NAME not in html and fetchlib.AUTHOR_LABEL in html
+
+
+@pytest.mark.parametrize(
+    "author",
+    [
+        f"<cite>{NAME}</cite>",
+        f'<span class="p-author h-card">{NAME}</span>',
+        f'<a class="u-url p-name" href="/u/ivan">{NAME}</a>',
+        f'<a rel="author" href="/u/ivan">{NAME}</a>',
+    ],
+)
+def test_the_same_markup_outside_a_review_block_is_the_author_of_the_article(author):
+    html, _ = masked(f"<article>{author}<p>{BODY}</p></article>")
+    assert NAME in html and fetchlib.AUTHOR_LABEL not in html
+
+
+def test_probes_of_unknown_markup_from_the_independent_corpus():
+    """Пробы разметки отзывов: что находится, а что остаётся в известных ограничениях (ADR-0011)."""
+    from instruction_corpus_independent import AUTHOR_PROBES
+
+    found = {}
+    for name, html, _was in AUTHOR_PROBES:
+        out, _ = fetchlib.mask_authors(f"<html><body>{html}</body></html>")
+        found[name] = "Иван Котов" not in out and "ivan_k" not in out
+        assert "Иван Котов" not in fetchlib.visible_text(out) or not found[name]
+    assert sum(found.values()) == 9 and len(found) == 12
+    assert [n for n, ok in found.items() if not ok] == [
+        "b в начале комментария",
+        "ссылка user-link в отзыве",
+        "класс who без слов блока",
+    ]
+
+
+# --- снимок, снятый до замены авторов, после `fetch --refresh` ------------------------------------
+
+
+@pytest.fixture
+def two_snapshots(cli, reviews_page, home, monkeypatch):
+    """И-1 снят «прежней версией» (авторов не заменяли), И-2 — перечитан с заменой."""
+    assert cli("new", "demo")[0] == 0
+    real = fetchlib.mask_authors
+    monkeypatch.setattr(fetchlib, "mask_authors", lambda html: (html, ""))
+    first = json.loads(cli("fetch", URL, "--json")[1])
+    monkeypatch.setattr(fetchlib, "mask_authors", real)
+    return first, home / "demo"
+
+
+def test_refresh_says_the_previous_snapshot_stays_and_may_hold_names(cli, two_snapshots):
+    first, root = two_snapshots
+    code, out, err = cli("fetch", URL, "--refresh", "--json")
+    assert code == 0, err
+    data = json.loads(out)
+    assert data["refresh"] == "new" and data["prior_unmasked"] == first["source"]
+    note = next(w for w in data["warnings"] if "снят до замены авторов отзывов" in w)
+    assert first["source"] in note and "остался в sources/" in note and "могут быть имена" in note
+    assert "Иван Котов" in (root / first["snapshot"]).read_text(encoding="utf-8")  # он действительно остался
+
+
+def test_status_and_pack_do_not_hide_the_previous_snapshot(cli, two_snapshots, tmp_path):
+    first, root = two_snapshots
+    assert cli("fetch", URL, "--refresh")[0] == 0
+    out = cli("status")[1]
+    assert f"прежний снимок {first['source']} снят до замены авторов отзывов" in out
+    assert json.loads(cli("status", "--json")[1])["sources"]["unmasked_snapshots"] == [first["source"]]
+    code, out, err = cli("pack", "--out", str(tmp_path / "demo.zip"), "--json")
+    assert code == 0, err
+    assert json.loads(out)["unmasked_snapshots"] == [first["source"]]
+    code, out, err = cli("pack", "--out", str(tmp_path / "demo2.zip"))
+    assert "имена в них не заменены" in out and "в архиве нет" not in out.lower().replace(
+        "в архиве нет .tmp", ""
+    )
+    assert f"прежний снимок {first['source']}" in out
+
+
+def test_pack_of_a_clean_project_keeps_its_promise(cli, reviews_page, tmp_path):
+    assert cli("new", "demo")[0] == 0
+    assert cli("fetch", URL)[0] == 0
+    code, out, err = cli("pack", "--out", str(tmp_path / "demo.zip"))
+    assert code == 0, err
+    assert "исходников материалов с персональными данными." in out and "прежние снимки" not in out
+
+
+def test_no_note_when_both_snapshots_were_masked_or_the_text_is_the_same(cli, reviews_page):
+    assert cli("new", "demo")[0] == 0
+    assert cli("fetch", URL)[0] == 0
+    data = json.loads(cli("fetch", URL, "--refresh", "--json")[1])
+    assert data["refresh"] == "same" and not data["prior_unmasked"]
+    assert json.loads(cli("status", "--json")[1])["sources"]["unmasked_snapshots"] == []

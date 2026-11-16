@@ -220,11 +220,18 @@ class PinnedBackend:
         return self.inner.sleep(seconds)
 
 
+class PinningUnavailable(Exception):
+    """Закрепление проверенного адреса подключить нельзя: устройство httpx не то, на которое рассчитан код."""
+
+
 class PinnedTransport(httpx.HTTPTransport):
     """Транспорт httpx с закреплением проверенного адреса (`PinnedBackend`).
 
-    Сетевой слой подменяется во внутреннем пуле соединений httpx: публичного способа задать его у httpx нет.
-    Если устройство пула изменилось, транспорт не создаётся: без закрепления соединяться нельзя.
+    Сетевой слой подменяется во внутреннем пуле соединений httpx (`_pool._network_backend`). Публичный путь
+    у `httpcore` есть (`ConnectionPool(network_backend=…)`), но `httpx.HTTPTransport` его не принимает: свой
+    транспорт пришлось бы строить на закрытых классах ответа httpx, и закрытого там было бы больше. Если
+    устройство пула изменилось, транспорт не создаётся (`PinningUnavailable`): без закрепления соединяться
+    нельзя. Версии httpx и httpcore закреплены в `uv.lock`.
     """
 
     def __init__(self, **kwargs) -> None:
@@ -232,7 +239,11 @@ class PinnedTransport(httpx.HTTPTransport):
         pool = getattr(self, "_pool", None)
         backend = getattr(pool, "_network_backend", None)
         if backend is None:
-            raise RuntimeError("httpx изменил устройство пула соединений: закрепление адреса не подключено")
+            raise PinningUnavailable(
+                "закрепление проверенного адреса не подключено: устройство библиотеки httpx изменилось. "
+                "Загрузка остановлена, чтобы не соединяться без проверки адреса; обновите программу "
+                "(`uv sync --frozen`) или сохраните страницу вручную в inputs/"
+            )
         pool._network_backend = PinnedBackend(backend)
 
 
@@ -603,8 +614,20 @@ MAX_AUTHOR_CHARS = 200  # длиннее — это не имя, а целый �
 # Признаки автора — разметка, а не угадывание по тексту. Список в одном месте; на каждую строку есть тест.
 # Блок отзыва или комментария: тип schema.org (последняя часть адреса `itemtype`) или слово в `class` и `id`.
 REVIEW_ITEMTYPES = frozenset({"review", "comment", "usercomments", "userreview", "questionanswer"})
-REVIEW_BLOCK_WORDS = ("comment", "review", "feedback", "testimonial", "otzyv", "otzov", "kommentar")
-REVIEW_BLOCK_WORDS_RU = ("отзыв", "коммент")
+# Слова класса и `id`, по которым блок считается блоком отзывов: слово целиком (`comments`, `review-item`),
+# а не подстрока (`preview`, `commentary`). Слова из `NOT_BLOCK_WORDS` и год в том же классе делают его не
+# блоком: `comments-enabled`,
+# `review-article`, `review-2026` — состояние страницы или статья-обзор, автор статьи в них остаётся.
+REVIEW_BLOCK_WORDS = frozenset(
+    "comment comments review reviews feedback feedbacks testimonial testimonials otzyv otzyvy otzovik "
+    "kommentarii "
+    "отзыв отзывы комментарий комментарии коммент комменты".split()
+)
+NOT_BLOCK_WORDS = frozenset(
+    "article articles post posts page news story summary enabled disabled open closed count counter number "
+    "form link toggle button btn title header heading label icon allowed on off no has with without can show "
+    "hide".split()
+)
 # Классы, которые называют автора отзыва или комментария: значимы где угодно. Сравниваются без «-» и «_»,
 # без учёта регистра: `comment-author`, `comment__author`, `commentAuthor` — один признак.
 AUTHOR_CLASSES = frozenset(
@@ -627,8 +650,23 @@ AUTHOR_CLASSES = frozenset(
 )
 # Общие классы автора: значимы только внутри блока отзыва или комментария (вне его это автор статьи).
 AUTHOR_CLASSES_IN_BLOCK = frozenset(
-    {"author", "authorname", "user", "username", "nickname", "nick", "displayname", "profilename", "fn"}
+    {
+        "author",
+        "authorname",
+        "user",
+        "username",
+        "nickname",
+        "nick",
+        "displayname",
+        "profilename",
+        "fn",
+        "pauthor",
+        "hcard",
+        "vcard",
+    }
 )
+# Ещё признаки автора внутри блока отзыва: тег `<cite>`, `rel="author"`, микроформат `u-url p-name`
+AUTHOR_TAGS_IN_BLOCK = frozenset({"cite"})
 # Атрибуты, в которых разметка называет автора: само имя заменяется в тексте блока.
 AUTHOR_ATTRS = (
     "data-author",
@@ -652,13 +690,31 @@ def _is_review_itemtype(el) -> bool:
     return bool(kinds & REVIEW_ITEMTYPES)
 
 
+_CAMEL = re.compile(r"(?<=[a-z])(?=[A-Z])")
+_WORD_SPLIT = re.compile(r"[^0-9A-Za-zА-Яа-яЁё]+")
+
+
+def _words(value: str) -> list[str]:
+    """Слова имени класса или `id`: по «-», «_», пробелу и границе регистра (`commentAuthor`)."""
+    return [w for w in _WORD_SPLIT.split(_CAMEL.sub(" ", value).lower()) if w]
+
+
+def _is_year(word: str) -> bool:
+    return word.isdigit() and len(word) == 4 and 1990 <= int(word) <= 2099
+
+
+def _name_is_block(value: str) -> bool:
+    words = _words(value)
+    return any(w in REVIEW_BLOCK_WORDS for w in words) and not any(
+        w in NOT_BLOCK_WORDS or _is_year(w) for w in words
+    )
+
+
 def _is_review_block(el) -> bool:
     if _is_review_itemtype(el):
         return True
-    names = (
-        (el.attrib.get("class", "") + " " + el.attrib.get("id", "")).lower().replace("-", "").replace("_", "")
-    )
-    return any(w in names for w in REVIEW_BLOCK_WORDS + REVIEW_BLOCK_WORDS_RU)
+    names = el.attrib.get("class", "").split() + [el.attrib.get("id", "")]
+    return any(_name_is_block(n) for n in names if n)
 
 
 def _in_review_block(el) -> bool:
@@ -682,22 +738,30 @@ def _is_author_node(el) -> bool:
     keys = set(_class_keys(el))
     if keys & AUTHOR_CLASSES:
         return True
-    return bool(keys & AUTHOR_CLASSES_IN_BLOCK) and _in_review_block(el)
+    marked = (
+        bool(keys & AUTHOR_CLASSES_IN_BLOCK)
+        or el.tag in AUTHOR_TAGS_IN_BLOCK
+        or "author" in el.attrib.get("rel", "").lower().split()
+        or {"uurl", "pname"} <= keys
+    )
+    return marked and _in_review_block(el)
 
 
 def _replace_name(el, name: str, label: str) -> int:
-    """Заменяет имя из атрибута разметки во всех текстах внутри блока."""
+    """Имя из атрибута разметки заменяется только в узле автора: там, где весь текст узла — это имя.
+
+    Слова с тем же написанием в тексте новости или отзыва не трогаются.
+    """
     n = 0
-    pattern = re.compile(re.escape(name), re.IGNORECASE)
-    for node in el.iter():
-        if not isinstance(node.tag, str):
+    wanted = " ".join(name.split()).casefold()
+    for node in list(el.iter()):
+        if not isinstance(node.tag, str) or node.tag in ("script", "style"):
             continue
-        if node.text and pattern.search(node.text):
-            node.text, k = pattern.subn(label, node.text)
-            n += k
-        if node is not el and node.tail and pattern.search(node.tail):
-            node.tail, k = pattern.subn(label, node.tail)
-            n += k
+        if " ".join(node.text_content().split()).casefold() == wanted:
+            for child in list(node):
+                node.remove(child)
+            node.text = label
+            n += 1
     return n
 
 
@@ -723,6 +787,8 @@ def mask_authors(html: str) -> tuple[str, str]:
             for child in list(el):
                 el.remove(child)
             el.text = AUTHOR_LABEL
+            if "content" in el.attrib:  # `<meta itemprop="author" content="…">`
+                el.attrib["content"] = AUTHOR_LABEL
             done.add(el)
             continue
         if _is_review_block(el) or _in_review_block(el):  # `data-author` у статьи — автор статьи, не отзыва

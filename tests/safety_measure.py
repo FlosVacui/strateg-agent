@@ -138,7 +138,16 @@ KEY_VALUES = [
     "token=" + "abcdef0123456789abcdef",
     "Authorization: Basic " + "dXNlcjpwYXNzd29yZDEyMw==",
     "DB_PASSWORD=" + "Sup3rS3cretValue123",
+    "sk" + "_live_" + "aB3dE5gH7jK9mN1pQ3sT5vW",
+    "npm" + "_" + "aB3dE5gH7jK9mN1pQ3sT5vWaB3dE5gH7jK9mN",
+    "hf" + "_" + "aB3dE5gH7jK9mN1pQ3sT5vWaB3dE5gH7jK9mN",
+    "SG" + "." + "aB3dE5gH7jK9mN1pQ3sT5v" + "." + "aB3dE5gH7jK9mN1pQ3sT5vWaB3dE5gH7jK9mN",
+    "AccountKey=" + "aB3dE5gH7jK9mN1pQ3sT5vWaB3dE5gH7jK9mNaB3dE5gH7j==",
+    "api_key=" + "aB3dE5gH7jK9mN1pQ3sT5vW",
+    "client_secret=" + "aB3dE5gH7jK9mN1pQ3sT5vW",
+    "X-API-Key: " + "aB3dE5gH7jK9mN1pQ3sT5vW",
 ]
+# Ключи в замере — по записи на каждое правило: число показывает отсутствие регрессии, а не полноту на неизвестных видах.
 KEY_NEGATIVES = [
     "token=${GITHUB_TOKEN}",
     "token=<ваш токен>",
@@ -147,6 +156,10 @@ KEY_NEGATIVES = [
     "postgres://user:${DB_PASSWORD}@db.example.test/app",
     "postgres://user:<password>@db.example.test/app",
     "ghp_xxxxxxxx",
+    "ghp_" + "x" * 36,
+    "sk-" + "0" * 30,
+    "api_key=<ваш ключ>",
+    "secret: подписка",
     "sk-подписка-на-год-и-месяц",
     "https://example.test:8080/path",
     "время 12:30:45",
@@ -167,6 +180,10 @@ AUTHOR_HTML = [
     f'<div itemscope itemtype="https://schema.org/Review"><span itemprop="author">{AUTHOR_NAME}</span><p>Нормальная подписка.</p></div>',
     f'<div itemscope itemtype="https://schema.org/Comment"><span itemprop="author">{AUTHOR_NAME}</span><p>Нормальная подписка.</p></div>',
     f'<section class="comments"><div><span class="commenter">{AUTHOR_NAME}</span><p>Нормальная подписка.</p></div></section>',
+    f'<div class="comments"><div class="comment"><cite>{AUTHOR_NAME}</cite><p>Нормальная подписка.</p></div></div>',
+    f'<div class="h-entry comment"><span class="p-author h-card">{AUTHOR_NAME}</span><p>Нормальная подписка.</p></div>',
+    f'<ul class="comments"><li class="comment"><a class="u-url p-name" href="/u/1">{AUTHOR_NAME}</a><p>Нормальная подписка.</p></li></ul>',
+    f'<div class="reviews"><div class="review"><a rel="author" href="/u/1">{AUTHOR_NAME}</a><p>Нормальная подписка.</p></div></div>',
     f'<div class="otzyv"><span class="author">{AUTHOR_NAME}</span><p>Нормальная подписка.</p></div>',
     f'<div class="testimonial"><span class="username">{AUTHOR_NAME}</span><p>Нормальная подписка.</p></div>',
     '<div class="comments"><p>@olegn согласен с автором, а @denis.v нет.</p></div>',
@@ -178,6 +195,12 @@ AUTHOR_NEGATIVE_HTML = [
     f"<p>Министр {AUTHOR_NAME} заявил, что цены не вырастут. Компания «Вектор» подтвердила.</p>",
     f'<div class="post"><span class="username">{AUTHOR_NAME}</span><p>Заметка автора блога.</p></div>',
     "<p>Пишите на help@example.test или в канал @strateg_news.</p>",
+    f'<div class="article-preview"><article><span class="author">{AUTHOR_NAME}</span><p>Текст.</p></article></div>',
+    f'<div class="commentary"><article><span class="author">{AUTHOR_NAME}</span><p>Текст.</p></article></div>',
+    f'<div class="comments-enabled"><article><span class="author">{AUTHOR_NAME}</span><p>Текст.</p></article></div>',
+    f'<div class="review-article"><article><span class="author">{AUTHOR_NAME}</span><p>Текст.</p></article></div>',
+    f'<div id="review-2026"><article><span class="author">{AUTHOR_NAME}</span><p>Текст.</p></article></div>',
+    f'<div class="comments-wrap" data-author="{AUTHOR_NAME}"><article><p>Директор {AUTHOR_NAME} сообщил о планах.</p></article></div>',
 ]
 
 # --- имена (предупреждение) --------------------------------------------------------------------------------------------
@@ -307,12 +330,45 @@ def measure() -> dict[str, Kind]:
     for _ in range(10):
         k.negatives += 1
         k.false += _replaced(f"Штрихкод {ean13(rng, '978')} в каталоге")
-    k = kind(
-        "штрихкоды EAN-13 «460…» (ложные карты), add"
-    )  # честная строка: 13 цифр, первая 4, Luhn подходит в 1 из 10
-    for _ in range(200):
+    k = kind("штрихкоды EAN-13 (ложные карты), add")  # 13 цифр, у каждого десятого подходит сумма Луна
+    for _ in range(2000):
         k.negatives += 1
-        k.false += _replaced(f"Штрихкод {ean13(rng)} в каталоге")
+        k.false += _replaced(
+            f"Штрихкод {ean13(rng, rng.choice(['460', '590', '400', '500', '250', '']))} в каталоге"
+        )
+    # страница: СНИЛС с разделителями и карта группами заменяются, остальные числа остаются
+    k = kind("СНИЛС с разделителями, fetch")
+    for _ in range(10):
+        k.known += 1
+        k.found += safety.inspect_text(f"Клиент СНИЛС {snils(rng)} в списке").text.count("[СНИЛС]")
+    for _ in range(10):
+        k.negatives += 1
+        value = snils(rng)
+        wrong = value[:-1] + str((int(value[-1]) + 1) % 10)
+        plain = "".join(c for c in snils(rng) if c.isdigit())
+        k.false += safety.inspect_text(f"СНИЛС {wrong}, слитно {plain}").text.count("[СНИЛС]")
+    k = kind("карта группами, fetch")
+    for _ in range(10):
+        number = luhn_number(rng, rng.choice(["4", "51", "22", "37"]), 16)
+        k.known += 2
+        grouped = " ".join(number[i : i + 4] for i in range(0, 16, 4))
+        dashed = "-".join(number[i : i + 4] for i in range(0, 16, 4))
+        k.found += safety.inspect_text(f"Карта {grouped}").text.count("[карта]")
+        k.found += safety.inspect_text(f"Карта {dashed}").text.count("[карта]")
+    for _ in range(10):
+        k.negatives += 4
+        number = luhn_number(rng, "4", 16)
+        k.false += safety.inspect_text(f"Слитно {number}").text.count(
+            "[карта]"
+        )  # цифры подряд на странице не трогаются
+        k.false += safety.inspect_text(f"ИНН {inn12(rng)}").text.count("[ИНН]")
+        bad = " ".join(f"{rng.randint(0, 9999):04d}" for _ in range(4))
+        k.false += safety.inspect_text(
+            f"Заказ {bad if not safety.luhn_ok(bad.replace(' ', '')) else '1234 5678 9012 3450'}"
+        ).text.count("[карта]")
+        k.false += safety.inspect_text(
+            f"Версия {rng.randint(2020, 2030)} {rng.randint(1000, 9999)} 0001"
+        ).text.count("[карта]")
     # ключи: add и fetch
     for fn, label in (
         (lambda t: _replaced(t), "ключи, add"),
@@ -339,7 +395,17 @@ def measure() -> dict[str, Kind]:
     for html in AUTHOR_NEGATIVE_HTML:
         k.negatives += 1
         out_html, _ = fetchlib.mask_authors(f"<html><body>{html}</body></html>")
-        k.false += fetchlib.AUTHOR_LABEL in out_html or fetchlib.MENTION_LABEL in out_html
+        text = fetchlib.visible_text(out_html)  # в тексте: метка в атрибуте разметки текста не меняет
+        k.false += fetchlib.AUTHOR_LABEL in text or fetchlib.MENTION_LABEL in text
+    # пробы разметки отзывов из независимого корпуса: рядом с замером «по записи на правило» это оценка на неизвестном
+    from instruction_corpus_independent import AUTHOR_PROBES
+
+    k = kind("авторы отзывов, пробы неизвестной разметки (независимый корпус), fetch")
+    for _name, html, _was in AUTHOR_PROBES:
+        k.known += 1
+        out_html, _ = fetchlib.mask_authors(f"<html><body>{html}</body></html>")
+        text = fetchlib.visible_text(out_html)
+        k.found += "Иван Котов" not in text and "ivan_k" not in text
     # имена: только предупреждение
     k = kind("имена (предупреждение), add")
     for phrase in NAME_PHRASES:
