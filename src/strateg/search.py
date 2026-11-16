@@ -30,6 +30,7 @@ import hashlib
 import json
 import re
 import sqlite3
+import time
 import unicodedata
 from bisect import bisect_right
 from collections.abc import Callable
@@ -62,7 +63,7 @@ PROJECT_AREAS = frozenset({AREA_CLAIMS, AREA_SOURCES, AREA_MATERIALS, AREA_OUTPU
 
 DEFAULT_LIMIT = 8
 MAX_LIMIT = 50
-MIN_WORD = 3  # короче — подстрока, без индекса (триграмма — три знака)
+MIN_WORD = 3  # короче — слово не идёт в индекс, а проверяется по куску (триграмма — три знака)
 MAX_WORDS = 12  # слов запроса в одной формулировке
 MAX_ALSO = 6
 MAX_QUERY_CHARS = 300
@@ -71,7 +72,9 @@ CLAIM_EXCERPT = 260
 CHUNK_TARGET, CHUNK_MAX = 500, 800  # знаков в куске текста
 SAVE_WAIT = 5.0  # секунд ждать замены файла индекса, пока его держит другая программа
 PER_DOC = 2  # мест из одного снимка в выдаче
-CANDIDATES = 400  # кусков из индекса на формулировку
+CANDIDATES = 400  # кусков из индекса в одной порции на область
+MAX_PORTIONS = 25  # порций кусков на область: потолок работы, если верных мест всё нет
+PORTION_SECONDS = 3.0  # и потолок по времени на область
 RRF_K = 60
 
 VARIANTS = "forms"  # способ приведения слов запроса; выбран замером (ADR-0012)
@@ -102,9 +105,34 @@ _IS_NUMBER = re.compile(rf"^{_NUMBER}$")
 _CYRILLIC = re.compile(r"[а-я]")
 
 
+def query_words(query: str) -> list[tuple[str, bool]]:
+    """Слова запроса: (слово в нижнем регистре и с ё -> е, набрано ли оно заглавными в исходном запросе).
+    Заглавными считается слово из двух знаков и больше, где все буквы заглавные («ИИ», «РФ», «5G»)."""
+    low = fold(query)  # длина та же: слово в исходном запросе стоит на том же месте
+    return [
+        (m.group(), len(m.group()) >= 2 and query[m.start() : m.end()].isupper())
+        for m in _TOKEN.finditer(low)
+    ]
+
+
 def words_of(query: str) -> list[str]:
     """Слова запроса в нижнем регистре, ё -> е: без знаков, кавычек и операторов FTS5. «4,6» — одно слово."""
-    return _TOKEN.findall(fold(query))
+    return [w for w, _ in query_words(query)]
+
+
+def split_words(query: str) -> tuple[list[str], list[str], list[str]]:
+    """(длинные слова, короткие обязательные, не учитываемые). Слово короче трёх знаков обязательно, если оно
+    набрано заглавными («ИИ», «РФ», «ЦА») или в нём есть цифра («5G», «18»); остальные короткие слова
+    («в», «на», «и») при длинных словах в отборе не участвуют. Запрос из одних коротких слов ищет их все."""
+    caps: dict[str, bool] = {}
+    for word, upper in query_words(query)[:MAX_WORDS]:
+        caps[word] = caps.get(word, False) or upper
+    long = [w for w in caps if len(w) >= MIN_WORD]
+    short = [w for w in caps if len(w) < MIN_WORD]
+    if not long:
+        return [], short, []
+    needed = [w for w in short if caps[w] or any(c.isdigit() for c in w)]
+    return long, needed, [w for w in short if w not in needed]
 
 
 @functools.cache
@@ -188,26 +216,28 @@ class Plan:
 
     text: str
     groups: tuple[tuple[str, ...], ...]  # на каждое длинное слово — его формы (как слова, не осколки)
-    short: tuple[str, ...]  # слова короче трёх знаков: слово в найденном куске
-    phrase: str | None  # запрос без длинных слов: ищется подстрокой без индекса
+    short: tuple[str, ...]  # обязательные слова короче трёх знаков: слово в найденном куске, не в индексе
+    phrase: str | None  # в запросе нет слов (одни знаки): ищется подстрокой без индекса
     whole: bool = True  # форма — слово целиком; False — основа слова (способ `stem` замера)
+    ignored: tuple[str, ...] = ()  # короткие слова, по которым куски не отбирались
+
+    @property
+    def words(self) -> tuple[tuple[str, ...], ...]:
+        """Все слова, которые ищутся в куске: длинные (с формами) и обязательные короткие."""
+        return self.groups + tuple((w,) for w in self.short)
 
 
 def make_plan(query: str, method: str = VARIANTS, mode: str = "trigram") -> Plan:
     """Формулировка по способу поиска. Индекс только отбирает куски по формам слова (в триграммах — подстроки
     не короче трёх знаков), а слово в найденном куске проверяется по границам слова (`_locate`): осколок
-    формы не засчитывается. `unicode61` ищет целые слова, там короткие слова идут и в индекс."""
-    words = words_of(query)[:MAX_WORDS]
-    minimum = 1 if mode == "unicode61" else MIN_WORD
-    long = [w for w in dict.fromkeys(words) if len(w) >= minimum]
-    # Короткое слово рядом с длинными обязательно, только если в нём цифра («18», «5»): короткие слова из
-    # букв («в», «на», «и») — предлоги и союзы, по ним куски не отбираются.
-    short = tuple(w for w in dict.fromkeys(words) if len(w) < minimum and any(c.isdigit() for c in w))
-    if not long:
-        phrase = " ".join(words) if words else " ".join(fold(query).split())
-        return Plan(query, (), (), phrase or None)
+    формы не засчитывается. Короткие обязательные слова проверяются только по куску (`split_words`)."""
+    long, short, ignored = split_words(query)
+    if not long and not short:
+        return Plan(query, (), (), " ".join(fold(query).split()) or None)
     groups = tuple(tuple(dict.fromkeys(word_variants(w, method))) for w in long)
-    return Plan(query, groups, short, None, whole=method not in ("stem", "both"))
+    return Plan(
+        query, groups, tuple(short), None, whole=method not in ("stem", "both"), ignored=tuple(ignored)
+    )
 
 
 def quote_term(term: str) -> str:
@@ -701,25 +731,36 @@ class Hit:
         return self.meta.get("status") in ("заменено", "отозвано")
 
 
-def _locate(folded: str, plan: Plan, any_word: bool) -> int | None:
-    """Место первого слова запроса в приведённом куске или None, если кусок не подходит.
+def _scan(folded: str, plan: Plan, any_word: bool) -> tuple[int, int] | None:
+    """(место первого слова, число вхождений слов) в приведённом куске или None, если кусок не подходит.
 
-    Слово — это форма слова с границами слова; подходит кусок, где есть все слова запроса (с `any_word` —
-    хотя бы одно), и все слова короче трёх знаков.
-    """
-    if any(_whole(w).search(folded) is None for w in plan.short):
-        return None
+    Слово — это форма слова с границами слова. Подходит кусок, где есть все слова запроса, длинные и
+    обязательные короткие. С `any_word` — хотя бы одно из длинных слов (короткие тогда не требуются); если
+    длинных нет — хотя бы одно короткое."""
     if plan.phrase is not None:
         at = folded.find(plan.phrase)
-        return None if at == -1 else at
-    found = [m.start() for g in plan.groups if (m := word_pattern(g, plan.whole).search(folded))]
-    if not found or (not any_word and len(found) < len(plan.groups)):
+        return None if at == -1 else (at, folded.count(plan.phrase))
+    patterns = [(True, word_pattern(g, plan.whole)) for g in plan.groups]
+    patterns += [(False, word_pattern((w,), True)) for w in plan.short]
+    places: list[int] = []
+    count = 0
+    long_found = missing = 0
+    for is_long, pattern in patterns:
+        found = [m.start() for m in pattern.finditer(folded)]
+        if found:
+            places.append(found[0])
+            count += len(found)
+            long_found += is_long
+        else:
+            missing += 1
+    if not places or (missing and not any_word) or (any_word and plan.groups and not long_found):
         return None
-    return min(found)
+    return min(places), count
 
 
-def _whole(word: str) -> re.Pattern[str]:
-    return word_pattern((word,), True)
+def _locate(folded: str, plan: Plan, any_word: bool) -> int | None:
+    found = _scan(folded, plan, any_word)
+    return None if found is None else found[0]
 
 
 def _clean(value: Any) -> Any:
@@ -762,28 +803,17 @@ def _hit(
     )
 
 
-def _candidates(
-    index: Index, plan: Plan, any_word: bool, areas: frozenset[str], only_active: bool
-) -> list[tuple[int, float]]:
-    """Куски выбранных областей, где есть слова запроса: (номер куска, оценка; меньше — лучше).
-
-    Область и «только действующие» отбираются в самом запросе к индексу, и предел `CANDIDATES` действует на
-    каждую область отдельно: куски снимков не вытесняют утверждения. Ошибку SQLite не глушим: её
-    обрабатывает `run_checked`.
-    """
-    out: list[tuple[int, float]] = []
-    for area in sorted(areas):
-        out += _area_candidates(index, plan, any_word, area, only_active)
-    out.sort(key=lambda x: x[1])
-    return out
-
-
 def _area_candidates(
-    index: Index, plan: Plan, any_word: bool, area: str, only_active: bool
+    index: Index, plan: Plan, any_word: bool, area: str, only_active: bool, offset: int = 0
 ) -> list[tuple[int, float]]:
+    """Порция кусков одной области, где есть слова запроса: (номер куска, оценка; меньше — лучше).
+
+    Область и «только действующие» отбираются в самом запросе к индексу, а `CANDIDATES` — размер порции на
+    область: куски снимков не вытесняют утверждения. Ошибку SQLite не глушим: её обрабатывает `run_checked`.
+    """
     conn = index.conn
     where = "d.area = ?" + (" and d.stale = 0" if only_active else "")
-    if plan.phrase is None and index.mode != "plain":
+    if plan.groups and index.mode != "plain":
         minimum = MIN_WORD if index.mode == "trigram" else 1
         expr = match_expression(
             plan, any_word=any_word, prefix_latin=index.mode == "unicode61", minimum=minimum
@@ -791,21 +821,18 @@ def _area_candidates(
         rows = conn.execute(
             "select fts.rowid, bm25(fts) from fts "
             "join chunks c on c.id = fts.rowid join docs d on d.id = c.doc "
-            f"where fts match ? and {where} order by bm25(fts) limit ?",
-            (expr, area, CANDIDATES),
+            f"where fts match ? and {where} order by bm25(fts), fts.rowid limit ? offset ?",
+            (expr, area, CANDIDATES, offset),
         ).fetchall()
         return [(int(r), float(s)) for r, s in rows]
+    if offset:  # перебор уже проверил все куски области: следующих порций нет
+        return []
     out = []
     query = f"select c.id, c.text from chunks c join docs d on d.id = c.doc where {where}"
     for chunk_id, text in conn.execute(query, (area,)):
-        folded = fold(text)
-        if plan.phrase is not None:
-            n = folded.count(plan.phrase)
-        else:
-            counts = [len(word_pattern(g, plan.whole).findall(folded)) for g in plan.groups]
-            n = sum(counts) if (any(counts) if any_word else all(counts)) else 0
-        if n:
-            out.append((chunk_id, -float(n)))
+        found = _scan(fold(text), plan, any_word)
+        if found:
+            out.append((chunk_id, -float(found[1])))
     out.sort(key=lambda x: x[1])
     return out[:CANDIDATES]
 
@@ -819,50 +846,61 @@ _ROW = (
 def search_index(
     index: Index, plan: Plan, areas: frozenset[str], only_active: bool = False
 ) -> tuple[list[Hit], bool]:
-    """Места по одной формулировке, лучшие первыми. Второе значение: искали по любому слову, а не по всем.
+    """Места по одной формулировке: область за областью, внутри области лучшие первыми. Второе значение:
+    искали по любому слову, а не по всем.
 
     Кусок из индекса — только кандидат: слово в нём проверяется по границам слова (`_locate`). Не нашлось
     ни одного верного места по всем словам — повтор по любому слову.
     """
-    any_word_modes = [False] if (len(plan.groups) <= 1 or plan.phrase is not None) else [False, True]
-    for any_word in any_word_modes:
-        hits = _verified(index, plan, areas, only_active, any_word)
+    one_word = len(plan.words) <= 1 or plan.phrase is not None
+    for any_word in [False] if one_word else [False, True]:
+        hits = [
+            hit
+            for area in AREAS
+            if area in areas
+            for hit in _area_hits(index, plan, area, only_active, any_word)
+        ]
         if hits:
             return hits, any_word
     return [], False
 
 
-def _verified(
-    index: Index, plan: Plan, areas: frozenset[str], only_active: bool, any_word: bool
-) -> list[Hit]:
-    found = _candidates(index, plan, any_word, areas, only_active)
-    if not found:
-        return []
-    marks = ",".join("?" * len(found))
-    rows = {r[0]: r for r in index.conn.execute(_ROW.format(marks), [c for c, _ in found])}
+def _area_hits(index: Index, plan: Plan, area: str, only_active: bool, any_word: bool) -> list[Hit]:
+    """Верные места одной области. Куски берутся из индекса порциями по `CANDIDATES`: осколки слов («просто»
+    при поиске «рост») отсеиваются проверкой границы слова уже после порции, и если верных мест мало, берётся
+    следующая порция. Конец — кончились кандидаты, набралось `MAX_LIMIT` мест, вышло время или порции."""
     metas: dict[int, dict[str, Any]] = {}
     hits: list[Hit] = []
     per_doc: dict[int, int] = {}
     seen_claims: set[str] = set()
-    for chunk_id, score in found:
-        row = rows.get(chunk_id)
-        if row is None or row[6] not in areas:
-            continue
-        doc_id, area, ref = row[5], row[6], row[7]
-        if area == AREA_CLAIMS:
-            if ref in seen_claims:
+    deadline = time.monotonic() + PORTION_SECONDS
+    for portion in range(MAX_PORTIONS):
+        found = _area_candidates(index, plan, any_word, area, only_active, portion * CANDIDATES)
+        if not found:
+            break
+        marks = ",".join("?" * len(found))
+        rows = {r[0]: r for r in index.conn.execute(_ROW.format(marks), [c for c, _ in found])}
+        for chunk_id, score in found:
+            row = rows.get(chunk_id)
+            if row is None:
                 continue
-        elif per_doc.get(doc_id, 0) >= PER_DOC:
-            continue
-        if doc_id not in metas:
-            metas[doc_id] = _clean(json.loads(row[9]))
-        hit = _hit(row[:9], metas[doc_id], plan, score, any_word)
-        if hit is None:
-            continue
-        if area == AREA_CLAIMS:
-            seen_claims.add(ref)
-        per_doc[doc_id] = per_doc.get(doc_id, 0) + 1
-        hits.append(hit)
+            doc_id, ref = row[5], row[7]
+            if area == AREA_CLAIMS:
+                if ref in seen_claims:
+                    continue
+            elif per_doc.get(doc_id, 0) >= PER_DOC:
+                continue
+            if doc_id not in metas:
+                metas[doc_id] = _clean(json.loads(row[9]))
+            hit = _hit(row[:9], metas[doc_id], plan, score, any_word)
+            if hit is None:
+                continue
+            if area == AREA_CLAIMS:
+                seen_claims.add(ref)
+            per_doc[doc_id] = per_doc.get(doc_id, 0) + 1
+            hits.append(hit)
+        if len(found) < CANDIDATES or len(hits) >= MAX_LIMIT or time.monotonic() > deadline:
+            break
     return hits
 
 
@@ -875,6 +913,31 @@ class Result:
     rebuilt: bool
     mode: str
     skipped: list[str]
+    ignored: list[str] = field(default_factory=list)  # короткие слова запроса, по которым не отбирали
+
+
+def _shown(ordered: list[Hit], limit: int) -> list[Hit]:
+    """Какие места показать. Утверждения вытеснялись бы длинными кусками снимков, поэтому каждой найденной
+    области — гарантированная доля: утверждениям не меньше половины предела, каждой другой области равная
+    доля остатка; что осталось — по рангу. Порядок показа тот же, что в `ordered`."""
+    chosen: set[int] = set()
+
+    def reserve(area: str, count: int) -> None:
+        for hit in ordered:
+            if count > 0 and hit.area == area and not hit.stale and id(hit) not in chosen:
+                chosen.add(id(hit))
+                count -= 1
+
+    others = [a for a in AREAS if a != AREA_CLAIMS and any(h.area == a and not h.stale for h in ordered)]
+    reserve(AREA_CLAIMS, (limit + 1) // 2 if others else limit)
+    if others:
+        share = max(1, (limit - len(chosen)) // len(others))
+        for area in others:
+            reserve(area, min(share, limit - len(chosen)))
+    for hit in ordered:
+        if len(chosen) < limit:
+            chosen.add(id(hit))
+    return [h for h in ordered if id(h) in chosen]
 
 
 def run_search(
@@ -886,35 +949,41 @@ def run_search(
     only_active: bool,
     method: str = VARIANTS,
 ) -> Result:
-    """Все формулировки по всем индексам, объединение по рангу (RRF), отозванное — в конец."""
+    """Все формулировки по всем индексам. Места объединяются по рангу внутри области (RRF), а не по сырой
+    оценке; отозванное идёт в конец, области делят показ (`_shown`)."""
     fused: dict[tuple[str, str, int], float] = {}
     best: dict[tuple[str, str, int], Hit] = {}
     full_found = False
     plans: dict[tuple[str, str], Plan] = {}
     for query in queries:
-        pooled: list[Hit] = []
+        pooled: dict[str, list[Hit]] = {}
         for index in indexes:
             plan = plans.setdefault((query, index.mode), make_plan(query, method, index.mode))
             hits, partial = search_index(index, plan, areas, only_active)
-            pooled += hits
+            for hit in hits:
+                pooled.setdefault(hit.area, []).append(hit)
             full_found = full_found or (bool(hits) and not partial)
-        pooled.sort(key=lambda h: h.score)
-        for rank, hit in enumerate(pooled, start=1):
-            fused[hit.key] = fused.get(hit.key, 0.0) + 1.0 / (RRF_K + rank)
-            best.setdefault(hit.key, hit)
+        for area_hits in pooled.values():
+            area_hits.sort(key=lambda h: h.score)
+            for rank, hit in enumerate(area_hits, start=1):
+                fused[hit.key] = fused.get(hit.key, 0.0) + 1.0 / (RRF_K + rank)
+                best.setdefault(hit.key, hit)
     ordered = sorted(best.values(), key=lambda h: (h.stale, -fused[h.key]))
     if only_active:
         ordered = [h for h in ordered if not h.stale]
     for hit in ordered:
         hit.score = fused[hit.key]
+    shown = _shown(ordered, limit)
+    ignored = list(dict.fromkeys(w for q in queries for w in split_words(q)[2]))
     return Result(
-        ordered[:limit],
+        shown,
         len(ordered),
         sum(1 for h in ordered if h.stale),
         bool(ordered) and not full_found,
         any(i.rebuilt for i in indexes),
         indexes[0].mode if indexes else search_mode(),
         [s for i in indexes for s in i.notes],
+        ignored,
     )
 
 
@@ -1056,10 +1125,12 @@ def hit_line(hit: Hit, rank: int) -> list[str]:
 
 
 def render(result: Result, queries: list[str], areas: list[str]) -> list[str]:
+    ignored = [f"Не учитывались: {', '.join(result.ignored)}."] if result.ignored else []
     if not result.hits:
         return [
             "Ничего не найдено. Попробуйте другие слова или `--also` с синонимом; области: "
-            + ", ".join(areas)
+            + ", ".join(areas),
+            *ignored,
         ]
     lines: list[str] = []
     for rank, hit in enumerate(result.hits, start=1):
@@ -1071,6 +1142,7 @@ def render(result: Result, queries: list[str], areas: list[str]) -> list[str]:
     stale_hidden = result.stale_total - sum(1 for h in result.hits if h.stale)
     if stale_hidden > 0:
         lines.append(f"Отозванных и заменённых за пределом выдачи: {stale_hidden} (они идут последними).")
+    lines += ignored
     if result.partial:
         lines.append("Все слова вместе нигде не встретились: показаны места с частью слов.")
     if any(h.meta.get("untrusted") or h.part == "цитата" for h in result.hits):
@@ -1131,6 +1203,7 @@ def cmd_search(args: argparse.Namespace) -> int:
         "only_active": args.only_active,
         "results": [hit_data(h, n) for n, h in enumerate(result.hits, start=1)],
         "skipped": result.skipped,
+        "ignored": result.ignored,
         "hint": IMPACT_HINT,
         "note": "поиск по словам и их формам, смысловой поиск приблизительный: синонимы — `--also`",
     }

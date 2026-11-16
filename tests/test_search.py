@@ -446,7 +446,7 @@ def test_expression_escapes_any_word(term):
     conn.close()
 
 
-def test_short_query_is_a_substring_without_the_index():
+def test_short_query_is_whole_words_without_the_index():
     index = memory_index({"И-1": "Это ИИ и ИТ вместе.", "И-2": "Ничего такого."})
     assert [h.ref for h in find(index, "ии").hits] == ["И-1"]
     assert [h.ref for h in find(index, "я").hits] == ["И-2"] or find(index, "я").hits == []

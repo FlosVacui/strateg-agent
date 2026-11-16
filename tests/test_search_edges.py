@@ -337,7 +337,7 @@ def test_a_sqlite_error_that_a_rebuild_does_not_cure_is_an_error_not_an_empty_an
     def broken(*args, **kwargs):
         raise sqlite3.DatabaseError("database disk image is malformed")
 
-    monkeypatch.setattr(search, "_candidates", broken)
+    monkeypatch.setattr(search, "_area_candidates", broken)
     code, out, err = cli("search", "доставка")
     assert code == 1 and "ошибка SQLite" in err and "Ничего не найдено" not in out
     code, out, _ = cli("search", "доставка", "--json")
@@ -395,3 +395,196 @@ def test_material_without_confirmation_is_named_in_the_output(corpus, cli):
     out = cli("search", "температурного режима")[1]
     assert "Не проиндексировано И-21" in out
     assert "И-21" not in refs(ask(cli, "температурного режима"))
+
+
+# --- запрос из коротких слов: слово целиком ----------
+
+
+@pytest.mark.parametrize("mode", ["trigram", "unicode61", "plain"])
+def test_a_query_of_short_words_matches_whole_words_only(mode):
+    index = memory(
+        [
+            source_doc("И-1", "Оплата в приложении, после регистрации; тридцати штук по 1500 рублей."),
+            source_doc("И-2", "Внедрили ИИ в 2025 году. ЦА выросла на 5 пунктов."),
+        ],
+        mode,
+    )
+    for query in ("ИИ", "ии", "ЦА", "5", "ИИ ЦА"):
+        assert [h.ref for h in find(index, query).hits] == ["И-2"], query
+    assert find(index, "ИИ").hits[0].excerpt.startswith("Внедрили ИИ")
+
+
+def test_a_short_query_on_the_corpus_has_no_fragments(corpus, cli):
+    for query in ("ИИ", "ЦА", "5"):
+        for r in ask(cli, query, "--limit", "50")["results"]:
+            words = set(re.findall(r"\w+", (r["excerpt"] + " " + (r.get("text") or "")).lower()))
+            assert query.lower() in words or r["where"] != "текст", (query, r)
+
+
+# --- короткие слова рядом с длинными ----------
+
+
+def sector_index(mode: str = "trigram") -> search.Index:
+    return memory(
+        [
+            source_doc("И-1", "Рост рынка ИИ в РФ вырос за год."),
+            source_doc("И-2", "Рост рынка в Индии вырос за год."),
+            source_doc("И-3", "Прирост дохода. Рост дохода вырос."),
+            source_doc("И-4", "Рынок 5G вырос; B2B рынок тоже вырос."),
+        ],
+        mode,
+    )
+
+
+@pytest.mark.parametrize("mode", ["trigram", "unicode61", "plain"])
+def test_a_short_word_in_capitals_is_required_next_to_long_words(mode):
+    index = sector_index(mode)
+    for query in ("рост РФ", "ИИ рост", "рынок ИИ РФ"):
+        found = find(index, query)
+        assert [h.ref for h in found.hits] == ["И-1"] and not found.partial, query
+        assert found.ignored == [], query
+    assert [h.ref for h in find(index, "рынок 5G").hits] == ["И-4"]
+    assert [h.ref for h in find(index, "рынок B2B").hits] == ["И-4"]
+
+
+def test_a_required_short_word_is_a_word_not_a_fragment():
+    index = memory([source_doc("И-1", "Рост рынка в РФИ."), source_doc("И-2", "Рост рынка в РФ.")])
+    assert [h.ref for h in find(index, "рост РФ").hits] == ["И-2"]
+
+
+@pytest.mark.parametrize("mode", ["trigram", "unicode61", "plain"])
+def test_short_words_in_lowercase_are_not_used_and_are_named(mode):
+    index = memory([source_doc("И-1", "Конец года.")], mode)
+    found = find(index, "в конце года")
+    assert [h.ref for h in found.hits] == ["И-1"] and found.ignored == ["в"]
+    lines = search.render(found, ["в конце года"], ["источники"])
+    assert "Не учитывались: в." in lines
+    nothing = find(index, "в на квантовая")  # и когда ничего не нашлось, слова названы
+    assert not nothing.hits and nothing.ignored == ["в", "на"]
+    assert "Не учитывались: в, на." in search.render(nothing, ["q"], ["источники"])
+
+
+def test_the_cli_names_the_ignored_words(corpus, cli):
+    data = ask(cli, "в конце второго года")
+    assert data["ignored"] == ["в"] and "И-20" in refs(data)
+    code, out, _ = cli("search", "в конце второго года")
+    assert code == 0 and "Не учитывались: в." in out
+    assert ask(cli, "конце второго года")["ignored"] == []
+
+
+# --- предел кусков действует после проверки границы слова ----------
+
+
+def noisy_index(n: int = 450) -> search.Index:
+    noise = "Это просто и просто, просто так, простой и простые. " * 12
+    docs = [source_doc(f"И-{i}", noise) for i in range(1, n + 1)]
+    docs.append(source_doc("И-9000", "Рост продаж за год составил пять процентов, рост был устойчивым."))
+    return memory(docs)
+
+
+def test_noise_chunks_beyond_the_candidate_limit_do_not_hide_the_place():
+    index = noisy_index()
+    assert index.conn.execute("select count(*) from chunks").fetchone()[0] > search.CANDIDATES
+    found = find(index, "рост")
+    assert [h.ref for h in found.hits] == ["И-9000"] and found.total == 1
+
+
+def test_the_search_for_noise_chunks_stops_at_the_ceiling(monkeypatch):
+    index = noisy_index()
+    monkeypatch.setattr(search, "MAX_PORTIONS", 1)
+    assert find(index, "рост").total == 0  # потолок: ограничение описано в ADR-0012
+    monkeypatch.setattr(search, "MAX_PORTIONS", 25)
+    monkeypatch.setattr(search, "PORTION_SECONDS", -1.0)
+    assert find(index, "рост").total == 0
+
+
+# --- области делят показ ----------
+
+
+def dense_docs(n_sources: int = 60, n_claims: int = 3) -> list[Doc]:
+    sentence = "Доставка заказа идёт по городу, доставка бесплатная, доставка быстрая и доставка надёжная. "
+    docs = [source_doc(f"И-{i}", sentence * 3) for i in range(1, n_sources + 1)]
+    return docs + [claim_doc(f"У-{n}", "Одна доставка в день") for n in range(1, n_claims + 1)]
+
+
+@pytest.mark.parametrize("limit", [1, 3, 8, 50])
+def test_claims_are_among_the_shown_places_even_when_snapshots_are_denser(limit):
+    found = find(memory(dense_docs()), "доставка", areas=search.DEFAULT_AREAS, limit=limit)
+    claims = [h for h in found.hits if h.area == AREA_CLAIMS]
+    assert found.total == 63 and len(found.hits) == limit
+    assert len(claims) == min(3, (limit + 1) // 2)
+
+
+def test_each_requested_area_gets_a_guaranteed_share_of_the_shown_places():
+    docs = dense_docs(30, 10)
+    docs += [
+        Doc(search.AREA_MATERIALS, f"И-{n}", "m", {"pages": []}, [Chunk(0, "Доставка " * 40)])
+        for n in range(100, 130)
+    ]
+    index = memory(docs)
+    found = find(index, "доставка", areas=search.DEFAULT_AREAS, limit=8)
+    by_area = {a: sum(1 for h in found.hits if h.area == a) for a in search.DEFAULT_AREAS}
+    assert by_area == {"утверждения": 4, "источники": 2, "материалы": 2}
+    only = find(index, "доставка", areas={AREA_SOURCES}, limit=8)
+    assert {h.area for h in only.hits} == {AREA_SOURCES} and len(only.hits) == 8
+    few = find(memory(dense_docs(30, 1)), "доставка", areas=search.DEFAULT_AREAS, limit=8)
+    assert [h.area for h in few.hits].count(AREA_CLAIMS) == 1 and len(few.hits) == 8
+
+
+def test_a_revoked_claim_does_not_take_the_reserved_place_of_a_current_one():
+    docs = dense_docs(30, 0) + [claim_doc("У-1", "Одна доставка", status="отозвано")]
+    found = find(memory(docs), "доставка", areas=search.DEFAULT_AREAS, limit=8)
+    assert "У-1" not in {h.ref for h in found.hits} and len(found.hits) == 8
+
+
+# --- пробелы: цепочка замен, версия индекса, «все слова» ----------
+
+
+def test_the_chain_of_replacements_is_followed_when_the_index_is_built_from_the_files(corpus):
+    def chain(claims):
+        for number, successor in (("У-8", "У-9"), ("У-9", "У-10")):
+            claim = claims[number]
+            claim.update({"status": "заменено", "replaced_by": successor})
+            claim["status_history"].append({**claim["status_history"][0], "status": "заменено"})
+
+    edit_claims(corpus, chain)
+    docs, _ = search.project_docs(search.read_project_files(corpus))
+    meta = {d.ref: d.meta for d in docs if d.area == AREA_CLAIMS}
+    assert meta["У-8"]["replaced_by_note"] == "само заменено на У-10"
+    assert meta["У-9"]["replaced_by_note"] is None
+
+
+def test_an_index_of_another_version_is_rebuilt(corpus, monkeypatch):
+    files = search.read_project_files(corpus)
+    path = corpus / ".tmp" / "search.sqlite"
+
+    def make():
+        return search.project_docs(files)
+
+    assert search.acquire(path, files, make).rebuilt
+    again = search.acquire(path, files, make)
+    assert not again.rebuilt
+    again.close()
+    now = search.INDEX_VERSION
+    assert now >= 2, "колонка `stale` в таблице документов появилась в версии 2: прежние индексы не годятся"
+    signature = search._signature(files, "trigram")
+    monkeypatch.setattr(search, "INDEX_VERSION", now + 1)
+    assert search._signature(files, "trigram") != signature, "версия входит в подпись индекса"
+    monkeypatch.undo()
+    # подпись сошлась, а версия в файле другая: индекс записан прежней сборкой
+    conn = sqlite3.connect(path)
+    conn.execute("update meta set v = ? where k = 'version'", (str(now - 1),))
+    conn.commit()
+    conn.close()
+    old = search.acquire(path, files, make)
+    assert old.rebuilt
+    old.close()
+
+
+def test_the_all_words_check_needs_every_word_not_one_of_them():
+    index = memory([source_doc("И-1", "Оценка доставки."), source_doc("И-2", "Нет такого.")])
+    found = find(index, "цена доставки")
+    assert [h.ref for h in found.hits] == ["И-1"] and found.partial, "«оценка» — осколок, «цена» не нашлась"
+    both = memory([source_doc("И-1", "Оценка доставки."), source_doc("И-3", "Цена и доставка.")])
+    full = find(both, "цена доставки")
+    assert [h.ref for h in full.hits] == ["И-3"] and not full.partial
