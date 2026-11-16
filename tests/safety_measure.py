@@ -18,6 +18,7 @@ from strateg import fetch as fetchlib
 from strateg import keys, safety
 
 SEED = 20261116
+RANDOM_NUMBERS = 1000  # случайных чисел каждого вида для доли ложных меток
 
 
 # --- порождение номеров с верными контрольными суммами ------------------------------------------------------------
@@ -356,19 +357,26 @@ def measure() -> dict[str, Kind]:
         k.found += safety.inspect_text(f"Карта {grouped}").text.count("[карта]")
         k.found += safety.inspect_text(f"Карта {dashed}").text.count("[карта]")
     for _ in range(10):
-        k.negatives += 4
+        k.negatives += 3
         number = luhn_number(rng, "4", 16)
         k.false += safety.inspect_text(f"Слитно {number}").text.count(
             "[карта]"
         )  # цифры подряд на странице не трогаются
         k.false += safety.inspect_text(f"ИНН {inn12(rng)}").text.count("[ИНН]")
-        bad = " ".join(f"{rng.randint(0, 9999):04d}" for _ in range(4))
-        k.false += safety.inspect_text(
-            f"Заказ {bad if not safety.luhn_ok(bad.replace(' ', '')) else '1234 5678 9012 3450'}"
-        ).text.count("[карта]")
         k.false += safety.inspect_text(
             f"Версия {rng.randint(2020, 2030)} {rng.randint(1000, 9999)} 0001"
         ).text.count("[карта]")
+    # случайные числа без подбора под сумму Луна и контрольное число: настоящая доля ложных меток
+    k = kind("карта группами, случайные числа (ложные метки), fetch")
+    for _ in range(RANDOM_NUMBERS):
+        k.negatives += 1
+        groups = " ".join(f"{rng.randint(0, 9999):04d}" for _ in range(4))
+        k.false += safety.inspect_text(f"Заказ {groups}").text.count("[карта]")
+    k = kind("СНИЛС с разделителями, случайные числа (ложные метки), fetch")
+    for _ in range(RANDOM_NUMBERS):
+        k.negatives += 1
+        value = f"{rng.randint(0, 999):03d}-{rng.randint(0, 999):03d}-{rng.randint(0, 999):03d}-{rng.randint(0, 99):02d}"
+        k.false += safety.inspect_text(f"Артикул {value}").text.count("[СНИЛС]")
     # ключи: add и fetch
     for fn, label in (
         (lambda t: _replaced(t), "ключи, add"),
@@ -397,10 +405,10 @@ def measure() -> dict[str, Kind]:
         out_html, _ = fetchlib.mask_authors(f"<html><body>{html}</body></html>")
         text = fetchlib.visible_text(out_html)  # в тексте: метка в атрибуте разметки текста не меняет
         k.false += fetchlib.AUTHOR_LABEL in text or fetchlib.MENTION_LABEL in text
-    # пробы разметки отзывов из независимого корпуса: рядом с замером «по записи на правило» это оценка на неизвестном
+    # пробы разметки отзывов из корпуса разработки: рядом с замером «по записи на правило» это пробы другой разметки
     from instruction_corpus_independent import AUTHOR_PROBES
 
-    k = kind("авторы отзывов, пробы неизвестной разметки (независимый корпус), fetch")
+    k = kind("авторы отзывов, пробы другой разметки (корпус разработки), fetch")
     for _name, html, _was in AUTHOR_PROBES:
         k.known += 1
         out_html, _ = fetchlib.mask_authors(f"<html><body>{html}</body></html>")

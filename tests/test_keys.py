@@ -422,3 +422,59 @@ def test_scan_text_is_fast_on_a_million_empty_and_short_lines():
 def test_scan_text_still_reports_line_numbers_after_skipping_short_lines():
     text = "\n" * 5 + build("ghp") + "\nкороткая\n" + "password=" + "Sup3rS3cretValue"
     assert [n for n, _ in pack.scan_text(text)] == [6, 8]
+
+
+# --- общий шаблон присваивания: код, подстановки и пустые значения ключом не считаются ----------------------
+
+NOT_A_KEY_LINES = [
+    "api_key=YOUR_API_KEY_GOES_HERE",
+    "api_key = <your-api-key-value>",
+    "password: ********************",
+    "api_key=xxxxxxxxxxxxxxxx",
+    "secret = EXAMPLE_SECRET_VALUE",
+    "token=changeme-changeme-please",
+    "password: ${DB_PASSWORD_FROM_VAULT}",
+    "token: Optional[str] = None",
+    "token: Optional[SecretStr]",
+    "api_key=os.getenv(API_KEY)",
+    "secret = os.environ.get('SECRET_KEY')",
+    "token = tokenizer.encode(text)",
+    "secret = hashlib.sha256(data).hexdigest()",
+    "private_key=load_private_key(path)",
+    "const secret = process.env.API_SECRET_VALUE;",
+    "token = settings.AUTH_TOKEN_VALUE",
+    "api_key=${SERVICE_API_KEY_VALUE}",
+    "secret: $SERVICE_SECRET_VALUE_NAME",
+]
+
+
+@pytest.mark.parametrize("line", NOT_A_KEY_LINES)
+def test_a_placeholder_a_type_a_call_or_an_environment_lookup_is_not_a_key(line):
+    assert keys.find_keys(line) == [], line
+    assert keys.scan_lines(line) == [], line
+    assert keys.mask_keys(line)[0] == line
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        'password = "{v}"',
+        "api_key={v}",
+        "token: '{v}'",
+        '"secret": "{v}"',
+        "export API_KEY={v}",
+        "Authorization-token: {v}",
+        "client_secret = {v}  # prod",
+        "access_key: {v}",
+    ],
+)
+def test_a_real_assignment_with_a_literal_is_still_replaced(template):
+    value = build("plain")
+    masked, hits = keys.mask_keys(template.format(v=value))
+    assert value not in masked and len(hits) == 1, template
+    assert keys.scan_lines(template.format(v=value))
+
+
+def test_a_value_with_dots_and_digits_is_not_taken_for_a_name_chain():
+    value = "Ab1" + "." + "Cd2Ef3" + "." + "Gh4Ij5Kl6"
+    assert keys.mask_keys(f"token={value}")[1]

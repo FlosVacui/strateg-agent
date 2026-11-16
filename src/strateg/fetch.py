@@ -615,19 +615,25 @@ MAX_AUTHOR_CHARS = 200  # длиннее — это не имя, а целый �
 # Блок отзыва или комментария: тип schema.org (последняя часть адреса `itemtype`) или слово в `class` и `id`.
 REVIEW_ITEMTYPES = frozenset({"review", "comment", "usercomments", "userreview", "questionanswer"})
 # Слова класса и `id`, по которым блок считается блоком отзывов: слово целиком (`comments`, `review-item`),
-# а не подстрока (`preview`, `commentary`). Слова из `NOT_BLOCK_WORDS` и год в том же классе делают его не
-# блоком: `comments-enabled`,
-# `review-article`, `review-2026` — состояние страницы или статья-обзор, автор статьи в них остаётся.
+# а не подстрока (`preview`, `commentary`). Вето на блок есть у трёх видов слов, остальное остаётся блоком:
+# лишняя метка в снимке дешевле имени комментатора, которое ушло бы модели.
+# - Слово-состояние или виджет (`STATE_WORDS`) и год в том же классе: `comments-enabled`, `has-comments`,
+#   `comments-count`, `review-2026` — состояние страницы, а не список отзывов.
+# - `open` и `closed` (`CONTEXT_STATE_WORDS`) — состояние, только если это обёртка страницы (`body`, внутри
+#   статья или заголовок): `<body class="comments-open">`. А `reviews-open` с отзывами внутри — блок.
+# - Существительное статьи ПОСЛЕ слова блока (`review-article`, `review-guide`): обзор, а не отзывы. Перед
+#   словом блока (`post-comments`) и другие слова (`reviews-page`, `comments-news`) блоку не мешают.
 REVIEW_BLOCK_WORDS = frozenset(
     "comment comments review reviews feedback feedbacks testimonial testimonials otzyv otzyvy otzovik "
     "kommentarii "
     "отзыв отзывы комментарий комментарии коммент комменты".split()
 )
-NOT_BLOCK_WORDS = frozenset(
-    "article articles post posts page news story summary enabled disabled open closed count counter number "
-    "form link toggle button btn title header heading label icon allowed on off no has with without can show "
-    "hide".split()
+STATE_WORDS = frozenset(
+    "enabled disabled count counter number form link toggle button btn title header heading label icon "
+    "allowed no has can off show hide".split()
 )
+CONTEXT_STATE_WORDS = frozenset("open closed".split())
+ARTICLE_WORDS_AFTER = frozenset("article articles guide story stories".split())
 # Классы, которые называют автора отзыва или комментария: значимы где угодно. Сравниваются без «-» и «_»,
 # без учёта регистра: `comment-author`, `comment__author`, `commentAuthor` — один признак.
 AUTHOR_CLASSES = frozenset(
@@ -703,18 +709,33 @@ def _is_year(word: str) -> bool:
     return word.isdigit() and len(word) == 4 and 1990 <= int(word) <= 2099
 
 
-def _name_is_block(value: str) -> bool:
+def _page_wrapper(el) -> bool:
+    """Обёртка страницы, а не списка отзывов: `html`, `body` или внутри статья, `main`, `h1`."""
+    if el.tag in ("html", "body"):
+        return True
+    return any(el.find(f".//{tag}") is not None for tag in ("article", "main", "h1"))
+
+
+def _name_is_block(value: str, el=None) -> bool:
+    """Имя класса или `id` называет блок отзывов. `el` нужен для слов `open` и `closed`: без него это вето."""
     words = _words(value)
-    return any(w in REVIEW_BLOCK_WORDS for w in words) and not any(
-        w in NOT_BLOCK_WORDS or _is_year(w) for w in words
-    )
+    first = next((i for i, w in enumerate(words) if w in REVIEW_BLOCK_WORDS), None)
+    if first is None:
+        return False
+    if any(w in STATE_WORDS or _is_year(w) for w in words):
+        return False
+    if any(w in ARTICLE_WORDS_AFTER for w in words[first + 1 :]):
+        return False
+    if any(w in CONTEXT_STATE_WORDS for w in words):
+        return el is not None and not _page_wrapper(el)
+    return True
 
 
 def _is_review_block(el) -> bool:
     if _is_review_itemtype(el):
         return True
     names = el.attrib.get("class", "").split() + [el.attrib.get("id", "")]
-    return any(_name_is_block(n) for n in names if n)
+    return any(_name_is_block(n, el) for n in names if n)
 
 
 def _in_review_block(el) -> bool:

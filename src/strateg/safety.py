@@ -291,11 +291,17 @@ def _digits(text: str) -> str:
 
 
 class _Taken:
-    """Занятые отрезки текста: упорядоченные непересекающиеся, проверка свободы — бинарным поиском."""
+    """Занятые отрезки текста: упорядоченные непересекающиеся, проверка свободы — бинарным поиском.
+
+    Новые отрезки копятся отдельно и вливаются в основной список один раз после прохода шаблона (`commit`):
+    вставка в середину списка на каждый отрезок растила бы время квадратом от числа замен.
+    Отрезки одного прохода не пересекаются; свободу проверяют по тому, что занято до прохода.
+    """
 
     def __init__(self) -> None:
         self.starts: list[int] = []
         self.ends: list[int] = []
+        self._new: list[tuple[int, int]] = []
 
     def free(self, a: int, b: int) -> bool:
         i = bisect.bisect_right(self.starts, a)
@@ -304,9 +310,15 @@ class _Taken:
         return not (i < len(self.starts) and self.starts[i] < b)
 
     def add(self, a: int, b: int) -> None:
-        i = bisect.bisect_right(self.starts, a)
-        self.starts.insert(i, a)
-        self.ends.insert(i, b)
+        self._new.append((a, b))
+
+    def commit(self) -> None:
+        if not self._new:
+            return
+        merged = sorted([*zip(self.starts, self.ends, strict=True), *self._new])  # две упорядоченные части
+        self.starts = [x for x, _ in merged]
+        self.ends = [y for _, y in merged]
+        self._new = []
 
 
 def _line_of(newlines: list[int], pos: int) -> int:
@@ -331,9 +343,11 @@ def mask_personal(text: str) -> tuple[str, list[Replacement], list[str]]:
 
     for hit in keys.find_keys(text):  # ключи первыми: их цифры не должны сойти за телефон или номер
         take(hit.start, hit.end, KEY_LABEL, KEYS_CATEGORY, hit.kind)
+    taken.commit()
     for m in _EMAIL.finditer(text):
         if taken.free(m.start(), m.end()):
             take(m.start(), m.end(), EMAIL_LABEL, "адреса почты")
+    taken.commit()
     for pattern in _PHONES:
         for m in pattern.finditer(text):
             if taken.free(m.start(), m.end()):
@@ -341,14 +355,17 @@ def mask_personal(text: str) -> tuple[str, list[Replacement], list[str]]:
                     take(m.start(), m.end(), None, None)
                 else:
                     take(m.start(), m.end(), PHONE_LABEL, "телефоны")
+        taken.commit()
     for pattern in (_CARD_GROUPED, _CARD_PLAIN):
         for m in pattern.finditer(text):
             digits = _digits(m.group())
             if 13 <= len(digits) <= 19 and luhn_ok(digits) and taken.free(m.start(), m.end()):
                 take(m.start(), m.end(), CARD_LABEL, _NUMBERS)
+        taken.commit()
     for m in _SNILS.finditer(text):
         if snils_ok(_digits(m.group())) and taken.free(m.start(), m.end()):
             take(m.start(), m.end(), SNILS_LABEL, _NUMBERS)
+    taken.commit()
     for m in _INN.finditer(text):
         digits = m.group()
         if taken.free(m.start(), m.end()) and inn_ok(digits):

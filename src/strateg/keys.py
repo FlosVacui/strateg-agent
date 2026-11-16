@@ -16,6 +16,7 @@ KEY_LABEL = "[ключ]"
 # Просмотры вперёд ограничены: на длинной строке из одинаковых знаков перебор не растёт квадратом.
 _KEY_BODY = r"[A-Za-z0-9_\-]"
 _B64URL = r"[A-Za-z0-9_\-]"
+_ASSIGNMENT_KIND = "строка password=, token=, secret=, api_key= и подобная с длинным значением"
 SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("ключ Anthropic (sk-ant-…)", re.compile(rf"(?<![A-Za-z0-9])sk-ant-{_KEY_BODY}{{16,}}")),
     (
@@ -71,7 +72,7 @@ SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         re.compile(r"(?i:Authorization)\s*:\s*Basic\s+(?P<v>[A-Za-z0-9+/]{16,}={0,2})(?![A-Za-z0-9+/=])"),
     ),
     (
-        "строка password=, token=, secret=, api_key= и подобная с длинным значением",
+        _ASSIGNMENT_KIND,
         re.compile(
             r"""(?<![A-Za-z0-9])(?:password|passwd|token|secret|api[_-]?key|apikey|client[_-]?secret|"""
             r"""x-api-key|access[_-]?key|private[_-]?key)["']?\s*[=:]\s*["']?(?P<v>[^\s"',;]{12,})""",
@@ -79,10 +80,35 @@ SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         ),
     ),
 )
-# Подстановка вместо значения: ${NAME}, <описание>, {{шаблон}}, %NAME%, звёздочки, один повторяющийся знак.
-_PLACEHOLDER = re.compile(r"^(?:\$\{?\w+\}?$|<[^>]*>?|\{\{|%\w+%$|\*{4,}|(.)\1{5,}$|x{4,})", re.IGNORECASE)
-# Слова, которыми в документации заменяют пароль в строке подключения: не значение.
-_WORD_PASSWORDS = frozenset({"password", "passwd", "secret", "changeme", "pass1234", "yourpassword"})
+# Подстановка вместо значения: ${NAME}, $NAME, <описание>, {{шаблон}}, %NAME%, звёздочки, один знак подряд,
+# «YOUR_API_KEY», «example-token», «changeme».
+_PLACEHOLDER = re.compile(
+    r"^(?:\$\{?\w+\}?$|\$\(|<[^>]*>?|\{\{|%\w+%$|\*{4,}|(.)\1{5,}$|x{4,}"
+    r"|change[_\-]?me[\w\-]*$|(?:your|my|example|sample|placeholder|replace|insert|dummy|fake)[_\-]?\w*[_\-]?"
+    r"(?:key|token|secret|password|here|me|value)\w*$)",
+    re.IGNORECASE,
+)
+# Слова, которыми в документации и коде заменяют пароль и пустое значение: не значение.
+_WORD_PASSWORDS = frozenset(
+    "password passwd secret changeme pass1234 yourpassword none null nil true false undefined".split()
+)
+# Общий шаблон `name = значение` ловит и код. Это не значение: вызов функции, обращение к элементу или полю
+# переменной окружения и настроек, аннотация типа. Настоящее присваивание — литерал: строка или цифры и буквы.
+_CALL = re.compile(r"^[A-Za-z_][\w.]*\(")
+_SUBSCRIPT = re.compile(r"^[A-Za-z_][\w.]*\[")
+_NAME_CHAIN = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+$")
+_NAME_ROOTS = frozenset(
+    "process os env environ config settings secrets self this args params options ctx".split()
+)
+
+
+def _is_code_reference(value: str) -> bool:
+    """Значение общего шаблона — выражение кода, не ключ: `os.getenv(X)`, `Optional[str]`, `process.env.X`."""
+    if _CALL.match(value) or _SUBSCRIPT.match(value):
+        return True
+    if _NAME_CHAIN.match(value):  # `settings.API_KEY`; точки между кусками с цифрами — уже не имя, а ключ
+        return value.split(".", 1)[0] in _NAME_ROOTS or not any(c.isdigit() for c in value)
+    return False
 
 
 # самый короткий ключ из шаблонов (`xoxb-` и десять знаков) — 15 знаков
@@ -148,8 +174,10 @@ def _placeholder_body(match: str) -> bool:
     return len(core) >= 8 and len(set(core.lower())) <= 3
 
 
-def _is_placeholder(value: str) -> bool:
-    return bool(_PLACEHOLDER.match(value)) or value.lower() in _WORD_PASSWORDS or value == KEY_LABEL
+def _is_placeholder(value: str, kind: str = "") -> bool:
+    if _PLACEHOLDER.match(value) or value.lower() in _WORD_PASSWORDS or value == KEY_LABEL:
+        return True
+    return kind == _ASSIGNMENT_KIND and _is_code_reference(value)
 
 
 def find_keys(text: str) -> list[KeyHit]:
@@ -163,7 +191,7 @@ def find_keys(text: str) -> list[KeyHit]:
         for m in pattern.finditer(text):
             if "v" in pattern.groupindex:
                 value = m.group("v")
-                if _is_placeholder(value):
+                if _is_placeholder(value, name):
                     continue
                 hits.append(KeyHit(m.start("v"), m.end("v"), name))
             else:
@@ -188,7 +216,7 @@ def scan_lines(text: str) -> list[tuple[int, str]]:
         for name, pattern in _active(line):
             for m in pattern.finditer(line):
                 value = m.groupdict().get("v")
-                if value is not None and _is_placeholder(value):
+                if value is not None and _is_placeholder(value, name):
                     continue  # «${TOKEN}», «<ключ>», «xxxxxxxxxxxx» — подстановка, не значение
                 if value is None and _placeholder_body(m.group()):
                     continue

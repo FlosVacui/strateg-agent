@@ -330,6 +330,10 @@ ARTICLE_AUTHOR = "Мария Иванова"
         'class="no-comments"',
         'class="comment-form"',
         'class="reviewer-guide"',
+        'class="review-guide"',
+        'class="has-comments"',
+        'class="comments-count"',
+        'class="comments-closed"',
     ],
 )
 def test_the_author_of_an_article_inside_a_wrapper_that_only_looks_like_a_review_block_stays(wrapper):
@@ -360,6 +364,45 @@ def test_the_wrapper_with_a_whole_word_of_a_review_block_is_a_block(wrapper):
     assert NAME not in html and fetchlib.AUTHOR_LABEL in html
 
 
+REAL_BLOCKS = [
+    ('class="post-comments"', "username"),
+    ('class="article-comments"', "username"),
+    ('class="news-comments"', "username"),
+    ('class="page-comments"', "user"),
+    ('class="story-comments"', "author"),
+    ('class="reviews-page"', "username"),
+    ('class="reviews-open"', "username"),
+    ('class="reviews-with-photos"', "username"),
+    ('class="user-reviews-summary"', "username"),
+    ('class="reviews-on"', "username"),
+    ('id="article-comments"', "username"),
+    ('id="comments-news"', "username"),
+    ('class="comments-post-list"', "author"),
+]
+
+
+@pytest.mark.parametrize(("wrapper", "author_class"), REAL_BLOCKS)
+def test_a_real_comment_block_with_a_page_word_or_an_unrelated_word_is_still_a_block(wrapper, author_class):
+    """Слова страницы до слова блока и слова не про состояние блок не отменяют: имя комментатора заменено."""
+    item = f'<div class="item"><span class="{author_class}">{NAME}</span><p>{BODY}</p></div>'
+    html, _ = masked(f"<div {wrapper}>{item}</div>")
+    assert NAME not in html and fetchlib.AUTHOR_LABEL in html
+
+
+def test_the_data_author_attribute_of_a_comment_post_block_is_replaced():
+    html, _ = masked(f'<div class="comment-post" data-author="{NAME}"><p>{BODY}</p></div>')
+    assert NAME not in html and fetchlib.AUTHOR_LABEL in html
+
+
+def test_open_is_a_state_of_a_page_wrapper_and_a_block_state_of_a_reviews_list():
+    """`comments-open` у обёртки с заголовком или статьёй — состояние страницы; с отзывами внутри — блок."""
+    author = f'<span class="author">{ARTICLE_AUTHOR}</span>'
+    page, _ = masked(f'<body class="comments-open"><div><h1>З</h1>{author}</div></body>')
+    assert ARTICLE_AUTHOR in page
+    block, _ = masked(f'<div class="comments-open"><span class="username">{NAME}</span><p>{BODY}</p></div>')
+    assert NAME not in block
+
+
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
@@ -375,6 +418,16 @@ def test_the_wrapper_with_a_whole_word_of_a_review_block_is_a_block(wrapper):
         ("review-2026-list", False),
         ("review-48213", True),
         ("overview", False),
+        ("post-comments", True),
+        ("article-comments", True),
+        ("news-comments", True),
+        ("reviews-page", True),
+        ("reviews-with-photos", True),
+        ("comments-news", True),
+        ("review-guide", False),
+        ("has-comments", False),
+        ("comments-count", False),
+        ("comments-open", False),  # без узла: состояние
     ],
 )
 def test_name_is_a_block_by_whole_words(value, expected):
@@ -431,8 +484,8 @@ def test_the_same_markup_outside_a_review_block_is_the_author_of_the_article(aut
     assert NAME in html and fetchlib.AUTHOR_LABEL not in html
 
 
-def test_probes_of_unknown_markup_from_the_independent_corpus():
-    """Пробы разметки отзывов: что находится, а что остаётся в известных ограничениях (ADR-0011)."""
+def test_probes_of_other_markup_from_the_development_corpus():
+    """Пробы разметки отзывов (корпус разработки, 9 из 12): что находится, а что остаётся (ADR-0011)."""
     from instruction_corpus_independent import AUTHOR_PROBES
 
     found = {}
@@ -503,3 +556,22 @@ def test_no_note_when_both_snapshots_were_masked_or_the_text_is_the_same(cli, re
     data = json.loads(cli("fetch", URL, "--refresh", "--json")[1])
     assert data["refresh"] == "same" and not data["prior_unmasked"]
     assert json.loads(cli("status", "--json")[1])["sources"]["unmasked_snapshots"] == []
+
+
+def test_the_second_refresh_does_not_name_a_previous_snapshot_whose_authors_are_already_replaced(
+    cli, two_snapshots, net
+):
+    """И-1 снят до замены, И-2 — с метками. Третья перепроверка называет только И-1."""
+    first, root = two_snapshots
+    second = json.loads(cli("fetch", URL, "--refresh", "--json")[1])
+    assert second["prior_unmasked"] == first["source"]
+    page = open_fixture("reviews.html").replace("</body>", f"<p>{BODY} Добавлено позже.</p></body>")
+    net.add(URL, page)
+    third = json.loads(cli("fetch", URL, "--refresh", "--json")[1])
+    assert third["refresh"] == "new" and third["refreshes"] == second["source"]
+    assert not third["prior_unmasked"]
+    assert not any("снят до замены авторов отзывов" in w for w in third["warnings"])
+    assert json.loads(cli("status", "--json")[1])["sources"]["unmasked_snapshots"] == [first["source"]]
+    out = cli("status")[1]
+    assert f"прежний снимок {first['source']} снят до замены" in out
+    assert f"прежний снимок {second['source']} снят до замены" not in out

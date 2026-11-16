@@ -1,7 +1,8 @@
-"""Детектор обращений к ИИ на независимом корпусе и по структуре предложения (ADR-0011, п. 3).
+"""Детектор обращений к ИИ на корпусе разработки и по структуре предложения (ADR-0011, п. 3).
 
-Корпус `instruction_corpus_independent.py` составлен отдельно от правил и не подгонялся под них; его числа
-и есть показатель детектора. Корпус автора правил (`instruction_corpus.py`) проверяет сами правила.
+Корпус `instruction_corpus_independent.py` — корпус разработки: правила проверялись и дописывались по нему,
+поэтому его числа показателем детектора не служат. Показатель — числа второго корпуса, составленного до
+знакомства с правилами (`test_instructions_second.py`, ADR-0011).
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ EXPLICIT = [(c, t) for c, t, k in ADDRESSES if k == "explicit"]
 NO_ADDRESSEE = [(c, t) for c, t, k in ADDRESSES if k == "no-addressee"]
 
 
-def test_independent_corpus_is_the_size_it_was_given():
+def test_development_corpus_is_the_size_it_was_given():
     assert len(ADDRESSES) == 56 and len(ABOUT) == 53
     assert len(EXPLICIT) == 48 and len(NO_ADDRESSEE) == 8
 
@@ -30,8 +31,8 @@ def test_address_with_an_explicit_addressee_is_marked(code, text):
     assert signs(text), text
 
 
-def test_independent_corpus_numbers():
-    """Числа ADR-0011: из 48 обращений с явным адресатом пропущено 0; из 53 текстов явно ложных 0."""
+def test_development_corpus_numbers():
+    """Корпус разработки: из 48 обращений с явным адресатом пропущено 0; из 53 текстов явно ложных 0."""
     missed = [c for c, t in EXPLICIT if not signs(t)]
     false = [c for c, t, k in ABOUT if k != "ambiguous" and signs(t)]
     ambiguous = [c for c, t, k in ABOUT if k == "ambiguous" and signs(t)]

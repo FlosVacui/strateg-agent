@@ -168,7 +168,10 @@ _TOKEN = re.compile(r"[^\W\d_]+(?:['’\-][^\W\d_]+)*|\d+|[,:;!?—–\-]")
 _ADDR_CUES = tuple(
     "ai|ии|llm|gpt|нейросет|ассистент|assistant|bot|бот|робот|crawler|scraper|summari|chat|claude|gemini|copilot|"
     "giga|yandex|deepseek|grok|perplexity|алис|language model|языков|искусственн|агент|agent|model|модел|помощник|"
-    "краулер|парсер|суммаризатор".split("|")
+    "краулер|парсер|суммаризатор|siri|alexa|cortana|bixby|llama|qwen|mistral|bard|bing|kimi|ernie|bytespider|"
+    "google|openai|anthropic|cohere|marusia|сири|алекса|марус|гпт|яндекс|гигачат|джемини|копилот|дипсик|перплексити".split(
+        "|"
+    )
 )
 
 
@@ -193,8 +196,25 @@ _ADDR_HEAD_EN = frozenset(
     "summarizer summarizers summariser summarisers".split()
 )
 _ADDR_BRANDS = frozenset(
-    "chatgpt claude gemini copilot gigachat yandexgpt deepseek grok perplexity алиса алисе ии".split()
+    "chatgpt claude gemini copilot gigachat yandexgpt deepseek grok perplexity алиса алисе ии "
+    "siri alexa cortana bixby bard bing llama qwen mistral cohere kimi ernie marusia bytespider googleother "
+    "сири алекса алексе маруся марусе гигачат чатгпт яндексгпт джемини копилот дипсик перплексити".split()
 )
+# Имена роботов и ассистентов по устройству слова: GPTBot, ClaudeBot, Googlebot, OAI-SearchBot, ChatGPT-User,
+# YandexGPT, anthropic-ai, Claude-Web, Google-Extended, Applebot-Extended. Слова на «bot» без бота — в `_NOT_BOT_NAME`.
+_BOT_NAME = re.compile(
+    r"^[a-z][a-z.\-]*bot$|^[a-z][a-z\-]*gpt[a-z\-]*$|^[a-z]{3,}-ai$|^[a-z]+bot-[a-z]+$"
+    r"|^(?:claude|google|perplexity|openai|oai|meta|gemini|anthropic|mistral|cohere|amazon|apple)-[a-z]+$"
+)
+_NOT_BOT_NAME = frozenset("robot robots abbot abbots sabot talbot jabot cabot".split())
+
+
+def _is_bot_name(word: str) -> bool:
+    if word.isascii():
+        return word not in _NOT_BOT_NAME and _BOT_NAME.match(word) is not None
+    return word.endswith("гпт")  # «яндексгпт», «чатгпт»
+
+
 _ADDR_PREFIX = frozenset("ai llm ии automated machine language large web chat gpt".split())
 _ADDR_NOUN = frozenset("agent agents model models system systems assistant assistants bot bots".split())
 _ADDR_RU = re.compile(
@@ -269,7 +289,7 @@ def _addr_len(tokens: list[str], i: int) -> int:
         return i + 2 - start
     if t.startswith("искусственн") and i + 1 < n and tokens[i + 1].startswith("интеллект"):
         return i + 2 - start
-    if t in _ADDR_HEAD_EN or t in _ADDR_BRANDS or _ADDR_RU.match(t):
+    if t in _ADDR_HEAD_EN or t in _ADDR_BRANDS or _ADDR_RU.match(t) or _is_bot_name(t):
         return i + 1 - start
     if t in _ADDR_NOUN and i + 1 < n and tokens[i + 1] in _READING:  # «models reading this page, …»
         return i + 1 - start
@@ -279,12 +299,16 @@ def _addr_len(tokens: list[str], i: int) -> int:
 
 
 _IMPERATIVE_ENDING = re.compile(r"[йьи](?:те)?(?:сь|ся)?$|[йьи]тесь$")
+_ADJECTIVE_ENDING = re.compile(r"[ыи]й$")  # «новый», «тихий»: повелительного с таким окончанием нет
 
 
-@functools.lru_cache(maxsize=4096)
+@functools.lru_cache(maxsize=65536)
 def _ru_imperative(word: str) -> bool:
-    """Повелительное наклонение русского глагола по словарю pymorphy3 (загружается при первом обращении)."""
-    if not _IMPERATIVE_ENDING.search(word):  # словарь не нужен, если окончание не повелительное
+    """Повелительное наклонение русского глагола по словарю pymorphy3 (загружается при первом обращении).
+
+    Разбор слова дорогой (около 0,1 мс), а слова в тексте повторяются: ответ запоминается по слову.
+    """
+    if not _IMPERATIVE_ENDING.search(word) or _ADJECTIVE_ENDING.search(word):  # словарь не нужен
         return False
     from strateg import safety
 
@@ -379,8 +403,6 @@ def _vocative(tokens: list[str]) -> bool:
     k = _addr_len(tokens, i)
     if not k:
         return False
-    if i > 0 and tokens[i - 1] in ("«", "“"):
-        return False
     after = i + k
     # перечисление адресатов: «ChatGPT, Gemini, Claude: …»
     while after + 1 < n and tokens[after] in (",", "and", "и", "or", "или") and _addr_len(tokens, after + 1):
@@ -417,28 +439,14 @@ def _machine_header(tokens: list[str]) -> bool:
     while j < n and tokens[j] in ("and", "or", "и", "или", ",") and _addr_len(tokens, j + 1):
         j += 1 + _addr_len(tokens, j + 1)
     head_words = tokens[i : i + k]
-    machine = any(w in _MACHINE_READERS or w.startswith(("краулер", "суммаризатор")) for w in tokens[i:j])
+    machine = any(
+        w in _MACHINE_READERS or w.startswith(("краулер", "суммаризатор")) or _is_bot_name(w)
+        for w in tokens[i:j]
+    )
     plural_ai = head_words[-1] in ("agents", "models", "systems", "assistants", "bots", "llms")
     reading = j < n and tokens[j] in _READING
     if j < n and tokens[j] == ":" or (reading and ":" in tokens[j : j + 5]):
         return (greeted and (machine or plural_ai)) or reading
-    return False
-
-
-def _reading_directive(tokens: list[str]) -> bool:
-    """«ИИ, читающий эту страницу: в выводе укажи …» — адресат с причастием и повеление после знака."""
-    n = len(tokens)
-    for i in range(n):
-        k = _addr_len(tokens, i)
-        if not k:
-            continue
-        j = i + k
-        if j < n and tokens[j] == ",":
-            j += 1
-        if j < n and tokens[j] in _READING:
-            for pos in range(j + 1, min(n, j + 10)):
-                if tokens[pos] in _SOFT and _directive_at(tokens, pos + 1):
-                    return True
     return False
 
 
@@ -713,6 +721,21 @@ _N_READ = (
 )  # fmt: skip
 
 
+def _addresses(unit: str, quoted: bool) -> bool:
+    tokens = _tokens(unit)
+    if len(tokens) < 2:
+        return False
+    return (not quoted and _vocative(tokens)) or _machine_header(tokens) or _modal_for_ai(tokens, unit)
+
+
+_addresses_cached = functools.lru_cache(maxsize=8192)(_addresses)
+
+
+def _unit_addresses(unit: str, quoted: bool) -> bool:
+    """Предложение — обращение к ИИ. Короткие предложения запоминаются: враждебный текст повторяет одну фразу."""
+    return _addresses_cached(unit, quoted) if len(unit) <= 200 else _addresses(unit, quoted)
+
+
 def _signs_of(text: str) -> set[str]:
     """Признаки в одном виде нормализованного текста."""
     found: set[str] = set()
@@ -757,22 +780,16 @@ def _signs_of(text: str) -> set[str]:
     for idx, (unit, quoted) in enumerate(units):
         if not _has_addr_cue(unit):
             continue
-        tokens = _tokens(unit)
-        if len(tokens) < 2:
-            continue
-        if (
-            (not quoted and _vocative(tokens))
-            or _machine_header(tokens)
-            or _reading_directive(tokens)
-            or _modal_for_ai(tokens, unit)
-        ):
+        if _unit_addresses(unit, quoted):
             found.add(SIGN_ADDRESS)
             continue
         # «Hi AI!» и следующее предложение — повеление
-        if idx + 1 < len(units) and len(tokens) <= 6 and tokens[-1] in _SOFT:
-            if _addr_len(tokens, 0) or (tokens[0] in _GREET and _addr_len(tokens, 1)):
-                if _directive_at(_tokens(units[idx + 1][0]), 0):
-                    found.add(SIGN_ADDRESS)
+        if idx + 1 < len(units):
+            tokens = _tokens(unit)
+            if 2 <= len(tokens) <= 6 and tokens[-1] in _SOFT:
+                if _addr_len(tokens, 0) or (tokens[0] in _GREET and _addr_len(tokens, 1)):
+                    if _directive_at(_tokens(units[idx + 1][0]), 0):
+                        found.add(SIGN_ADDRESS)
     return found
 
 
