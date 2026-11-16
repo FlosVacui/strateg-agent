@@ -32,7 +32,7 @@ import re
 import sqlite3
 import unicodedata
 from bisect import bisect_right
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -44,7 +44,7 @@ from strateg import project as proj
 from strateg.models import ClaimsFile, SourcesFile
 from strateg.project import CliError, UsageError
 
-INDEX_VERSION = 1
+INDEX_VERSION = 2
 PROJECT_INDEX = ".tmp/search.sqlite"
 KNOWLEDGE_INDEX = ".cache/knowledge-search.sqlite"
 
@@ -96,13 +96,23 @@ def fold(text: str) -> str:
     return low.replace("ё", "е")
 
 
-_WORD = re.compile(r"\w+")
+_NUMBER = r"\d+(?:[.,]\d+)+"  # «4,6», «1.8»: число с десятичным знаком — одно слово запроса
+_TOKEN = re.compile(rf"{_NUMBER}|\w+")
+_IS_NUMBER = re.compile(rf"^{_NUMBER}$")
 _CYRILLIC = re.compile(r"[а-я]")
 
 
 def words_of(query: str) -> list[str]:
-    """Слова запроса в нижнем регистре, ё -> е: без знаков, кавычек и операторов FTS5."""
-    return _WORD.findall(fold(query))
+    """Слова запроса в нижнем регистре, ё -> е: без знаков, кавычек и операторов FTS5. «4,6» — одно слово."""
+    return _TOKEN.findall(fold(query))
+
+
+@functools.cache
+def word_pattern(forms: tuple[str, ...], whole: bool = True) -> re.Pattern[str]:
+    """Любая из форм как слово текста: граница слова слева и справа («цена» не находит «оценка» и «процент»).
+    Без `whole` — только слева (основа слова)."""
+    alternatives = "|".join(re.escape(f) for f in sorted(set(forms), key=len, reverse=True))
+    return re.compile(r"(?<!\w)(?:" + alternatives + ")" + (r"(?!\w)" if whole else ""))
 
 
 _ENDINGS = tuple(
@@ -157,18 +167,11 @@ def form_variants(word: str, *, max_forms: int = 60) -> list[str]:
     return list(dict.fromkeys(forms))[:max_forms]
 
 
-def collapse(forms: Iterable[str], *, minimum: int = MIN_WORD) -> list[str]:
-    """Убирает формы, в которых уже есть другая форма как подстрока: для поиска подстрок они лишние."""
-    kept: list[str] = []
-    for form in sorted({f for f in forms if len(f) >= minimum}, key=lambda f: (len(f), f)):
-        if not any(k in form for k in kept):
-            kept.append(form)
-    return kept
-
-
 def word_variants(word: str, method: str = VARIANTS) -> list[str]:
     """Варианты слова запроса: `forms` — формы слова, `stem` — основа по правилу, `both` — те и другие,
-    `exact` — как есть. Уже приведённое слово (нижний регистр, ё -> е)."""
+    `exact` — как есть. Уже приведённое слово (нижний регистр, ё -> е). Число с запятой — и с точкой."""
+    if _IS_NUMBER.match(word):
+        return list(dict.fromkeys([word, word.replace(",", "."), word.replace(".", ",")]))
     if method == "exact":
         return [word]
     out: list[str] = []
@@ -184,28 +187,27 @@ class Plan:
     """Разобранная формулировка запроса."""
 
     text: str
-    groups: tuple[tuple[str, ...], ...]  # на каждое длинное слово — его варианты
-    short: tuple[str, ...]  # слова короче трёх знаков: подстрока в найденном куске
+    groups: tuple[tuple[str, ...], ...]  # на каждое длинное слово — его формы (как слова, не осколки)
+    short: tuple[str, ...]  # слова короче трёх знаков: слово в найденном куске
     phrase: str | None  # запрос без длинных слов: ищется подстрокой без индекса
+    whole: bool = True  # форма — слово целиком; False — основа слова (способ `stem` замера)
 
 
 def make_plan(query: str, method: str = VARIANTS, mode: str = "trigram") -> Plan:
-    """Формулировка по способу поиска. `unicode61` ищет целые слова: короткие слова идут в индекс, формы слов
-    не сворачиваются (они токены). `trigram` и `plain` ищут подстроки: формы, в которых есть другая
-    форма, лишние, слова короче трёх знаков проверяются по найденному куску."""
+    """Формулировка по способу поиска. Индекс только отбирает куски по формам слова (в триграммах — подстроки
+    не короче трёх знаков), а слово в найденном куске проверяется по границам слова (`_locate`): осколок
+    формы не засчитывается. `unicode61` ищет целые слова, там короткие слова идут и в индекс."""
     words = words_of(query)[:MAX_WORDS]
-    tokens = mode == "unicode61"
-    minimum = 1 if tokens else MIN_WORD
+    minimum = 1 if mode == "unicode61" else MIN_WORD
     long = [w for w in dict.fromkeys(words) if len(w) >= minimum]
-    short = tuple(w for w in dict.fromkeys(words) if len(w) < minimum)
+    # Короткое слово рядом с длинными обязательно, только если в нём цифра («18», «5»): короткие слова из
+    # букв («в», «на», «и») — предлоги и союзы, по ним куски не отбираются.
+    short = tuple(w for w in dict.fromkeys(words) if len(w) < minimum and any(c.isdigit() for c in w))
     if not long:
         phrase = " ".join(words) if words else " ".join(fold(query).split())
         return Plan(query, (), (), phrase or None)
-    groups = []
-    for w in long:
-        variants = word_variants(w, method)
-        groups.append(tuple(dict.fromkeys(variants)) if tokens else tuple(collapse(variants) or [w]))
-    return Plan(query, tuple(groups), short, None)
+    groups = tuple(tuple(dict.fromkeys(word_variants(w, method))) for w in long)
+    return Plan(query, groups, short, None, whole=method not in ("stem", "both"))
 
 
 def quote_term(term: str) -> str:
@@ -213,11 +215,14 @@ def quote_term(term: str) -> str:
     return '"' + term.replace('"', '""') + '"'
 
 
-def match_expression(plan: Plan, *, any_word: bool, prefix_latin: bool = False) -> str:
+def match_expression(plan: Plan, *, any_word: bool, prefix_latin: bool = False, minimum: int = 1) -> str:
+    """Выражение FTS5: слова через AND (или OR), формы слова через OR. `minimum` — наименьшая форма для
+    индекса (в триграммах три знака: короче форма в индексе не ищется, а проверяется по куску)."""
     joiner = " OR " if any_word else " AND "
     parts = []
     for group in plan.groups:
-        terms = [quote_term(t) + ("*" if prefix_latin and not _CYRILLIC.search(t) else "") for t in group]
+        wanted = [t for t in group if len(t) >= minimum] or list(group[:1])
+        terms = [quote_term(t) + ("*" if prefix_latin and not _CYRILLIC.search(t) else "") for t in wanted]
         parts.append("(" + " OR ".join(terms) + ")")
     return joiner.join(parts)
 
@@ -311,7 +316,9 @@ def page_at(marks: list[list[int]], offset: int) -> int | None:
 
 
 def _decode(data: bytes) -> str:
-    return data.decode("utf-8-sig", errors="replace").replace("\r\n", "\n")
+    """Текст файла тем же способом, каким продукт читает снимок при проверке цитаты (`decode("utf-8")`):
+    BOM и CRLF не убираются, поэтому смещения совпадают со смещениями в тексте снимка."""
+    return data.decode("utf-8", errors="replace")
 
 
 def _last_reason(claim: Any) -> str | None:
@@ -330,7 +337,14 @@ def project_docs(files: dict[str, bytes]) -> tuple[list[Doc], list[str]]:
         raise CliError("файлы проекта не читаются: запустите `strateg check`", [str(exc)[:300]]) from exc
     docs: list[Doc] = []
     skipped: list[str] = []
+    by_id = {c.id: c for c in claims.claims}
     for claim in claims.claims:
+        successor = by_id.get(claim.replaced_by) if claim.replaced_by else None
+        successor_note = None
+        if successor is not None and successor.status == "отозвано":
+            successor_note = "отозвано"
+        elif successor is not None and successor.status == "заменено":
+            successor_note = f"само заменено на {successor.replaced_by}"
         chunks = [Chunk(0, claim.text, "текст")]
         about = " ".join(x for x in (claim.subject, claim.period, claim.region) if x)
         chunks.append(Chunk(0, about, "предмет"))
@@ -349,7 +363,11 @@ def project_docs(files: dict[str, bytes]) -> tuple[list[Doc], list[str]]:
                     "origin": claim.origin,
                     "status": claim.status,
                     "replaced_by": claim.replaced_by,
+                    "replaced_by_note": successor_note,
                     "replaces": claim.replaces,
+                    "dispute": {"claim": claim.dispute.claim, "reason": claim.dispute.reason}
+                    if claim.dispute
+                    else None,
                     "suspicious": claim.suspicious,
                     "reason": _last_reason(claim),
                     "sources": [{"id": q.source, "locator": q.locator} for q in claim.quotes],
@@ -448,7 +466,7 @@ def sqlite_status() -> tuple[str, str]:
 
 _SCHEMA = """
 create table meta(k text primary key, v text);
-create table docs(id integer primary key, area text, ref text, label text, meta text);
+create table docs(id integer primary key, area text, ref text, label text, meta text, stale integer);
 create table chunks(
     id integer primary key, doc integer, pos integer, field text, extra text, text text
 );
@@ -467,8 +485,15 @@ def build(docs: list[Doc], signature: str, mode: str, notes: list[str]) -> sqlit
     folded: list[tuple[int, str]] = []
     for doc_id, doc in enumerate(docs, start=1):
         conn.execute(
-            "insert into docs values (?, ?, ?, ?, ?)",
-            (doc_id, doc.area, doc.ref, doc.label, json.dumps(doc.meta, ensure_ascii=False)),
+            "insert into docs values (?, ?, ?, ?, ?, ?)",
+            (
+                doc_id,
+                doc.area,
+                doc.ref,
+                doc.label,
+                json.dumps(doc.meta, ensure_ascii=False),
+                int(doc.meta.get("status") in ("заменено", "отозвано")),
+            ),
         )
         for chunk in doc.chunks:
             chunk_id += 1
@@ -534,31 +559,52 @@ def _save(conn: sqlite3.Connection, path: Path) -> None:
 class Index:
     """Открытый индекс: соединение и сведения о нём. Закрывать явно (`close`): на Windows файл иначе занят."""
 
-    def __init__(self, conn: sqlite3.Connection, mode: str, rebuilt: bool, notes: list[str]) -> None:
+    def __init__(
+        self,
+        conn: sqlite3.Connection,
+        mode: str,
+        rebuilt: bool,
+        notes: list[str],
+        rebuild: Callable[[], Index] | None = None,
+    ) -> None:
         self.conn, self.mode, self.rebuilt, self.notes = conn, mode, rebuilt, notes
+        self._rebuild = rebuild
 
     def close(self) -> None:
         self.conn.close()
+
+    def rebuild(self) -> Index:
+        """Новый индекс из входных файлов, минуя испорченный файл; прежнее соединение закрывается."""
+        self.close()
+        if self._rebuild is None:
+            raise sqlite3.DatabaseError("индекс нечем пересобрать")
+        return self._rebuild()
 
 
 def acquire(
     path: Path | None,
     files: dict[str, bytes],
     make_docs: Callable[[], tuple[list[Doc], list[str]]],
+    *,
+    force: bool = False,
 ) -> Index:
     """Индекс для входных файлов `files`: из файла, если он свежий, иначе пересобранный и записанный."""
     mode = search_mode()
     signature = _signature(files, mode)
-    if path is not None:
+
+    def again() -> Index:
+        return acquire(path, files, make_docs, force=True)
+
+    if path is not None and not force:
         conn = _open_fresh(path, signature, mode)
         if conn is not None:
             notes = json.loads(dict(conn.execute("select k, v from meta").fetchall()).get("notes", "[]"))
-            return Index(conn, mode, False, notes)
+            return Index(conn, mode, False, notes, again)
     docs, notes = make_docs()
     conn = build(docs, signature, mode, notes)
     if path is not None:
         _save(conn, path)
-    return Index(conn, mode, True, notes)
+    return Index(conn, mode, True, notes, again)
 
 
 # ---------------------------------------------------------------------------
@@ -655,39 +701,58 @@ class Hit:
         return self.meta.get("status") in ("заменено", "отозвано")
 
 
-def _first_match(folded: str, groups: Iterable[Iterable[str]]) -> int:
-    best = -1
-    for group in groups:
-        for term in group:
-            at = folded.find(term)
-            if at != -1 and (best == -1 or at < best):
-                best = at
-    return max(best, 0)
+def _locate(folded: str, plan: Plan, any_word: bool) -> int | None:
+    """Место первого слова запроса в приведённом куске или None, если кусок не подходит.
 
-
-def _hit(row: tuple[Any, ...], meta: dict[str, Any], plan: Plan, score: float) -> Hit | None:
-    chunk_id, pos, fld, extra_json, text, _doc, area, ref, label = row
-    folded = fold(text)
-    if any(w not in folded for w in plan.short):
+    Слово — это форма слова с границами слова; подходит кусок, где есть все слова запроса (с `any_word` —
+    хотя бы одно), и все слова короче трёх знаков.
+    """
+    if any(_whole(w).search(folded) is None for w in plan.short):
         return None
     if plan.phrase is not None:
         at = folded.find(plan.phrase)
-        if at == -1:
-            return None
-    else:
-        at = _first_match(folded, plan.groups)
+        return None if at == -1 else at
+    found = [m.start() for g in plan.groups if (m := word_pattern(g, plan.whole).search(folded))]
+    if not found or (not any_word and len(found) < len(plan.groups)):
+        return None
+    return min(found)
+
+
+def _whole(word: str) -> re.Pattern[str]:
+    return word_pattern((word,), True)
+
+
+def _clean(value: Any) -> Any:
+    """Всё из файлов проекта, что попадает в выдачу, идёт через `one_line`: одна строка, без управляющих."""
+    if isinstance(value, str):
+        return one_line(value, 160)
+    if isinstance(value, dict):
+        return {k: (v if k == "pages" else _clean(v)) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_clean(v) for v in value]
+    return value
+
+
+def _hit(
+    row: tuple[Any, ...], meta: dict[str, Any], plan: Plan, score: float, any_word: bool = False
+) -> Hit | None:
+    chunk_id, pos, fld, extra_json, text, _doc, area, ref, label = row
+    folded = fold(text)
+    at = _locate(folded, plan, any_word)
+    if at is None:
+        return None
     limit = CLAIM_EXCERPT if area == AREA_CLAIMS else EXCERPT
     a, b = (0, len(text)) if len(text) <= limit else window(text, at, limit)
-    excerpt = ("…" if a else "") + one_line(text[a:b], limit)
+    excerpt = ("…" if a else "") + one_line(text[a:b], limit).replace("«", '"').replace("»", '"')
     is_text = area != AREA_CLAIMS
     pages = meta.get("pages")
     return Hit(
         area,
-        ref,
-        label,
+        _clean(ref),
+        _clean(label),
         meta,
         fld,
-        json.loads(extra_json),
+        _clean(json.loads(extra_json)),
         excerpt,
         pos + at if is_text else None,
         pos + a if is_text else None,
@@ -697,26 +762,47 @@ def _hit(row: tuple[Any, ...], meta: dict[str, Any], plan: Plan, score: float) -
     )
 
 
-def _candidates(index: Index, plan: Plan, any_word: bool) -> list[tuple[int, float]]:
-    """Куски, где есть слова запроса: (номер куска, оценка; меньше — лучше). Индекс FTS5 или перебор."""
+def _candidates(
+    index: Index, plan: Plan, any_word: bool, areas: frozenset[str], only_active: bool
+) -> list[tuple[int, float]]:
+    """Куски выбранных областей, где есть слова запроса: (номер куска, оценка; меньше — лучше).
+
+    Область и «только действующие» отбираются в самом запросе к индексу, и предел `CANDIDATES` действует на
+    каждую область отдельно: куски снимков не вытесняют утверждения. Ошибку SQLite не глушим: её
+    обрабатывает `run_checked`.
+    """
+    out: list[tuple[int, float]] = []
+    for area in sorted(areas):
+        out += _area_candidates(index, plan, any_word, area, only_active)
+    out.sort(key=lambda x: x[1])
+    return out
+
+
+def _area_candidates(
+    index: Index, plan: Plan, any_word: bool, area: str, only_active: bool
+) -> list[tuple[int, float]]:
     conn = index.conn
+    where = "d.area = ?" + (" and d.stale = 0" if only_active else "")
     if plan.phrase is None and index.mode != "plain":
-        expr = match_expression(plan, any_word=any_word, prefix_latin=index.mode == "unicode61")
-        try:
-            rows = conn.execute(
-                "select rowid, bm25(fts) from fts where fts match ? order by bm25(fts) limit ?",
-                (expr, CANDIDATES),
-            ).fetchall()
-        except sqlite3.Error:
-            rows = []
+        minimum = MIN_WORD if index.mode == "trigram" else 1
+        expr = match_expression(
+            plan, any_word=any_word, prefix_latin=index.mode == "unicode61", minimum=minimum
+        )
+        rows = conn.execute(
+            "select fts.rowid, bm25(fts) from fts "
+            "join chunks c on c.id = fts.rowid join docs d on d.id = c.doc "
+            f"where fts match ? and {where} order by bm25(fts) limit ?",
+            (expr, area, CANDIDATES),
+        ).fetchall()
         return [(int(r), float(s)) for r, s in rows]
     out = []
-    for chunk_id, text in conn.execute("select id, text from chunks"):
+    query = f"select c.id, c.text from chunks c join docs d on d.id = c.doc where {where}"
+    for chunk_id, text in conn.execute(query, (area,)):
         folded = fold(text)
         if plan.phrase is not None:
             n = folded.count(plan.phrase)
         else:
-            counts = [sum(folded.count(t) for t in g) for g in plan.groups]
+            counts = [len(word_pattern(g, plan.whole).findall(folded)) for g in plan.groups]
             n = sum(counts) if (any(counts) if any_word else all(counts)) else 0
         if n:
             out.append((chunk_id, -float(n)))
@@ -730,18 +816,28 @@ _ROW = (
 )
 
 
-def search_index(index: Index, plan: Plan, areas: frozenset[str]) -> tuple[list[Hit], bool]:
-    """Места по одной формулировке, лучшие первыми. Второе значение: искали по любому слову, а не по всем."""
+def search_index(
+    index: Index, plan: Plan, areas: frozenset[str], only_active: bool = False
+) -> tuple[list[Hit], bool]:
+    """Места по одной формулировке, лучшие первыми. Второе значение: искали по любому слову, а не по всем.
+
+    Кусок из индекса — только кандидат: слово в нём проверяется по границам слова (`_locate`). Не нашлось
+    ни одного верного места по всем словам — повтор по любому слову.
+    """
     any_word_modes = [False] if (len(plan.groups) <= 1 or plan.phrase is not None) else [False, True]
-    found: list[tuple[int, float]] = []
-    partial = False
     for any_word in any_word_modes:
-        found = _candidates(index, plan, any_word)
-        if found:
-            partial = any_word
-            break
+        hits = _verified(index, plan, areas, only_active, any_word)
+        if hits:
+            return hits, any_word
+    return [], False
+
+
+def _verified(
+    index: Index, plan: Plan, areas: frozenset[str], only_active: bool, any_word: bool
+) -> list[Hit]:
+    found = _candidates(index, plan, any_word, areas, only_active)
     if not found:
-        return [], False
+        return []
     marks = ",".join("?" * len(found))
     rows = {r[0]: r for r in index.conn.execute(_ROW.format(marks), [c for c, _ in found])}
     metas: dict[int, dict[str, Any]] = {}
@@ -759,15 +855,15 @@ def search_index(index: Index, plan: Plan, areas: frozenset[str]) -> tuple[list[
         elif per_doc.get(doc_id, 0) >= PER_DOC:
             continue
         if doc_id not in metas:
-            metas[doc_id] = json.loads(row[9])
-        hit = _hit(row[:9], metas[doc_id], plan, score)
+            metas[doc_id] = _clean(json.loads(row[9]))
+        hit = _hit(row[:9], metas[doc_id], plan, score, any_word)
         if hit is None:
             continue
         if area == AREA_CLAIMS:
             seen_claims.add(ref)
         per_doc[doc_id] = per_doc.get(doc_id, 0) + 1
         hits.append(hit)
-    return hits, partial
+    return hits
 
 
 @dataclass
@@ -799,7 +895,7 @@ def run_search(
         pooled: list[Hit] = []
         for index in indexes:
             plan = plans.setdefault((query, index.mode), make_plan(query, method, index.mode))
-            hits, partial = search_index(index, plan, areas)
+            hits, partial = search_index(index, plan, areas, only_active)
             pooled += hits
             full_found = full_found or (bool(hits) and not partial)
         pooled.sort(key=lambda h: h.score)
@@ -822,6 +918,25 @@ def run_search(
     )
 
 
+def run_checked(indexes: list[Index], *args: Any, **kwargs: Any) -> Result:
+    """`run_search` с починкой: ошибка SQLite — индекс испорчен, он пересобирается из входных файлов и поиск
+    повторяется. Не помогло (или индекс только что собран) — понятная ошибка, а не пустая выдача.
+    `indexes` меняется на месте: вызывающий закрывает то, что в списке."""
+    try:
+        return run_search(indexes, *args, **kwargs)
+    except sqlite3.Error as first:
+        if all(i.rebuilt for i in indexes):
+            raise CliError(f"поиск не удался: ошибка SQLite ({first})") from first
+        try:
+            indexes[:] = [i if i.rebuilt else i.rebuild() for i in indexes]
+            return run_search(indexes, *args, **kwargs)
+        except sqlite3.Error as again:
+            raise CliError(
+                f"поиск не удался: ошибка SQLite ({again}); индекс пересобран и не помог. "
+                f"Удалите {PROJECT_INDEX} в папке проекта и повторите"
+            ) from again
+
+
 # ---------------------------------------------------------------------------
 # Вывод
 # ---------------------------------------------------------------------------
@@ -841,11 +956,14 @@ def status_words(hit: Hit) -> str:
         if ORIGIN_WORDS[m["origin"]] != m["type"]:
             parts.append(ORIGIN_WORDS[m["origin"]])
         if m["status"] == "заменено":
-            parts.append(f"заменено на {m['replaced_by']}")
+            note = f" ({m['replaced_by_note']})" if m.get("replaced_by_note") else ""
+            parts.append(f"заменено на {m['replaced_by']}{note}")
         elif m["status"] == "отозвано":
             parts.append("отозвано" + (f": {one_line(m['reason'], 80)}" if m.get("reason") else ""))
         else:
             parts.append("действует")
+        if m.get("dispute"):
+            parts.append(f"спорит с {m['dispute']['claim']}")
         if m.get("suspicious"):
             parts.append("подозрительный источник")
         return ", ".join(parts)
@@ -884,7 +1002,9 @@ def hit_data(hit: Hit, rank: int) -> dict[str, Any]:
             "origin": m["origin"],
             "status": m["status"],
             "replaced_by": m["replaced_by"],
+            "replaced_by_note": m.get("replaced_by_note"),
             "replaces": m["replaces"],
+            "dispute": m.get("dispute"),
             "reason": one_line(m["reason"], 200) if m.get("reason") else None,
             "suspicious": m["suspicious"],
             "agent_output": m["origin"] == "агент",
@@ -996,7 +1116,7 @@ def cmd_search(args: argparse.Namespace) -> int:
             knowledge = open_knowledge_index()
             if knowledge is not None:
                 indexes.append(knowledge)
-        result = run_search(indexes, queries, wanted, limit=args.limit, only_active=args.only_active)
+        result = run_checked(indexes, queries, wanted, limit=args.limit, only_active=args.only_active)
     finally:
         for index in indexes:
             index.close()

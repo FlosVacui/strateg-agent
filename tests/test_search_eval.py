@@ -68,6 +68,15 @@ def test_forms_beat_a_search_without_forms_and_a_plain_substring(measured):
         assert forms["mrr"] > way(measured, other)["mrr"], other
 
 
+def test_forms_give_better_precision_than_the_baselines(measured):
+    """Точность: доля верных мест в первой пятёрке и лишние места на запрос (факт: 54 % и 1,1)."""
+    forms = way(measured, "триграммы, формы слова")
+    assert forms["precision"] >= 0.45 and forms["extras"] <= 1.5
+    for other in ("триграммы, без приведения слов", "unicode61, без приведения слов", "подстрока по файлам"):
+        assert forms["precision"] > way(measured, other)["precision"] + 0.1, other
+        assert forms["extras"] < way(measured, other)["extras"], other
+
+
 def test_unicode61_with_forms_is_a_working_fallback(measured):
     fallback = way(measured, "unicode61, формы слова")
     assert fallback["found"] >= FORMS_MIN_FOUND

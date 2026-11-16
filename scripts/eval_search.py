@@ -104,6 +104,7 @@ def evaluate(root: Path) -> dict[str, Any]:
         ok: dict[int, bool] = {}
         at: dict[int, int] = {1: 0, 3: 0}
         reciprocal, shown, together = 0.0, 0, 0
+        correct_total, extra_total, shown_total = 0, 0, 0
         for i, q in enumerate(queries):
             all_q = [q["query"], *q["also"]]
             if mode is None:
@@ -115,6 +116,10 @@ def evaluate(root: Path) -> dict[str, Any]:
                 everything = [h.ref for h in result.hits]
                 together += not result.partial
             top = everything[:TOP]
+            right = sum(1 for ref in top if ref in q["expect"])
+            correct_total += right
+            extra_total += len(top) - right
+            shown_total += len(top)
             shown += len(everything)
             reciprocal += next(
                 (1 / n for n, ref in enumerate(everything, start=1) if ref in q["expect"]), 0.0
@@ -134,6 +139,8 @@ def evaluate(root: Path) -> dict[str, Any]:
                 "of": len(queries),
                 "share": sum(ok.values()) / len(queries),
                 "mrr": reciprocal / len(queries),
+                "precision": correct_total / shown_total if shown_total else 0.0,
+                "extras": extra_total / len(queries),
                 "mean_total": shown / len(queries),
                 "together": together if mode is not None else None,
                 "top1": at[1],
@@ -253,6 +260,7 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"  {way['way']:<40} {way['found']:>2} из {way['of']} ({way['share']:.0%}), "
             f"в первой тройке {way['top3']}, на первом месте {way['top1']}, MRR {way['mrr']:.2f}, "
+            f"точность в пятёрке {way['precision']:.0%}, лишних мест на запрос {way['extras']:.1f}, "
             f"мест в выдаче в среднем {way['mean_total']:.0f}, все слова вместе {way['together']}  [{cats}]"
         )
         if way["missed"]:

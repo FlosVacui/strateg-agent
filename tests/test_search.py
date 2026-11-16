@@ -106,10 +106,8 @@ def test_word_in_another_case_and_with_a_fleeting_vowel_is_found(corpus, cli, qu
 
 
 def test_synonyms_through_also_are_merged(corpus, cli):
-    plain = ask(cli, "затраты на помещение склада")
-    wide = ask(
-        cli, "затраты на помещение склада", "--also", "аренда склада в месяц", "--also", "стоимость склада"
-    )
+    plain = ask(cli, "расходы на хранение")
+    wide = ask(cli, "расходы на хранение", "--also", "аренда склада в месяц", "--also", "стоимость склада")
     assert {"И-9", "У-24"}.isdisjoint(refs(plain)[:3])
     assert {"И-9", "У-24"} & set(refs(wide)[:3])
     assert wide["also"] == ["аренда склада в месяц", "стоимость склада"]
