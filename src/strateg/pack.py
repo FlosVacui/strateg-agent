@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 import json
-import re
 import shutil
 import subprocess
 import tempfile
@@ -18,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
 
+from strateg import keys, safety
 from strateg import project as proj
 from strateg.project import CliError, UsageError
 from strateg.project_check import check_project
@@ -26,37 +26,6 @@ EXCLUDED_DIRS = frozenset({".tmp", ".cache", "__pycache__", ".git"})
 EXCLUDED_NAMES = frozenset({".DS_Store", "Thumbs.db", "desktop.ini"})
 EXCLUDED_SUFFIXES = (".tmp", ".bak", ".swp")
 MAX_SCAN_BYTES = 20 * 1024 * 1024
-
-# (название для сообщения, шаблон). Значение в сообщения не попадает.
-_KEY_BODY = r"[A-Za-z0-9_\-]"
-SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("ключ Anthropic (sk-ant-…)", re.compile(rf"(?<![A-Za-z0-9])sk-ant-{_KEY_BODY}{{16,}}")),
-    (
-        "ключ вида sk-…",
-        re.compile(rf"(?<![A-Za-z0-9])sk-(?=[A-Za-z0-9_\-]*\d){_KEY_BODY}{{20,}}"),
-    ),
-    ("токен GitHub (ghp_…)", re.compile(r"(?<![A-Za-z0-9])gh[pousr]_[A-Za-z0-9]{30,}")),
-    ("токен GitHub (github_pat_…)", re.compile(r"(?<![A-Za-z0-9])github_pat_[A-Za-z0-9_]{22,}")),
-    ("ключ AWS (AKIA…)", re.compile(r"(?<![A-Za-z0-9])(?:AKIA|ASIA)[0-9A-Z]{16}(?![A-Za-z0-9])")),
-    ("токен Slack (xoxb-, xoxp-)", re.compile(r"(?<![A-Za-z0-9])xox[bp]-[A-Za-z0-9\-]{10,}")),
-    (
-        "закрытый ключ (BEGIN … PRIVATE KEY)",
-        re.compile(r"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----"),
-    ),
-    (
-        "заголовок Authorization: Bearer … с длинным значением",
-        re.compile(r"(?<![A-Za-z0-9])Bearer\s+(?=[A-Za-z0-9._~+/=\-]*\d)[A-Za-z0-9._~+/=\-]{20,}"),
-    ),
-    (
-        "строка password= или token= с длинным значением",
-        re.compile(
-            r"""(?<![A-Za-z0-9])(?:password|passwd|token)["']?\s*[=:]\s*["']?(?P<v>[^\s"',;]{12,})""",
-            re.IGNORECASE,
-        ),
-    ),
-)
-# Подстановка вместо значения: ${NAME}, <описание>, {{шаблон}}, %NAME%, звёздочки, один повторяющийся знак.
-_PLACEHOLDER = re.compile(r"^(?:\$\{?\w+\}?$|<[^>]*>?|\{\{|%\w+%$|\*{4,}|(.)\1{5,}$|x{4,})", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -98,17 +67,8 @@ def _text_of(path: Path) -> str | None:
 
 
 def scan_text(text: str) -> list[tuple[int, str]]:
-    """Совпадения встроенных шаблонов: (строка, название шаблона)."""
-    hits: list[tuple[int, str]] = []
-    for n, line in enumerate(text.split("\n"), start=1):
-        for name, pattern in SECRET_PATTERNS:
-            for m in pattern.finditer(line):
-                value = m.groupdict().get("v")
-                if value is not None and _PLACEHOLDER.match(value):
-                    continue  # «${TOKEN}», «<ключ>», «xxxxxxxxxxxx» — подстановка, не значение
-                hits.append((n, name))
-                break
-    return hits
+    """Совпадения встроенных шаблонов: (строка, название шаблона). Шаблоны общие с проверками до модели."""
+    return keys.scan_lines(text)
 
 
 def scan_builtin(root: Path, files: list[Path]) -> list[Finding]:
@@ -235,6 +195,9 @@ class Packed(NamedTuple):
     files: int
     bytes: int
     gitleaks: str  # «использован», «не найден», «не отработал»
+    stale: tuple[
+        tuple[str, str], ...
+    ] = ()  # (прежний снимок до замены авторов отзывов, новый): имена могли остаться
 
 
 def pack(root: Path, out: Path | None) -> Packed:
@@ -251,4 +214,7 @@ def pack(root: Path, out: Path | None) -> Packed:
         count = build_archive(root, files, target)
     except OSError as exc:
         raise CliError(f"архив не записан в {target}: {exc.strerror or exc}") from exc
-    return Packed(target, count, target.stat().st_size, scanner)
+    from strateg.project import Project
+
+    stale = tuple(safety.snapshots_before_masking(Project.load(root).sources.sources).items())
+    return Packed(target, count, target.stat().st_size, scanner, stale)

@@ -558,13 +558,13 @@ def cmd_fetch(args: argparse.Namespace) -> int:
         p.add_event(p.event(kind="действие", name="strateg fetch", idempotency_hash=h, status="начато"))
 
     # Сеть и разбор страницы: папка проекта свободна.
-    fetcher = make_fetcher(p.root / proj.CACHE_DIR / "fetch.json")
     access, note, final_url, page = "получен", None, None, None
     refused: str | None = None
     try:
+        fetcher = make_fetcher(p.root / proj.CACHE_DIR / "fetch.json")
         page = fetcher.get(url)
         final_url = page.url
-    except fetchlib.AddressRefused as exc:
+    except (fetchlib.AddressRefused, fetchlib.PinningUnavailable) as exc:
         refused = str(exc)
     except fetchlib.RobotsDenied as exc:
         access = "запрещено robots.txt"
@@ -863,6 +863,19 @@ def _store_result(
             )
         if rep.anonymized:
             warnings.append("в тексте заменены на метки: " + ", ".join(rep.anonymized))
+        if rep.key_kinds:
+            warnings.append(safety.keys_message(rep.key_kinds))
+        if extra.get("authors"):
+            warnings.append(
+                f"в снимке заменены авторы отзывов и комментариев: {extra['authors']} "
+                f"(метки {fetchlib.AUTHOR_LABEL}, {fetchlib.MENTION_LABEL}); "
+                "имя внутри текста отзыва разметкой не ловится"
+            )
+        if extra.get("review_names"):
+            warnings.append(
+                "в блоках отзывов возможны имена в свободном тексте (словарь ошибается: «Роза», «Вера»); "
+                "имена не заменены, решаете вы: " + ", ".join(extra["review_names"])
+            )
     else:
         data["fetch"] = info
     source = SourceModel.model_validate(data)
@@ -874,6 +887,9 @@ def _store_result(
     if prior is not None:
         extra["refreshes"] = prior.id
         extra["claims_on_previous"] = _standing_claims(p, prior.id)
+        if safety.AUTHORS_CATEGORY in source.anonymized and safety.AUTHORS_CATEGORY not in prior.anonymized:
+            extra["prior_unmasked"] = prior.id
+            warnings.append(safety.stale_snapshot_note(prior.id, source.id))
     if source.suspicious:
         signs = snapshot[0].instruction_signs if snapshot else []
         p.add_event(
@@ -906,7 +922,7 @@ def _analyse(
         return "источник недоступен: ошибка", f"ответ {page.status}", kind, None
     if page.status >= 300 and page.status not in (401, 403, 429):
         return "источник недоступен: ошибка", f"ответ {page.status} без адреса перенаправления", kind, None
-    visible = hidden = ""
+    visible = hidden = review_text = ""
     if kind == "PDF":
         try:
             raw_text = fetchlib.extract_pdf(page.body)
@@ -930,6 +946,7 @@ def _analyse(
                 )
             visible = fetchlib.page_title(html) + "\n" + fetchlib.visible_text(html)
             hidden = fetchlib.hidden_text(html)
+            review_text = extraction.review_text
         else:
             raw_text = ""
     if fetchlib.looks_blocked(page.status, visible, raw_text):
@@ -948,11 +965,34 @@ def _analyse(
             None,
         )
     rep = safety.inspect_text(raw_text)
+    _mark_authors(rep, review_text, extra)
     # Скрытый текст в снимок не идёт, но обращение к ИИ в нём — повод пометить источник.
     for sign in safety.inspect_text(hidden).instruction_signs:
         if sign not in rep.instruction_signs:
             rep.instruction_signs.append(sign)
     return "получен", None, kind, (rep, rep.text, encoding)
+
+
+def _mark_authors(rep: safety.SafetyReport, review_text: str, extra: dict[str, Any]) -> None:
+    """Авторы отзывов, замененные в дереве страницы, и имена в свободном тексте отзывов, попавшем в снимок.
+
+    Число считается по меткам в тексте снимка: блок, который извлекатель не взял, ничего не добавляет.
+    Имена в свободном тексте разметкой не ловятся; словарь имён вызывается только если текст отзывов
+    попал в снимок, и результат — предупреждение: заменяет человек.
+    """
+    authors = rep.text.count(fetchlib.AUTHOR_LABEL) + rep.text.count(fetchlib.MENTION_LABEL)
+    if authors:
+        rep.anonymized.append(safety.AUTHORS_CATEGORY)
+        extra["authors"] = authors
+    if not review_text:
+        return
+    flat = " ".join(rep.text.split())
+    chunks = [" ".join(c.split()) for c in re.split(r"[.!?\n]+", review_text)]
+    included = [c for c in chunks if len(c) >= 25 and c in flat]
+    if included:
+        names = [w for w, _ in safety.find_names("\n".join(included), limit=12)]
+        if names:
+            extra["review_names"] = names
 
 
 def _snapshot_path(p: Project, s: SourceModel) -> str | None:
@@ -998,6 +1038,8 @@ def _fetch_report(
         ),
         "suspicious": s.suspicious,
         "closed_markers": closed,
+        "authors_masked": extra.get("authors", 0),
+        "prior_unmasked": extra.get("prior_unmasked"),
         "warnings": warnings,
     }
     same_text = extra.get("same_text_as")
@@ -1071,6 +1113,11 @@ def _fetch_report(
             + (" (запасной путь: весь видимый текст)" if data["extraction_fallback"] else ""),
             "Пометки: " + ("; ".join(marks) if marks else "нет"),
         ]
+        if cached and not getattr(args, "refresh", False):
+            lines.append(
+                "Страница не загружалась заново: адрес уже записан. Чтобы перечитать её (страница изменилась "
+                "или снимок снят в прежней версии программы), `strateg fetch --refresh <адрес>`."
+            )
         if same_text:
             lines.append(
                 f"Новый источник не создан: текст совпадает с {same_text} (другой адрес); "
@@ -1336,7 +1383,8 @@ def _build_quotes(p: Project, c: ClaimIn, label: str, errors: list[str]) -> list
             continue
         if src.anonymized and not src.anonymization_confirmed and src.path is not None:
             errors.append(
-                f"{where}: в материале {src.id} найдены персональные данные, человек не подтвердил замены "
+                f"{where}: в материале {src.id} найдены {safety.found_what(src.anonymized)}, "
+                "человек не подтвердил замены "
                 f"(`strateg add --confirm {src.id}`)"
             )
             continue
@@ -2036,6 +2084,7 @@ def _add_data(p: Project, o: materials.Outcome) -> dict[str, Any]:
         "material_sha256": s.material_sha256,
         "anonymized": list(s.anonymized),
         "replacements": [{"label": r.label, "line": r.line} for r in (rep.replacements if rep else [])],
+        "keys": dict(rep.key_kinds) if rep else {},
         "names": [{"name": n, "line": line} for n, line in (rep.names if rep else [])],
         "closed_markers": list(s.closed_markers),
         "suspicious": s.suspicious,
@@ -2237,12 +2286,17 @@ def cmd_pack(args: argparse.Namespace) -> int:
             "files": packed.files,
             "bytes": packed.bytes,
             "gitleaks": packed.gitleaks,
+            "unmasked_snapshots": [old for old, _ in packed.stale],
         },
         [
             f"Проект {root.name} упакован: {packed.archive}",
             f"Файлов: {packed.files}, размер: {max(packed.bytes // 1024, 1)} КБ.",
-            "В архиве нет .tmp/, кэша fetch и исходников с персональными данными.",
+            "В архиве нет .tmp/, кэша fetch и исходников материалов с персональными данными."
+            if not packed.stale
+            else "В архиве нет .tmp/, кэша fetch и исходников материалов с персональными данными; "
+            "но есть прежние снимки до замены авторов отзывов, имена в них не заменены.",
             f"Секретов не найдено: встроенные шаблоны, {scanner}.",
+            *[f"Внимание: {safety.stale_snapshot_note(old, new)}" for old, new in packed.stale],
         ],
     )
 
@@ -2365,6 +2419,7 @@ def _status_data(p: Project) -> dict[str, Any]:
             "by_kind": by_kind,
             "unavailable": sum(1 for s in p.sources.sources if s.access != "получен"),
             "suspicious": [s.id for s in p.sources.sources if s.suspicious],
+            "unmasked_snapshots": sorted(safety.snapshots_before_masking(p.sources.sources)),
             "closed_unconfirmed": [
                 s.id for s in p.sources.sources if s.closed_markers and not s.closed_confirmed
             ],
@@ -2622,6 +2677,8 @@ def cmd_status(args: argparse.Namespace) -> int:
         lines.append(
             "Внимание: источники с пометкой «подозрительный»: " + ", ".join(d["sources"]["suspicious"])
         )
+    for old, new in safety.snapshots_before_masking(p.sources.sources).items():
+        lines.append("Внимание: " + safety.stale_snapshot_note(old, new))
     if d["sources"]["closed_unconfirmed"]:
         lines.append(
             "Внимание: признаки закрытых данных не подтверждены человеком: "

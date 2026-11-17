@@ -50,6 +50,7 @@ from strateg.models import (
     quote_in_snapshot,
     show,
 )
+from strateg.safety import found_what
 
 STATE_FILE = "state.yaml"
 SOURCES_FILE = "sources.yaml"
@@ -358,7 +359,7 @@ def _check_sources_files(root: Path, sources: SourcesFile, errors: list[str]) ->
             )
         if s.anonymized and not s.anonymization_confirmed and s.path is not None:
             errors.append(
-                f"{label}: в материале найдены персональные данные ({', '.join(s.anonymized)}), "
+                f"{label}: в материале найдены {found_what(s.anonymized)} ({', '.join(s.anonymized)}), "
                 "человек не подтвердил замены: `strateg add --confirm " + s.id + "`"
             )
         if s.kind == "изображение" and not s.no_personal_data_confirmed:

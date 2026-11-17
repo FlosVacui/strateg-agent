@@ -2,7 +2,9 @@
 
 - Почта и телефоны заменяются метками. Номера 8-800 — телефоны организаций, их не трогаем.
 - Признаки закрытых данных (гриф, «для служебного пользования», «коммерческая тайна») — только пометка.
-- Текст, похожий на обращение к ИИ, — пометка «подозрительный». Это сигнал человеку, а не защита.
+- Строки, похожие на ключи (общие шаблоны с упаковкой, `keys`), заменяются меткой `[ключ]`.
+- Текст, похожий на обращение к ИИ (`instructions`), — пометка «подозрительный». Это сигнал человеку, а не
+  защита: обращение, записанное иначе, пройдёт.
 """
 
 from __future__ import annotations
@@ -11,8 +13,14 @@ import bisect
 import re
 from dataclasses import dataclass, field
 
+from strateg import keys
+from strateg.instructions import find_signs
+
 EMAIL_LABEL = "[почта]"
 PHONE_LABEL = "[телефон]"
+KEY_LABEL = keys.KEY_LABEL
+KEYS_CATEGORY = "ключи"
+AUTHORS_CATEGORY = "авторы отзывов"
 
 _EMAIL = re.compile(r"(?<![\w.+-])[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 # разделитель в номере: пробел, дефис, длинное и неразрывное тире, минус
@@ -85,53 +93,6 @@ _CLOSED = {
     "коммерческая тайна": _TradeSecret(),
 }
 
-# (признак для сообщения, шаблон). В сообщения попадает только название признака, не сам текст.
-_INSTRUCTIONS = (
-    (
-        "игнорировать прежние указания",
-        re.compile(
-            r"игнорируй\w*\s+(?:все\s+|любые\s+)?(?:предыдущ\w+|прежн\w+|прошл\w+|выше)\s+(?:инструкци\w+|указани\w+|команд\w+)"
-            r"|забудь\w*\s+(?:все\s+)?(?:предыдущ\w+\s+|прежн\w+\s+)?(?:инструкци\w+|указани\w+)"
-            r"|ignore\s+(?:all\s+|any\s+)?(?:the\s+)?(?:previous|prior|above|earlier)\s+(?:instructions|prompts?|rules)"
-            r"|disregard\s+(?:all\s+|any\s+)?(?:the\s+)?(?:previous|prior|above)\s+(?:instructions|rules)",
-            re.IGNORECASE,
-        ),
-    ),
-    (
-        "обращение к ИИ или ассистенту",
-        re.compile(
-            r"если\s+ты\s+(?:—\s+|-\s+)?(?:ии|ai|нейросет\w+|языков\w+\s+модел\w+|ассистент\w*|бот)\b"
-            r"|(?:ии|ai|llm)[\s-]*(?:агент\w*|ассистент\w*|модел\w+)[,:]\s"
-            r"|(?:уважаем\w+|dear)\s+(?:ии|ai|llm|ассистент|assistant|нейросет\w+)"
-            r"|if\s+you\s+are\s+(?:an?\s+)?(?:ai|llm|language\s+model|assistant|chatbot)\b"
-            r"|(?:note|message|instructions?)\s+(?:to|for)\s+(?:ai|llm|assistants?|language\s+models?)\b",
-            re.IGNORECASE,
-        ),
-    ),
-    (
-        "смена роли или системная инструкция",
-        re.compile(
-            r"системн\w+\s+(?:промпт|инструкци\w+|сообщени\w+)"
-            r"|system\s+(?:prompt|message|instructions?)"
-            r"|\byou\s+are\s+now\b|\bnew\s+instructions?\b|новые\s+инструкции"
-            r"|<\s*/?\s*system\s*>",
-            re.IGNORECASE,
-        ),
-    ),
-    (
-        "требование скрыть от пользователя или выполнить действие",
-        re.compile(
-            r"не\s+(?:сообщай|говори|показывай)\s+(?:об\s+этом\s+)?пользовател\w+"
-            r"|do\s+not\s+(?:tell|inform|reveal\s+to)\s+the\s+user"
-            r"|(?:выполни|запусти)\s+(?:следующ\w+\s+)?(?:команду|код|скрипт)"
-            r"|(?:execute|run)\s+the\s+following\s+(?:command|code|script)"
-            r"|(?:отправь|передай|перешли)\s+(?:все\s+)?(?:данные|файлы|материалы|ключи|пароли)\s+(?:проекта\s+)?на\b"
-            r"|(?:send|forward|upload)\s+(?:all\s+)?(?:the\s+)?(?:data|files|keys|passwords)\s+to\b",
-            re.IGNORECASE,
-        ),
-    ),
-)
-
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
@@ -141,6 +102,61 @@ class SafetyReport:
     anonymized: list[str] = field(default_factory=list)  # значения Anonymized: «телефоны», «адреса почты»
     closed_markers: list[str] = field(default_factory=list)
     instruction_signs: list[str] = field(default_factory=list)
+    key_kinds: dict[str, int] = field(default_factory=dict)  # вид ключа -> число замен (значений нет)
+
+
+def count_kinds(hits: list[keys.KeyHit]) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for h in hits:
+        out[h.kind] = out.get(h.kind, 0) + 1
+    return out
+
+
+def snapshots_before_masking(sources) -> dict[str, str]:
+    """Прежние снимки, снятые до замены авторов отзывов: {прежний И-n: новый И-n, который его перепроверил}.
+
+    Признак: у нового снимка (`refreshes` — на прежний) в `anonymized` есть «авторы отзывов», а у прежнего
+    нет. Имена и ники в таком прежнем снимке остались; он лежит в `sources/` и уходит в архив.
+    """
+    by_id = {s.id: s for s in sources}
+    out: dict[str, str] = {}
+    for s in sources:
+        old = by_id.get(s.refreshes) if getattr(s, "refreshes", None) else None
+        if (
+            old is not None
+            and old.text_path
+            and AUTHORS_CATEGORY in s.anonymized
+            and AUTHORS_CATEGORY not in old.anonymized
+        ):
+            out.setdefault(old.id, s.id)
+    return out
+
+
+def stale_snapshot_note(old: str, new: str) -> str:
+    """Фраза для `fetch --refresh`, `status` и `pack`: прежний снимок остался, в нём могут быть имена."""
+    return (
+        f"прежний снимок {old} снят до замены авторов отзывов и остался в sources/: в нём могут быть имена "
+        f"и ники, "
+        f"он попадёт в архив `pack`; новый снимок {new} с метками. Если утверждений на {old} нет, он не нужен"
+    )
+
+
+def found_what(categories: list[str]) -> str:
+    """Что найдено, по-русски: персональные данные, строки, похожие на ключи, или и то и другое."""
+    pii = [c for c in categories if c != KEYS_CATEGORY]
+    if pii and KEYS_CATEGORY in categories:
+        return "персональные данные и строки, похожие на ключи"
+    return "строки, похожие на ключи" if KEYS_CATEGORY in categories else "персональные данные"
+
+
+def keys_message(kinds: dict[str, int]) -> str:
+    """Сообщение о заменённых ключах: вид и число замен, без значений."""
+    total = sum(kinds.values())
+    listing = "; ".join(f"{kind} — {n}" for kind, n in kinds.items())
+    return (
+        f"строки, похожие на ключи, заменены меткой {KEY_LABEL} (замен: {total}): {listing}. "
+        "Значения не показываются; если ключ настоящий, перевыпустите его: он лежал в открытом тексте"
+    )
 
 
 def clean_text(text: str) -> str:
@@ -186,12 +202,19 @@ def mask_contacts(text: str) -> tuple[str, list[str]]:
 def inspect_text(text: str) -> SafetyReport:
     """Все проверки до записи снимка: текст после замены контактов и найденные признаки."""
     text = clean_text(text)
+    text, key_hits = keys.mask_keys(text)  # ключи первыми: цифры в ключе не должны сойти за телефон
+    text, numbers = mask_page_numbers(text)  # до телефонов: группы цифр карты не должны сойти за номер
     masked, anonymized = mask_contacts(text)
+    if numbers:
+        anonymized.append(_NUMBERS)
+    if key_hits:
+        anonymized.append(KEYS_CATEGORY)
     return SafetyReport(
         text=masked,
         anonymized=anonymized,
         closed_markers=[name for name, pattern in _CLOSED.items() if pattern.search(masked)],
-        instruction_signs=[name for name, pattern in _INSTRUCTIONS if pattern.search(masked)],
+        instruction_signs=find_signs(masked),
+        key_kinds=count_kinds(key_hits),
     )
 
 
@@ -205,8 +228,9 @@ CARD_LABEL = "[карта]"
 _NUMBERS = "номера документов и карт"
 
 _CARD_GROUPED = re.compile(r"(?<![\w-])\d{4}(?:[ -]\d{4}){2,3}(?:[ -]\d{1,3})?(?![\w-])")
-# без разделителей — только номера платёжных систем (первая цифра 2–6), иначе под замену идут штрихкоды
-_CARD_PLAIN = re.compile(r"(?<![\w-])[2-6]\d{12,18}(?![\w-])")
+# без разделителей — только номера платёжных систем: первая цифра 2–6 и от 14 цифр; тринадцать цифр — штрихкод
+# EAN-13 (сумма Луна подходит у каждого десятого), карты в 13 цифр практически не выпускаются
+_CARD_PLAIN = re.compile(r"(?<![\w-])[2-6]\d{13,18}(?![\w-])")
 _SNILS = re.compile(r"(?<![\w-])(?:\d{3}[ -]\d{3}[ -]\d{3}[ -]\d{2}|\d{11})(?![\w-])")
 _INN = re.compile(r"(?<![\w-])\d{10}(?:\d{2})?(?![\w-])")
 _NAME_WORD = re.compile(r"[А-ЯЁ][а-яё]+(?:-[А-ЯЁ][а-яё]+)?")
@@ -217,8 +241,9 @@ _NAME_GRAMMEMES = frozenset({"Name", "Surn", "Patr"})
 class Replacement:
     """Одна замена в обезличенной копии: что заменено и в какой строке. Само значение не хранится."""
 
-    label: str  # «[телефон]», «[почта]», «[ИНН]», «[СНИЛС]», «[карта]»
+    label: str  # «[телефон]», «[почта]», «[ИНН]», «[СНИЛС]», «[карта]», «[ключ]»
     line: int
+    kind: str = ""  # для ключей — вид («токен GitHub …»); самого значения нет
 
 
 def luhn_ok(digits: str) -> bool:
@@ -265,63 +290,138 @@ def _digits(text: str) -> str:
     return re.sub(r"\D", "", text)
 
 
+class _Taken:
+    """Занятые отрезки текста: упорядоченные непересекающиеся, проверка свободы — бинарным поиском.
+
+    Новые отрезки копятся отдельно и вливаются в основной список один раз после прохода шаблона (`commit`):
+    вставка в середину списка на каждый отрезок растила бы время квадратом от числа замен.
+    Отрезки одного прохода не пересекаются; свободу проверяют по тому, что занято до прохода.
+    """
+
+    def __init__(self) -> None:
+        self.starts: list[int] = []
+        self.ends: list[int] = []
+        self._new: list[tuple[int, int]] = []
+
+    def free(self, a: int, b: int) -> bool:
+        i = bisect.bisect_right(self.starts, a)
+        if i > 0 and self.ends[i - 1] > a:
+            return False
+        return not (i < len(self.starts) and self.starts[i] < b)
+
+    def add(self, a: int, b: int) -> None:
+        self._new.append((a, b))
+
+    def commit(self) -> None:
+        if not self._new:
+            return
+        merged = sorted([*zip(self.starts, self.ends, strict=True), *self._new])  # две упорядоченные части
+        self.starts = [x for x, _ in merged]
+        self.ends = [y for _, y in merged]
+        self._new = []
+
+
+def _line_of(newlines: list[int], pos: int) -> int:
+    """Номер строки (с единицы) для позиции в тексте; список переводов строк считается один раз."""
+    return bisect.bisect_left(newlines, pos) + 1
+
+
 def mask_personal(text: str) -> tuple[str, list[Replacement], list[str]]:
-    """Обезличивание материала: почта, телефоны, ИНН человека, СНИЛС, номера карт.
+    """Обезличивание материала: ключи, почта, телефоны, ИНН человека, СНИЛС, номера карт.
 
     Возвращает (текст с метками, замены с номером строки, категории для реестра). Номера 8-800 и ИНН из
     10 цифр (организация) не трогаются, но и не принимаются за другой номер. Строки не склеиваются:
-    номер строки в списке замен — номер строки текста.
+    номер строки в списке замен — номер строки текста. Время растёт почти линейно от числа замен.
     """
-    taken: list[tuple[int, int]] = []
-    found: list[tuple[int, int, str, str]] = []  # начало, конец, метка, категория
+    taken = _Taken()
+    found: list[tuple[int, int, str, str, str]] = []  # начало, конец, метка, категория, вид ключа
 
-    def free(a: int, b: int) -> bool:
-        return all(b <= x or a >= y for x, y in taken)
-
-    def take(a: int, b: int, label: str | None, category: str | None) -> None:
-        taken.append((a, b))
+    def take(a: int, b: int, label: str | None, category: str | None, kind: str = "") -> None:
+        taken.add(a, b)
         if label and category:
-            found.append((a, b, label, category))
+            found.append((a, b, label, category, kind))
 
+    for hit in keys.find_keys(text):  # ключи первыми: их цифры не должны сойти за телефон или номер
+        take(hit.start, hit.end, KEY_LABEL, KEYS_CATEGORY, hit.kind)
+    taken.commit()
     for m in _EMAIL.finditer(text):
-        take(m.start(), m.end(), EMAIL_LABEL, "адреса почты")
+        if taken.free(m.start(), m.end()):
+            take(m.start(), m.end(), EMAIL_LABEL, "адреса почты")
+    taken.commit()
     for pattern in _PHONES:
         for m in pattern.finditer(text):
-            if free(m.start(), m.end()):
+            if taken.free(m.start(), m.end()):
                 if _is_org_phone(m.group()):
                     take(m.start(), m.end(), None, None)
                 else:
                     take(m.start(), m.end(), PHONE_LABEL, "телефоны")
+        taken.commit()
     for pattern in (_CARD_GROUPED, _CARD_PLAIN):
         for m in pattern.finditer(text):
             digits = _digits(m.group())
-            if 13 <= len(digits) <= 19 and luhn_ok(digits) and free(m.start(), m.end()):
+            if 13 <= len(digits) <= 19 and luhn_ok(digits) and taken.free(m.start(), m.end()):
                 take(m.start(), m.end(), CARD_LABEL, _NUMBERS)
+        taken.commit()
     for m in _SNILS.finditer(text):
-        if snils_ok(_digits(m.group())) and free(m.start(), m.end()):
+        if snils_ok(_digits(m.group())) and taken.free(m.start(), m.end()):
             take(m.start(), m.end(), SNILS_LABEL, _NUMBERS)
+    taken.commit()
     for m in _INN.finditer(text):
         digits = m.group()
-        if free(m.start(), m.end()) and inn_ok(digits):
+        if taken.free(m.start(), m.end()) and inn_ok(digits):
             if len(digits) == 12:
                 take(m.start(), m.end(), INN_LABEL, _NUMBERS)
             else:
                 take(m.start(), m.end(), None, None)  # ИНН организации: не персональные данные
 
     found.sort()
+    newlines = [i for i, ch in enumerate(text) if ch == "\n"] if found else []
     out: list[str] = []
     replacements: list[Replacement] = []
     categories: list[str] = []
     pos = 0
-    for a, b, label, category in found:
+    for a, b, label, category, kind in found:
         out.append(text[pos:a])
         out.append(label)
-        replacements.append(Replacement(label, text.count("\n", 0, a) + 1))
+        replacements.append(Replacement(label, _line_of(newlines, a), kind))
         if category not in categories:
             categories.append(category)
         pos = b
     out.append(text[pos:])
     return "".join(out), replacements, categories
+
+
+# На странице заменяются только узкие формы с разделителями: СНИЛС «ddd-ddd-ddd dd» (с контрольным числом)
+# и номер карты группами (с суммой Луна). ИНН и цифры подряд — публичные сведения реестров, номера заказов и
+# артикулы: не трогаются.
+_SNILS_SEPARATED = re.compile(r"(?<![\w-])\d{3}[ -]\d{3}[ -]\d{3}[ -]\d{2}(?![\w-])")
+
+
+def mask_page_numbers(text: str) -> tuple[str, int]:
+    """СНИЛС с разделителями и номер карты группами в тексте страницы; возвращает текст и число замен."""
+    spans: list[tuple[int, int, str]] = []
+    for m in _CARD_GROUPED.finditer(text):
+        digits = _digits(m.group())
+        if 13 <= len(digits) <= 19 and luhn_ok(digits):
+            spans.append((m.start(), m.end(), CARD_LABEL))
+    for m in _SNILS_SEPARATED.finditer(text):
+        if snils_ok(_digits(m.group())):
+            spans.append((m.start(), m.end(), SNILS_LABEL))
+    if not spans:
+        return text, 0
+    spans.sort()
+    out: list[str] = []
+    pos = 0
+    count = 0
+    for a, b, label in spans:
+        if a < pos:
+            continue
+        out.append(text[pos:a])
+        out.append(label)
+        pos = b
+        count += 1
+    out.append(text[pos:])
+    return "".join(out), count
 
 
 _morph = None
@@ -372,6 +472,14 @@ class MaterialReport:
     instruction_signs: list[str] = field(default_factory=list)
     names: list[tuple[str, int]] = field(default_factory=list)
 
+    @property
+    def key_kinds(self) -> dict[str, int]:
+        out: dict[str, int] = {}
+        for r in self.replacements:
+            if r.label == KEY_LABEL:
+                out[r.kind] = out.get(r.kind, 0) + 1
+        return out
+
 
 def inspect_material(text: str) -> MaterialReport:
     """Проверки текста материала: персональные данные, закрытые данные, обращения к ИИ, имена.
@@ -385,6 +493,6 @@ def inspect_material(text: str) -> MaterialReport:
         replacements=replacements,
         anonymized=categories,
         closed_markers=[name for name, pattern in _CLOSED.items() if pattern.search(masked)],
-        instruction_signs=[name for name, pattern in _INSTRUCTIONS if pattern.search(masked)],
+        instruction_signs=find_signs(masked),
         names=find_names(masked),
     )

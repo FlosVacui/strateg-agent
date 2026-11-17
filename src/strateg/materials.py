@@ -576,10 +576,12 @@ def _warnings(outcome: Outcome) -> None:
     w = outcome.warnings
     if (rep is not None and rep.replacements) or NAME_CATEGORY in s.anonymized:
         w.append(
-            "найдены персональные данные: в работу идёт только обезличенная копия, исходник вынесен "
-            "из inputs/ "
+            f"найдены {safety.found_what(s.anonymized)}: в работу идёт только обезличенная копия, исходник "
+            "вынесен из inputs/ "
             f"и ждёт вашего подтверждения: `strateg add --confirm {s.id}`"
         )
+    if rep is not None and rep.key_kinds:
+        w.append(safety.keys_message(rep.key_kinds))
     if rep is not None and rep.names:
         w.append(
             "возможные имена людей в тексте (словарь ошибается: «Роза», «Вера»); имена не заменены, "
