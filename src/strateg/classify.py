@@ -312,76 +312,81 @@ def cmd_claim_verdict(args: argparse.Namespace) -> int:
         wanted = {
             cid: Parsed(verdict, _flag(getattr(args, "type_ok", None)), cut(reason, REASON_LIMIT)[0], True)
         }
-    claims = {cid: _find_claim(p, cid) for cid in wanted}
-    for cid, c in claims.items():
-        if not checkable(c):
-            raise CliError(
-                f"{cid}: вердикт не записан — классификатор проверяет действующие утверждения с цитатой, "
-                f"кроме синтетики (у {cid}: {c.type}, {c.status}, цитат {len(c.quotes)})"
+    # чтение утверждений, вердиктов и повышений — под той же блокировкой, что и запись
+    with proj.transaction(p, tolerate=lambda e: UNSUPPORTED_NOTE in e):
+        claims = {cid: _find_claim(p, cid) for cid in wanted}
+        for cid, c in claims.items():
+            if not checkable(c):
+                raise CliError(
+                    f"{cid}: вердикт не записан — классификатор проверяет действующие утверждения с цитатой, "
+                    f"кроме синтетики (у {cid}: {c.type}, {c.status}, цитат {len(c.quotes)})"
+                )
+        upgraded = upgraded_now(p, model)
+        at = proj.now()
+        changed: list[tuple[Claim, ClaimVerdict, ClaimVerdict | None]] = []
+        for cid, item in wanted.items():
+            new = ClaimVerdict(
+                verdict=item.verdict,  # type: ignore[arg-type]
+                type_ok=item.type_ok,
+                reason=item.reason,
+                by=by,  # type: ignore[arg-type]
+                model=model,
+                upgraded=upgraded,
+                at=at,
             )
-    upgraded = upgraded_now(p, model)
-    at = proj.now()
-    changed: list[tuple[Claim, ClaimVerdict, ClaimVerdict | None]] = []
-    for cid, item in wanted.items():
-        new = ClaimVerdict(
-            verdict=item.verdict,  # type: ignore[arg-type]
-            type_ok=item.type_ok,
-            reason=item.reason,
-            by=by,  # type: ignore[arg-type]
-            model=model,
-            upgraded=upgraded,
-            at=at,
-        )
-        old = claims[cid].verdict
-        if not _same(old, new):
-            changed.append((claims[cid], new, old))
-    results = [
-        {
-            "id": cid,
-            "verdict": item.verdict,
-            "type_ok": item.type_ok,
-            "type_hint": item.type_hint,
-            "reason": item.reason,
-            "parsed": item.parsed,
-            "changed": any(c.id == cid for c, _, _ in changed),
-        }
-        for cid, item in wanted.items()
-    ]
-    warnings = []
-    if unknown:
-        warnings.append(f"в ответе есть номера не из задания, они не записаны: {', '.join(unknown)}")
-    picked = last_model(p)
-    if picked is not None and picked != model:
-        warnings.append(
-            f"модель «{model}» не та, что назвал `strateg route classifier` на этом шаге: «{picked}»"
-        )
-    if changed:
-        started = time.monotonic()
-        with proj.transaction(p.root, tolerate=lambda e: UNSUPPORTED_NOTE in e):
-            for c, new, old in changed:
-                c.verdict = new
-                runs = sum(1 for e in p.journal if e.kind == "действие" and e.name == ACTION)
-                type_part = (
-                    "тип не оценён" if new.type_ok is None else f"тип верен: {'да' if new.type_ok else 'нет'}"
-                )
-                p.add_event(
-                    p.event(
-                        kind="действие",
-                        name=ACTION,
-                        idempotency_hash=proj.key_hash(
-                            "claim verdict", c.id, runs + 1, new.verdict, new.model
-                        ),
-                        status="выполнено",
-                        duration_s=round(time.monotonic() - started, 2),
-                        message=(
-                            f"{c.id}: {new.verdict} (было: {_show(old)}); {type_part}; {by}, модель {model}"
-                            + ("; после повышения" if upgraded else "")
-                            + f"; причина: {new.reason}"
-                        ),
+            old = claims[cid].verdict
+            if not _same(old, new):
+                changed.append((claims[cid], new, old))
+        results = [
+            {
+                "id": cid,
+                "verdict": item.verdict,
+                "type_ok": item.type_ok,
+                "type_hint": item.type_hint,
+                "reason": item.reason,
+                "parsed": item.parsed,
+                "changed": any(c.id == cid for c, _, _ in changed),
+            }
+            for cid, item in wanted.items()
+        ]
+        warnings = []
+        if unknown:
+            warnings.append(f"в ответе есть номера не из задания, они не записаны: {', '.join(unknown)}")
+        picked = last_model(p)
+        if picked is not None and picked != model:
+            warnings.append(
+                f"модель «{model}» не та, что назвал `strateg route classifier` на этом шаге: «{picked}»"
+            )
+        if changed:
+            started = time.monotonic()
+            with proj.transaction(p, tolerate=lambda e: UNSUPPORTED_NOTE in e):
+                for c, new, old in changed:
+                    c.verdict = new
+                    runs = sum(1 for e in p.journal if e.kind == "действие" and e.name == ACTION)
+                    type_part = (
+                        "тип не оценён"
+                        if new.type_ok is None
+                        else f"тип верен: {'да' if new.type_ok else 'нет'}"
                     )
-                )
-            p.save_claims()
-            p.save_state()
+                    p.add_event(
+                        p.event(
+                            kind="действие",
+                            name=ACTION,
+                            idempotency_hash=proj.key_hash(
+                                "claim verdict", c.id, runs + 1, new.verdict, new.model
+                            ),
+                            status="выполнено",
+                            duration_s=round(time.monotonic() - started, 2),
+                            message=(
+                                f"{c.id}: {new.verdict} (было: {_show(old)}); {type_part}; "
+                                f"{by}, модель {model}"
+                                + ("; после повышения" if upgraded else "")
+                                + f"; причина: {new.reason}"
+                            ),
+                        )
+                    )
+                p.save_claims()
+                p.save_state()
     lines = []
     for r in results:
         state = "записан" if r["changed"] else "без изменений"

@@ -1,6 +1,6 @@
 """Точка входа CLI `strateg`: `doctor` и команды проекта (`new`, `use`, `status`, `step`, `gate`, `fetch`,
 `add`, `claim`, `write`, `event`, `check`, `cost`, `budget`, `pack`, `rubric`, `route`, `due`, `impact`,
-`metric`, `diff`). Сами команды
+`metric`, `diff`, `search`). Сами команды
 проекта — в `strateg.commands`, проверка полноты — в `strateg.rubric`, маршрут роли — в `strateg.routing`.
 
 Коды возврата: 0 — успех, 1 — ошибка данных или правил, 2 — ошибка использования.
@@ -19,7 +19,7 @@ import tempfile
 from pathlib import Path
 from typing import NoReturn
 
-from strateg import __version__, classify, commands, costreport, followup, routing, rubric
+from strateg import __version__, classify, commands, costreport, followup, routing, rubric, search
 from strateg.hooks import flags as hookflags
 
 OK, WARN, ERR = "OK", "WARN", "ERR"
@@ -93,10 +93,22 @@ def _report(name: str, level: str, detail: str) -> str:
     return level
 
 
-def cmd_doctor(args: argparse.Namespace) -> int:
-    """Проверка среды: Python, uv, git, кодировка, запись в `projects/`.
+def _gitleaks_line() -> tuple[str, str, str]:
+    """`gitleaks` нужен `pack` как второй сканер секретов и коммитам; встроенные шаблоны работают без него."""
+    exe = shutil.which("gitleaks")
+    if exe:
+        return "gitleaks", OK, exe
+    return (
+        "gitleaks",
+        WARN,
+        "не найден; `strateg pack` ищет секреты встроенными шаблонами; перед коммитом сканер лучше поставить",
+    )
 
-    Ошибки дают код 1. Предупреждения (нет git, не UTF-8 в консоли) код не меняют.
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    """Проверка среды: Python, uv, git, SQLite, gitleaks, кодировка, запись в `projects/`.
+
+    Ошибки дают код 1. Предупреждения (нет git, нет gitleaks, не UTF-8 в консоли) код не меняют.
     """
     levels = []
     levels.append(_report("Python", OK if sys.version_info >= (3, 12) else ERR, platform.python_version()))
@@ -110,8 +122,10 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             "git", WARN, "не найден; для работы с проектом не обязателен, но нужен для истории изменений"
         )
     )
+    levels.append(_report(*_gitleaks_line()))
     console = getattr(args, "console", None) or detect_console_encoding()
     levels.append(_report("Кодировка консоли", *console))
+    levels.append(_report("SQLite", *getattr(args, "sqlite", None) or search.sqlite_status()))
     root = find_repo_root()
     if root is None:
         levels.append(_report("Запись в projects/", ERR, "не найден корень репозитория (pyproject.toml)"))
@@ -385,6 +399,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     add("check", commands.cmd_check, "проверить активный проект")
+
+    p = add("search", search.cmd_search, "найти в проекте и методике: утверждения, снимки, материалы")
+    p.add_argument("query", help="слова запроса; падежи и числа учитываются")
+    p.add_argument(
+        "--also",
+        action="append",
+        metavar="ФОРМУЛИРОВКА",
+        help="ещё одна формулировка того же вопроса (синонимы); можно повторять",
+    )
+    p.add_argument(
+        "--in",
+        dest="areas",
+        action="append",
+        choices=[*search.AREAS, search.ALL],
+        help="где искать; можно повторять (по умолчанию: утверждения, источники, материалы)",
+    )
+    p.add_argument("--limit", type=int, default=search.DEFAULT_LIMIT, help="сколько мест показать")
+    p.add_argument(
+        "--only-active",
+        action="store_true",
+        help="скрыть отозванные и заменённые утверждения (по умолчанию они идут последними)",
+    )
 
     p = add(
         "due",

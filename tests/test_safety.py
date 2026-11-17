@@ -348,3 +348,15 @@ def test_what_the_detector_does_not_find_is_written_in_the_readme_and_is_true():
     readme = (Path(__file__).resolve().parent.parent / "README.md").read_text(encoding="utf-8")
     assert "ИНН, записанный с пробелами по группам" in readme and "телефон из десяти цифр без" in readme
     assert safety.mask_personal("ИНН 500 100 732 259 и 9161234567")[1] == []
+
+
+def test_mask_personal_is_not_quadratic_on_a_mix_of_emails_and_phones():
+    """Смесь почты и телефонов 3 МБ: секунды, а не десятки секунд (раньше вставка в середину списка)."""
+    import time
+
+    text = ("a@b.ru +7 999 123-45-67 " * 130_000)[:3_000_000]
+    started = time.perf_counter()
+    masked, replacements, _ = safety.mask_personal(text)
+    elapsed = time.perf_counter() - started
+    assert len(replacements) > 150_000 and "a@b.ru" not in masked
+    assert elapsed < 5.0, elapsed

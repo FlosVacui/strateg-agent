@@ -112,7 +112,7 @@ def refresh(
     return result
 
 
-def role_done(event: Mapping[str, Any], root: Path) -> None:
+def role_done(event: Mapping[str, Any], root: Path, timeout: float | None = None) -> None:
     """След роли: `SubagentStop` пишет «роль выполнена» с `agent_type`; пустой тип (служебный агент) — нет.
 
     Имя события — `agent_id`; возобновлённый субагент завершается снова и оставляет новое событие
@@ -131,6 +131,7 @@ def role_done(event: Mapping[str, Any], root: Path) -> None:
             name=name,
             role=role,
         ),
+        timeout,
     )
 
 

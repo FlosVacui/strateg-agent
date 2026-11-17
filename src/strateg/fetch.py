@@ -2,9 +2,13 @@
 
 - только http и https; перед каждым запросом и после каждого перенаправления адрес хоста проверяется,
   локальные, внутренние, link-local, multicast и зарезервированные запрещены; не больше 5 перенаправлений;
+- соединение идёт на тот адрес, который прошёл проверку: сетевой слой (`PinnedBackend`) сам разрешает имя при
+  соединении, проверяет все адреса и соединяется по IP, имя остаётся в `Host` и в TLS; подмена DNS между
+  проверкой и соединением внутреннего адреса не откроет;
 - таймаут 20 секунд и один повтор; ответ больше 5 МиБ обрывается;
 - `robots.txt` по RFC 9309 через protego: читается не больше 500 КиБ, кэш не дольше 24 часов;
-  4xx — можно всё, 5xx, недоступность и перенаправление без адреса — запрещено;
+  4xx — можно всё, 5xx, недоступность и перенаправление без адреса — запрещено; перенаправление `robots.txt`
+  с https на http — отказ читать его по http: файл считается недоступным;
 - не чаще одного запроса в секунду к хосту, время последнего запроса — в кэше проекта;
 - честный `User-Agent`: `strateg/<версия> (+<адрес репозитория>)`;
 - кодировка по байтам: заголовок, `<meta>`, charset-normalizer;
@@ -32,7 +36,7 @@ import charset_normalizer
 import httpx
 from protego import Protego
 
-from strateg import __version__
+from strateg import __version__, storage
 
 PRODUCT_TOKEN = "strateg"
 MAX_BYTES = 5 * 1024 * 1024
@@ -160,7 +164,17 @@ def normalize_url(raw: str) -> str:
 
 def check_address(url: str) -> None:
     """Хост не ведёт во внутреннюю сеть: проверяются все его адреса. Нарушение — AddressRefused."""
-    host = httpx.URL(url).host
+    pinned_addresses(httpx.URL(url).host)
+
+
+def pinned_addresses(host: str) -> list[str]:
+    """Адреса хоста, проверенные в момент соединения; внутренний среди них — отказ (AddressRefused).
+
+    Имя разрешается здесь заново и ровно один раз на соединение: то, что проверено, и то, к чему идёт
+    соединение, — один и тот же список. Подмена ответа DNS между проверкой адреса в `check_address` и
+    соединением ничего не меняет: `check_address` даёт понятное сообщение заранее, а окно закрывает
+    эта проверка.
+    """
     try:
         ipaddress.ip_address(host)
         addresses = [host]
@@ -168,10 +182,69 @@ def check_address(url: str) -> None:
         if host.lower() == "localhost" or host.lower().endswith((".localhost", ".local", ".internal")):
             raise AddressRefused(f"адрес {host} локальный: загрузка внутренних адресов запрещена") from None
         addresses = resolve_host(host)
+    if not addresses:
+        raise AddressRefused(f"имя {host} не дало ни одного адреса")
     for addr in addresses:
         reason = forbidden_ip(addr)
         if reason:
             raise AddressRefused(f"адрес {host} ведёт на {reason} адрес ({addr}): загрузка запрещена")
+    return addresses
+
+
+class PinnedBackend:
+    """Сетевой слой httpcore: соединение идёт на адрес, который прошёл проверку, а не на имя хоста.
+
+    Имя хоста остаётся в запросе (заголовок `Host`) и в TLS: `httpcore` начинает рукопожатие с именем
+    из адреса страницы, поэтому проверка сертификата и SNI те же, что без закрепления.
+    """
+
+    def __init__(self, inner) -> None:
+        self.inner = inner
+
+    def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
+        last: Exception | None = None
+        for addr in pinned_addresses(host):
+            try:
+                return self.inner.connect_tcp(
+                    addr, port, timeout=timeout, local_address=local_address, socket_options=socket_options
+                )
+            except Exception as exc:  # noqa: BLE001 - следующий проверенный адрес; последняя ошибка уйдёт наверх
+                last = exc
+        assert last is not None
+        raise last
+
+    def connect_unix_socket(self, path, timeout=None, socket_options=None):
+        raise AddressRefused("соединение через сокет файловой системы запрещено")
+
+    def sleep(self, seconds):
+        return self.inner.sleep(seconds)
+
+
+class PinningUnavailable(Exception):
+    """Закрепление проверенного адреса подключить нельзя: устройство httpx не то, на которое рассчитан код."""
+
+
+class PinnedTransport(httpx.HTTPTransport):
+    """Транспорт httpx с закреплением проверенного адреса (`PinnedBackend`).
+
+    Сетевой слой подменяется во внутреннем пуле соединений httpx (`_pool._network_backend`). Публичный путь
+    у `httpcore` есть (`ConnectionPool(network_backend=…)`), но `httpx.HTTPTransport` его не принимает: свой
+    транспорт пришлось бы строить на закрытых классах ответа httpx, и закрытого там было бы больше. Если
+    устройство пула изменилось, транспорт не создаётся (`PinningUnavailable`): без закрепления соединяться
+    нельзя. Версии httpx и httpcore закреплены в `uv.lock`.
+    """
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        pool = getattr(self, "_pool", None)
+        backend = getattr(pool, "_network_backend", None)
+        if backend is None:
+            raise PinningUnavailable(
+                "закрепление проверенного адреса не подключено: устройство библиотеки httpx изменилось. "
+                "Загрузка остановлена, чтобы не соединяться без проверки адреса; обновите программу "
+                "(`uv sync --frozen`) или сохраните страницу вручную в inputs/"
+            )
+        pool._network_backend = PinnedBackend(backend)
 
 
 # ---------------------------------------------------------------------------
@@ -206,7 +279,10 @@ class Fetcher:
     ) -> None:
         self.cache_file = cache_file
         self.client = client or httpx.Client(
-            timeout=httpx.Timeout(TIMEOUT_S), follow_redirects=False, trust_env=False
+            transport=PinnedTransport(),
+            timeout=httpx.Timeout(TIMEOUT_S),
+            follow_redirects=False,
+            trust_env=False,
         )
         self.sleep = sleep
         self.clock = clock
@@ -222,7 +298,10 @@ class Fetcher:
 
     def _save(self, data: dict) -> None:
         self.cache_file.parent.mkdir(parents=True, exist_ok=True)
-        self.cache_file.write_text(json.dumps(data, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+        text = json.dumps(data, ensure_ascii=False, indent=1) + "\n"
+        # атомарно: соседний процесс не увидит обрывка; кэш необязателен, занятый файл загрузку не ломает
+        with contextlib.suppress(storage.FileBusy):
+            storage.atomic_write_bytes(self.cache_file, text.encode("utf-8"), 2.0)
 
     def _throttle(self, host: str) -> None:
         data = self._load()
@@ -301,7 +380,10 @@ class Fetcher:
                 check_address(url)
                 resp = self._request(url, ROBOTS_MAX_BYTES, truncate=True)
                 if resp.status_code in _REDIRECTS and resp.headers.get("location"):
-                    url = normalize_url(urljoin(url, resp.headers["location"]))
+                    target = normalize_url(urljoin(url, resp.headers["location"]))
+                    if url.startswith("https:") and target.startswith("http:"):
+                        break  # robots.txt по https не читается по http: правил нет, он считается недоступным
+                    url = target
                     continue
                 if 300 <= resp.status_code < 400:
                     break  # перенаправление без адреса: правил нет, robots.txt считается недоступным
@@ -495,12 +577,263 @@ def clean_html(html: str) -> str:
     return lxml_html.tostring(doc, encoding="unicode")
 
 
+_ATTR_TEXT = ("alt", "title", "aria-label", "aria-description", "placeholder")
+
+
 def hidden_text(html: str) -> str:
-    """Текст скрытых элементов. В снимок он не идёт, по нему только ищут обращения к ИИ."""
+    """Текст, которого нет в снимке: скрытые элементы, комментарии HTML, `alt`, `title`, `aria-label`.
+
+    В снимок он не идёт, по нему только ищут обращения к ИИ.
+    """
     doc = _parse(html)
     if doc is None:
         return ""
-    return "\n".join(n.text_content() for n in doc.xpath(_HIDDEN_XPATH) if _is_hidden(n))
+    parts = [n.text_content() for n in doc.xpath(_HIDDEN_XPATH) if _is_hidden(n)]
+    parts += [c.text for c in doc.xpath("//comment()") if c.text]
+    for el in doc.iter():
+        if not isinstance(el.tag, str):
+            continue
+        parts += [el.attrib[name] for name in _ATTR_TEXT if el.attrib.get(name)]
+        if (
+            el.tag == "input"
+            and el.attrib.get("type", "").strip().lower() == "hidden"
+            and el.attrib.get("value")
+        ):
+            parts.append(el.attrib["value"])
+    return "\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Авторы отзывов и комментариев (ADR-0011): метка вместо имени и ника до извлечения текста
+# ---------------------------------------------------------------------------
+
+AUTHOR_LABEL = "[автор отзыва]"
+MENTION_LABEL = "[ник]"
+MAX_AUTHOR_CHARS = 200  # длиннее — это не имя, а целый блок: его не заменяем
+
+# Признаки автора — разметка, а не угадывание по тексту. Список в одном месте; на каждую строку есть тест.
+# Блок отзыва или комментария: тип schema.org (последняя часть адреса `itemtype`) или слово в `class` и `id`.
+REVIEW_ITEMTYPES = frozenset({"review", "comment", "usercomments", "userreview", "questionanswer"})
+# Слова класса и `id`, по которым блок считается блоком отзывов: слово целиком (`comments`, `review-item`),
+# а не подстрока (`preview`, `commentary`). Вето на блок есть у трёх видов слов, остальное остаётся блоком:
+# лишняя метка в снимке дешевле имени комментатора, которое ушло бы модели.
+# - Слово-состояние или виджет (`STATE_WORDS`) и год в том же классе: `comments-enabled`, `has-comments`,
+#   `comments-count`, `review-2026` — состояние страницы, а не список отзывов.
+# - `open` и `closed` (`CONTEXT_STATE_WORDS`) — состояние, только если это обёртка страницы (`body`, внутри
+#   статья или заголовок): `<body class="comments-open">`. А `reviews-open` с отзывами внутри — блок.
+# - Существительное статьи ПОСЛЕ слова блока (`review-article`, `review-guide`): обзор, а не отзывы. Перед
+#   словом блока (`post-comments`) и другие слова (`reviews-page`, `comments-news`) блоку не мешают.
+REVIEW_BLOCK_WORDS = frozenset(
+    "comment comments review reviews feedback feedbacks testimonial testimonials otzyv otzyvy otzovik "
+    "kommentarii "
+    "отзыв отзывы комментарий комментарии коммент комменты".split()
+)
+STATE_WORDS = frozenset(
+    "enabled disabled count counter number form link toggle button btn title header heading label icon "
+    "allowed no has can off show hide".split()
+)
+CONTEXT_STATE_WORDS = frozenset("open closed".split())
+ARTICLE_WORDS_AFTER = frozenset("article articles guide story stories".split())
+# Классы, которые называют автора отзыва или комментария: значимы где угодно. Сравниваются без «-» и «_»,
+# без учёта регистра: `comment-author`, `comment__author`, `commentAuthor` — один признак.
+AUTHOR_CLASSES = frozenset(
+    {
+        "commentauthor",
+        "commentername",
+        "commenter",
+        "commentuser",
+        "commentusername",
+        "commentnickname",
+        "commentname",
+        "reviewauthor",
+        "reviewer",
+        "reviewername",
+        "reviewuser",
+        "reviewusername",
+        "reviewnickname",
+        "reviewname",
+    }
+)
+# Общие классы автора: значимы только внутри блока отзыва или комментария (вне его это автор статьи).
+AUTHOR_CLASSES_IN_BLOCK = frozenset(
+    {
+        "author",
+        "authorname",
+        "user",
+        "username",
+        "nickname",
+        "nick",
+        "displayname",
+        "profilename",
+        "fn",
+        "pauthor",
+        "hcard",
+        "vcard",
+    }
+)
+# Ещё признаки автора внутри блока отзыва: тег `<cite>`, `rel="author"`, микроформат `u-url p-name`
+AUTHOR_TAGS_IN_BLOCK = frozenset({"cite"})
+# Атрибуты, в которых разметка называет автора: само имя заменяется в тексте блока.
+AUTHOR_ATTRS = (
+    "data-author",
+    "data-author-name",
+    "data-username",
+    "data-user-name",
+    "data-nickname",
+    "data-reviewer",
+    "data-commenter",
+    "data-user",
+)
+_MENTION = re.compile(r"(?<![\w.@])@\w[\w.]{1,31}")
+
+
+def _class_keys(el) -> list[str]:
+    return [t.replace("-", "").replace("_", "").lower() for t in el.attrib.get("class", "").split()]
+
+
+def _is_review_itemtype(el) -> bool:
+    kinds = {t.rstrip("/").rsplit("/", 1)[-1].lower() for t in el.attrib.get("itemtype", "").split()}
+    return bool(kinds & REVIEW_ITEMTYPES)
+
+
+_CAMEL = re.compile(r"(?<=[a-z])(?=[A-Z])")
+_WORD_SPLIT = re.compile(r"[^0-9A-Za-zА-Яа-яЁё]+")
+
+
+def _words(value: str) -> list[str]:
+    """Слова имени класса или `id`: по «-», «_», пробелу и границе регистра (`commentAuthor`)."""
+    return [w for w in _WORD_SPLIT.split(_CAMEL.sub(" ", value).lower()) if w]
+
+
+def _is_year(word: str) -> bool:
+    return word.isdigit() and len(word) == 4 and 1990 <= int(word) <= 2099
+
+
+def _page_wrapper(el) -> bool:
+    """Обёртка страницы, а не списка отзывов: `html`, `body` или внутри статья, `main`, `h1`."""
+    if el.tag in ("html", "body"):
+        return True
+    return any(el.find(f".//{tag}") is not None for tag in ("article", "main", "h1"))
+
+
+def _name_is_block(value: str, el=None) -> bool:
+    """Имя класса или `id` называет блок отзывов. `el` нужен для слов `open` и `closed`: без него это вето."""
+    words = _words(value)
+    first = next((i for i, w in enumerate(words) if w in REVIEW_BLOCK_WORDS), None)
+    if first is None:
+        return False
+    if any(w in STATE_WORDS or _is_year(w) for w in words):
+        return False
+    if any(w in ARTICLE_WORDS_AFTER for w in words[first + 1 :]):
+        return False
+    if any(w in CONTEXT_STATE_WORDS for w in words):
+        return el is not None and not _page_wrapper(el)
+    return True
+
+
+def _is_review_block(el) -> bool:
+    if _is_review_itemtype(el):
+        return True
+    names = el.attrib.get("class", "").split() + [el.attrib.get("id", "")]
+    return any(_name_is_block(n, el) for n in names if n)
+
+
+def _in_review_block(el) -> bool:
+    return any(_is_review_block(a) for a in el.iterancestors() if isinstance(a.tag, str))
+
+
+def _microdata_author_in_review(el) -> bool:
+    """`itemprop="author"` внутри Review и Comment; у Article и NewsArticle это автор статьи, он остаётся."""
+    for anc in el.iterancestors():
+        if isinstance(anc.tag, str) and "itemscope" in anc.attrib:
+            return _is_review_itemtype(anc)
+    return _in_review_block(el)  # разметка без itemscope: решает блок вокруг
+
+
+def _is_author_node(el) -> bool:
+    if not isinstance(el.tag, str):
+        return False
+    props = el.attrib.get("itemprop", "").lower().split()
+    if "author" in props or "reviewer" in props or "creator" in props:
+        return _microdata_author_in_review(el)
+    keys = set(_class_keys(el))
+    if keys & AUTHOR_CLASSES:
+        return True
+    marked = (
+        bool(keys & AUTHOR_CLASSES_IN_BLOCK)
+        or el.tag in AUTHOR_TAGS_IN_BLOCK
+        or "author" in el.attrib.get("rel", "").lower().split()
+        or {"uurl", "pname"} <= keys
+    )
+    return marked and _in_review_block(el)
+
+
+def _replace_name(el, name: str, label: str) -> int:
+    """Имя из атрибута разметки заменяется только в узле автора: там, где весь текст узла — это имя.
+
+    Слова с тем же написанием в тексте новости или отзыва не трогаются.
+    """
+    n = 0
+    wanted = " ".join(name.split()).casefold()
+    for node in list(el.iter()):
+        if not isinstance(node.tag, str) or node.tag in ("script", "style"):
+            continue
+        if " ".join(node.text_content().split()).casefold() == wanted:
+            for child in list(node):
+                node.remove(child)
+            node.text = label
+            n += 1
+    return n
+
+
+def mask_authors(html: str) -> tuple[str, str]:
+    """HTML с метками вместо авторов отзывов и комментариев и текст блоков отзывов (для предупреждения).
+
+    Замена идёт в дереве до извлечения текста, иначе разметка, по которой автор узнаётся, уже потеряна.
+    Меняются: узел `itemprop="author"` внутри Review и Comment, узлы с классами автора (`AUTHOR_CLASSES`,
+    а внутри блока отзыва и `AUTHOR_CLASSES_IN_BLOCK`), имя из атрибутов `data-author` и подобных,
+    упоминания `@ник` внутри блока отзыва. Автор статьи, имена в самом тексте и названия организаций
+    остаются. Имя в свободном тексте отзыва разметкой не находится.
+    """
+    doc = _parse(html)
+    if doc is None:
+        return html, ""
+    done: set = set()
+    for el in list(doc.iter()):
+        if not isinstance(el.tag, str) or any(a in done for a in el.iterancestors()):
+            continue
+        if _is_author_node(el):
+            if len(el.text_content().strip()) > MAX_AUTHOR_CHARS:
+                continue
+            for child in list(el):
+                el.remove(child)
+            el.text = AUTHOR_LABEL
+            if "content" in el.attrib:  # `<meta itemprop="author" content="…">`
+                el.attrib["content"] = AUTHOR_LABEL
+            done.add(el)
+            continue
+        if _is_review_block(el) or _in_review_block(el):  # `data-author` у статьи — автор статьи, не отзыва
+            for attr in AUTHOR_ATTRS:
+                name = el.attrib.get(attr, "").strip()
+                if len(name) >= 2 and not name.isdigit():
+                    _replace_name(el, name, AUTHOR_LABEL)
+                    el.attrib[attr] = AUTHOR_LABEL  # имя не остаётся и в разметке, которая уйдёт дальше
+    blocks = {el for el in doc.iter() if isinstance(el.tag, str) and _is_review_block(el)}
+    top = [el for el in blocks if not any(a in blocks for a in el.iterancestors())]
+    review_text: list[str] = []
+    for block in top:
+        for node in block.iter():
+            if not isinstance(node.tag, str):
+                continue
+            if node.text:
+                node.text = _MENTION.sub(MENTION_LABEL, node.text)
+            if node is not block and node.tail:
+                node.tail = _MENTION.sub(MENTION_LABEL, node.tail)
+        texts = block.xpath(".//text()[not(ancestor::script or ancestor::style)]")
+        review_text.append(" ".join(" ".join(texts).split()))
+    from lxml import html as lxml_html
+
+    return lxml_html.tostring(doc, encoding="unicode"), "\n".join(review_text)
 
 
 def page_title(html: str) -> str:
@@ -563,6 +896,7 @@ class Extraction:
     extractor: str  # «название версия», в метаданных снимка
     fallback: bool  # основной извлекатель потерял числа, взят видимый текст
     note: str = ""
+    review_text: str = ""  # текст блоков отзывов и комментариев (с метками): для предупреждения об именах
 
 
 def _lib_version(lib: str) -> str:
@@ -592,7 +926,7 @@ def extract_page(html: str) -> Extraction:
     выбрасывает; цены при этом теряются. Запасной путь берёт весь видимый текст без скриптов, стилей и
     навигации. Способ пишется в метаданные снимка (`extractor`).
     """
-    html = clean_html(html)
+    html, review_text = mask_authors(clean_html(html))
     main = extract_html(html)
     visible = visible_text(html)
     in_main, in_visible = _significant_numbers(main), _significant_numbers(visible)
@@ -607,8 +941,8 @@ def extract_page(html: str) -> Extraction:
             if lost_numbers
             else "основной текст пуст"
         )
-        return Extraction(visible, f"lxml-visible-text {metadata.version('lxml')}", True, why)
-    return Extraction(main, _lib_version("trafilatura"), False)
+        return Extraction(visible, f"lxml-visible-text {metadata.version('lxml')}", True, why, review_text)
+    return Extraction(main, _lib_version("trafilatura"), False, review_text=review_text)
 
 
 def extractor_name(kind: str) -> str:
