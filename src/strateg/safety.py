@@ -461,6 +461,45 @@ def find_names(text: str, limit: int = 50) -> list[tuple[str, int]]:
     return out
 
 
+NAME_LABEL = "[имя]"
+NAMES_CATEGORY = "имена"
+
+
+def _is_name(word: str, morph) -> bool:
+    return any(
+        p.score >= 0.3 and _NAME_GRAMMEMES & set(p.tag.grammemes)
+        for part in word.split("-")
+        for p in morph.parse(part)[:3]
+    )
+
+
+def mask_names(text: str) -> tuple[str, list[Replacement]]:
+    """Имена, фамилии и отчества расшифровки интервью заменяются на «[имя]»: каждое вхождение.
+
+    Критерий — тот же, что у `find_names`. Ложные имена («Вера», «Роза» как обычные слова) тоже заменяются:
+    в расшифровке чужого человека пропущенное имя дороже потерянного слова. Строки не склеиваются.
+    """
+    morph = _analyzer()
+    cache: dict[str, bool] = {}
+    out: list[str] = []
+    replacements: list[Replacement] = []
+    pos = 0
+    line = 1
+    for m in _NAME_WORD.finditer(text):
+        word = m.group()
+        if word not in cache:
+            cache[word] = _is_name(word, morph)
+        if not cache[word]:
+            continue
+        line += text.count("\n", pos, m.start())
+        out.append(text[pos : m.start()])
+        out.append(NAME_LABEL)
+        replacements.append(Replacement(NAME_LABEL, line))
+        pos = m.end()
+    out.append(text[pos:])
+    return "".join(out), replacements
+
+
 @dataclass
 class MaterialReport:
     """Итог проверки текста материала до модели."""

@@ -319,6 +319,51 @@
           "default": null,
           "description": "Источник, который этот снимок перепроверил: текст изменился, прежний снимок цел",
           "title": "Refreshes"
+        },
+        "consent": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Интервью: как и когда собеседник согласился на запись и разбор; без имени и контактов",
+          "title": "Consent"
+        },
+        "persona": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Синтетика: персона модельного респондента и откуда она взята",
+          "title": "Persona"
+        },
+        "respondent_call": {
+          "anyOf": [
+            {
+              "enum": [
+                "подтверждён",
+                "не подтверждён"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Синтетика: «подтверждён» — в журнале есть событие «роль выполнена» для respondent на этом шаге, ещё не истраченное прежней записью; «не подтверждён» — нет, сессия не независимая",
+          "title": "Respondent Call"
         }
       },
       "required": [

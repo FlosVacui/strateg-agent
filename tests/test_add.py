@@ -262,7 +262,9 @@ def test_broken_office_file_is_a_clear_error(demo, cli):
 
 def test_interview_kind_numbers_lines_for_the_locator(demo, cli):
     put(demo, "interview.txt", "Вопрос один\n\nОтвет: мы часто выключаем защиту\n")
-    code, _, err = cli("add", "interview.txt", "--kind", "интервью")
+    code, _, err = cli(
+        "add", "interview.txt", "--kind", "интервью", "--consent", "письменно в чате, 12.11.2026"
+    )
     assert code == 0, err
     s = sources(demo)[0]
     assert s["kind"] == "интервью"
@@ -394,8 +396,8 @@ def assert_no_secrets(text: str) -> None:
 
 
 def test_personal_data_never_reaches_inputs_sources_archive_or_output(demo, cli, private):
-    put(demo, "интервью.txt", NOTE_WITH_PII)
-    code, out, err = cli("add", "интервью.txt")
+    put(demo, "созвон.txt", NOTE_WITH_PII)
+    code, out, err = cli("add", "созвон.txt")
     assert code == 0, err
     assert_no_secrets(out + err)
     assert "[телефон]" in out and "[почта]" in out and "строка 2" in out
@@ -407,8 +409,8 @@ def test_personal_data_never_reaches_inputs_sources_archive_or_output(demo, cli,
     assert "199 рублей" in text
     # исходника нет ни в inputs/, ни в sources/, ни где-либо ещё, кроме .tmp/ (до подтверждения)
     pending = demo / ".tmp" / "pending" / "И-1"
-    assert (pending / "интервью.txt").read_text(encoding="utf-8") == NOTE_WITH_PII
-    assert not (demo / "inputs" / "интервью.txt").exists()
+    assert (pending / "созвон.txt").read_text(encoding="utf-8") == NOTE_WITH_PII
+    assert not (demo / "inputs" / "созвон.txt").exists()
     assert_no_secrets(everything(demo, skip_tmp=True))
     # до подтверждения человека материал в работу не идёт
     assert any("не подтвердил замены" in e for e in check_project(demo))
@@ -418,13 +420,13 @@ def test_personal_data_never_reaches_inputs_sources_archive_or_output(demo, cli,
 
 
 def test_confirm_moves_the_original_out_of_the_project(demo, cli, private):
-    put(demo, "интервью.txt", NOTE_WITH_PII)
-    assert cli("add", "интервью.txt")[0] == 0
+    put(demo, "созвон.txt", NOTE_WITH_PII)
+    assert cli("add", "созвон.txt")[0] == 0
     code, out, err = cli("add", "--confirm", "И-1")
     assert code == 0, err
     assert "замены подтверждены" in out and "~/.strateg/private/demo/И-1/" in out
     assert str(private) not in out and str(private.parent.parent) not in out  # личного пути в выводе нет
-    held = private / "demo" / "И-1" / "интервью.txt"
+    held = private / "demo" / "И-1" / "созвон.txt"
     assert held.read_text(encoding="utf-8") == NOTE_WITH_PII
     assert not (demo / ".tmp" / "pending" / "И-1").exists()
     assert_no_secrets(everything(demo))  # теперь и .tmp/ чист: исходник вне проекта
@@ -438,8 +440,8 @@ def test_confirm_moves_the_original_out_of_the_project(demo, cli, private):
 
 
 def test_quote_from_unconfirmed_material_is_refused_then_allowed(demo, cli):
-    put(demo, "интервью.txt", NOTE_WITH_PII)
-    assert cli("add", "интервью.txt")[0] == 0
+    put(demo, "созвон.txt", NOTE_WITH_PII)
+    assert cli("add", "созвон.txt")[0] == 0
     claim = {
         "text": "Семья считает подписку за 199 рублей в месяц дорогой",
         "type": "факт",

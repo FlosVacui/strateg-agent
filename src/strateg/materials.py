@@ -19,6 +19,7 @@ from __future__ import annotations
 import csv
 import datetime as dt
 import io
+import re
 import shutil
 import time
 from dataclasses import dataclass, field
@@ -227,6 +228,17 @@ def _pdf(body: bytes) -> str:
         ) from exc
 
 
+_BARE_MARK = re.compile(r"^\[(?:абз\. \d+|таблица \d+|колонтитул|стр\. \d+)\]$")
+
+
+def _number_lines(text: str) -> str:
+    """Расшифровка в DOCX и PDF: строки с метками `[строка N]`, как у текстовой; голые метки места убраны."""
+    lines = [
+        x for x in text.replace("\r\n", "\n").split("\n") if x.strip() and not _BARE_MARK.match(x.strip())
+    ]
+    return "\n".join(f"[строка {n}] {line}" for n, line in enumerate(lines, start=1))
+
+
 def extract_text(body: bytes, ext: str, kind: str) -> str:
     """Текст материала с метками места цитаты; ошибка по-русски, если файл не читается или текста нет."""
     try:
@@ -249,6 +261,8 @@ def extract_text(body: bytes, ext: str, kind: str) -> str:
             f"файл формата «{ext}» не читается ({type(exc).__name__}): он повреждён, защищён паролем или "
             "другого формата; сохраните его как текст, PDF, DOCX, XLSX или PPTX"
         ) from exc
+    if kind == "интервью" and ext in (".docx", ".pdf"):
+        text = _number_lines(text)
     if "\x00" in text[:4096]:
         raise CliError("файл двоичный, а не текстовый: дайте расшифровку или выгрузку текстом")
     if len(text) > MAX_TEXT_CHARS:
@@ -400,18 +414,69 @@ def _known_material(p: Project, rel: str, sha: str) -> Source | None:
     return next((s for s in p.sources.sources if s.material_sha256 == sha), None)
 
 
-def register(p: Project, file: Path, forced_kind: str | None) -> Outcome:
+CONSENT_TEMPLATE = "knowledge/templates/consent.md"
+MAX_CONSENT_CHARS = 300
+
+
+def check_consent(raw: str | None) -> str:
+    """Отметка согласия собеседника: как и когда оно получено, без его имени и контактов.
+
+    Без отметки расшифровка интервью в работу не идёт. Отметка хранится в реестре источников, поэтому
+    персональных данных в ней быть не должно: «письменно в чате, 12.11.2026», а не «Иван, +7…».
+    """
+    text = " ".join((raw or "").split())
+    if not text:
+        raise CliError(
+            "расшифровка интервью принимается только с отметкой согласия собеседника: добавьте "
+            "`--consent '<как получено, дата>'`, например «письменно в чате, 12.11.2026». "
+            f"Согласие получает человек до записи, образец — {CONSENT_TEMPLATE}"
+        )
+    if len(text) > MAX_CONSENT_CHARS:
+        raise CliError(
+            f"отметка согласия длиннее {MAX_CONSENT_CHARS} знаков: одна строка, как и когда получено"
+        )
+    if not re.search(r"\d", text):
+        raise CliError(
+            "в отметке согласия нет даты: напишите, как и когда оно получено, например «устно, 12.11.2026»"
+        )
+    if safety.mask_personal(text)[1] or safety.find_names(text):
+        raise CliError(
+            "в отметке согласия есть имя, телефон, почта или номер документа собеседника: "
+            "в реестре они не хранятся, напишите «собеседник 1» и как получено согласие"
+        )
+    return text
+
+
+_INTERVIEW_NAME = re.compile(r"интервью|interview|расшифровк|transcript|респондент", re.IGNORECASE)
+_INTERVIEW_LINE = re.compile(
+    r"^\s*(?:интервьюер|респондент|interviewer|respondent|вопрос|ответ)\s*\d*\s*[:—-]", re.I | re.M
+)
+
+
+def looks_like_interview(name: str, text: str) -> bool:
+    """По имени файла или репликам похоже на расшифровку интервью (подсказка, а не вывод)."""
+    return bool(_INTERVIEW_NAME.search(name) or len(_INTERVIEW_LINE.findall(text)) >= 3)
+
+
+def register(p: Project, file: Path, forced_kind: str | None, consent: str | None = None) -> Outcome:
     """Регистрирует материал из `inputs/`; повтор того же файла (sha256) отдаёт прежний источник.
 
     Файл читается и разбирается (DOCX, PDF, проверки текста) без блокировки папки проекта. Под блокировкой —
     сверка с реестром заново (параллельная команда могла записать тот же файл), номер `И-n`, текст материала,
     запись в реестр и события (ADR-0002, «Параллельные команды»).
+
+    Расшифровка интервью (`--kind интервью`) принимается только с отметкой согласия: она хранится у источника
+    (`consent`). В её тексте заменяются и имена людей, а не только телефоны и почта.
     """
     started = time.monotonic()
     rel = inputs_relpath(p, file)
     ext = file.suffix.lower()
     refuse_audio_video(ext)
     kind = pick_kind(ext, forced_kind)
+    if kind == "интервью":
+        consent = check_consent(consent)
+    elif consent is not None:
+        raise UsageError("--consent относится к расшифровке интервью: добавьте `--kind интервью`")
     name_hit = bool(safety.mask_personal(file.name)[1])
     if name_hit and kind == "изображение":
         raise CliError(
@@ -439,7 +504,23 @@ def register(p: Project, file: Path, forced_kind: str | None) -> Outcome:
     text: str | None = None
     if kind != "изображение":
         report = safety.inspect_material(extract_text(body, ext, kind))
+        if (
+            kind == "интервью"
+        ):  # в расшифровке главное персональное данное — имя: заменяется, а не только называется
+            masked, named = safety.mask_names(report.text)
+            if named:
+                report.text = masked
+                report.replacements = [*report.replacements, *named]
+                report.anonymized = [*report.anonymized, safety.NAMES_CATEGORY]
+            report.names = []
         text = report.text
+        if forced_kind is None and kind != "интервью" and looks_like_interview(file.name, text):
+            raise CliError(
+                "похоже на расшифровку интервью, а вид не назван: расшифровку принимают только с согласием "
+                "собеседника, имена в ней заменяются. Интервью — `strateg add <файл> --kind интервью "
+                "--consent '<как получено, дата>'`; не интервью — тот же вызов с "
+                '`--kind "заметка пользователя"` (или другим видом файла)'
+            )
     pii = bool(report and report.replacements) or name_hit
 
     outcome: Outcome | None = None
@@ -459,6 +540,8 @@ def register(p: Project, file: Path, forced_kind: str | None) -> Outcome:
             "untrusted": kind != "заметка пользователя",
             "material_sha256": sha,
         }
+        if kind == "интервью":
+            data["consent"] = consent
         if report is not None and text_rel is not None and text is not None:
             data.update(
                 text_path=text_rel,

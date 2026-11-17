@@ -50,6 +50,7 @@ from strateg.models import (
     quote_in_snapshot,
     show,
 )
+from strateg.quote import ANSWER_LINE, LINE_KINDS, lines_with_quote, numbered_lines
 from strateg.safety import found_what
 
 STATE_FILE = "state.yaml"
@@ -451,6 +452,29 @@ def _snapshot_text(root: Path, src: Source, cache: dict[str, str | None]) -> str
     return cache[src.id]
 
 
+def _line_problem(kind: str, locator: str, quote: str, text: str) -> str | None:
+    """Место цитаты из расшифровки не указывает строку, в которой цитата стоит; None — всё верно.
+
+    Проверка идёт только у снимков с метками `[строка N]`: прежние расшифровки без меток остаются как были.
+    """
+    if not numbered_lines(text):
+        return None
+    hits = lines_with_quote(quote, text)
+    if kind == "синтетика":
+        answers = [h for h in hits if ANSWER_LINE.match(h[1])]
+        if hits and not answers:
+            return "цитата стоит не в ответе респондента, а в вопросе или в описании персоны"
+        hits = answers
+    found = [n for n, _ in hits]
+    m = re.search(r"\d+", locator)
+    if m is None:
+        return f"место «{locator}» не указывает строку: нужно «строка N»"
+    if int(m.group()) not in found:
+        where = ", ".join(map(str, found)) or "нет"
+        return f"место «{locator}» не совпадает с цитатой: она стоит в строках {where}"
+    return None
+
+
 def _check_claims(root: Path, sources: SourcesFile, claims: ClaimsFile, errors: list[str]) -> None:
     snapshots: dict[str, str | None] = {}
     by_src = {s.id: s for s in sources.sources}
@@ -521,12 +545,18 @@ def _check_claims(root: Path, sources: SourcesFile, claims: ClaimsFile, errors: 
                         f"{where}: цитата не найдена в снимке {src.id} ({src.text_path}) способом "
                         f"«{q.check.method}»; запись проверки текстом снимка не подтверждается"
                     )
+                elif text is not None and src.kind in LINE_KINDS and q.locator is not None:
+                    problem = _line_problem(src.kind, q.locator, q.text, text)
+                    if problem:
+                        err(f"{where}: {problem}")
 
+        synthetic_sources = sorted({s.id for s in quote_sources if s.kind == "синтетика"})
         if c.type == "факт":
-            checked = [by_src[q.source] for q in c.quotes if q.check is not None and q.source in by_src]
-            if checked and all(s.kind == "синтетика" for s in checked):
+            if synthetic_sources:
                 err(
-                    "факт из синтетики: цитата только из источника вида «синтетика», фактом она не становится"
+                    "факт из синтетики: цитата из источника вида «синтетика» "
+                    f"({', '.join(synthetic_sources)}), "
+                    "фактом она не становится"
                 )
             for src in {s.id: s for s in quote_sources if s.fetch and s.fetch.region}.values():
                 if norm(c.region or "") != norm(src.fetch.region or ""):
@@ -534,6 +564,18 @@ def _check_claims(root: Path, sources: SourcesFile, claims: ClaimsFile, errors: 
                         f"у источника {src.id} регион «{src.fetch.region}», а у факта "
                         f"«{c.region or 'не указан'}»: регионы должны совпадать"
                     )
+        if c.type not in ("факт", "синтетика") and synthetic_sources:
+            err(
+                f"утверждение типа «{c.type}» цитирует источник вида «синтетика» "
+                f"({', '.join(synthetic_sources)}): "
+                "на нём стоят только утверждения типа «синтетика», гипотеза ссылается на них через basis"
+            )
+        if c.type == "синтетика" and any(s.kind != "синтетика" for s in quote_sources):
+            err("утверждение типа «синтетика» цитирует источник другого вида: нужен источник «синтетика»")
+        if c.type in ("факт", "прогноз"):
+            for ref in c.basis:
+                if ref in by_id and by_id[ref].type == "синтетика":
+                    err(f"поле basis: {ref} — синтетика: {_SYNTHETIC_PROOF}")
         if any(s.suspicious for s in quote_sources) and not c.suspicious:
             err("источник помечен «подозрительный», а утверждение нет (suspicious)")
 
@@ -749,6 +791,11 @@ class _Claims:
             )
         if live_for:
             self.supported(where, field, ref, live_for)
+
+    def not_synthetic(self, where: str, field: str, ref: str) -> None:
+        """Ошибка, если ссылка из текстового поля ведёт на синтетику: довод она не даёт."""
+        if self.by_id is not None and ref in self.by_id and self.by_id[ref].type == "синтетика":
+            self.errors.append(f"{where}, поле {field}: {ref} — синтетика: {_SYNTHETIC_PROOF}")
 
     def supported(self, where: str, field: str, ref: str, what: str) -> None:
         """Ошибка, если у действующего утверждения вердикт «не подтверждает» (ADR-0007)."""
@@ -1008,6 +1055,7 @@ def _check_options(opts: OptionsFile, cl: _Claims, errors: list[str]) -> None:
         cl.ref(where, "claims", ref, live_for="рекомендацию", synthetic_note=_SYNTHETIC_PROOF)
     for letter, number in dict.fromkeys(_TEXT_REF.findall(rec.why)):
         if letter == "У":
+            cl.not_synthetic(where, "why", f"У-{number}")
             cl.supported(where, "why", f"У-{number}", "довод рекомендации")
     known = [cl.type_of(ref) for ref in rec.claims]
     if None not in known and "факт" not in known:

@@ -249,14 +249,22 @@ def test_suspicious_source_and_claim_are_marked(corpus, cli):
 
 
 def test_synthetic_claim_is_named_synthetic(started, cli, tmp_path):
+    session = tmp_path / "s.md"
+    session.write_bytes(
+        "Вопрос 1: Что платите?\nОтвет 1: СИНТЕТИКА: Вымышленный клиент платит сто рублей в месяц.\n".encode()
+    )
+    persona = "Клиент, 30 лет, альтернатива: ручной учёт; ограничения: деньги; из рамки"
+    assert cli("synth", "add", "--persona", persona, "--file", str(session))[0] == 0
     synthetic = {
         "text": "Вымышленный клиент платит 100 рублей",
         "type": "синтетика",
         "subject": "тестовый клиент",
+        "quotes": [{"source": "И-2", "text": "Вымышленный клиент платит сто рублей в месяц"}],
     }
     assert cli("claim", "add", "--file", write_claims(tmp_path, synthetic))[0] == 0
     data = ask(cli, "вымышленный клиент")
-    assert data["results"][0]["origin"] == "синтетика" and data["results"][0]["type"] == "синтетика"
+    first = next(r for r in data["results"] if r["id"] == "У-1")
+    assert first["origin"] == "синтетика" and first["type"] == "синтетика"
     assert "[синтетика, действует]" in cli("search", "вымышленный клиент")[1]
 
 
