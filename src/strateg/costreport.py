@@ -8,7 +8,8 @@
 В отчёте разбора: сколько записей транскриптов пропущено (битые строки, сообщения без учётных полей) — по
 служебному файлу смещений `.tmp/cost/offsets.json`, и какие модели без цены. Повышения модели — из событий
 «выбор модели» с именем «повышение», у каждого — итог повтора: у критика — следующая запись проверки полноты,
-у классификатора — вердикты, вынесенные повышенной моделью. Попытки проверки полноты — с моделью критика.
+у классификатора — сколько пар «не уверен» повторено повышенной моделью и с каким вердиктом. Попытки
+проверки полноты — с моделью критика.
 
 Веб-поиск показан отдельной строкой в итоге и у каждой роли: число вызовов и оценка денег (плата за поиск и
 запрос к модели поиска, `config/prices.yaml`); эти деньги уже входят в сумму роли.
@@ -22,7 +23,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any
 
-from strateg import accounting, budget
+from strateg import accounting, budget, classify
 from strateg import project as proj
 from strateg.commands import _open, emit
 from strateg.models import CostRecord
@@ -163,15 +164,17 @@ def upgrade_outcome(p: Project, i: int) -> str:
                 m = RESULT.match(later.message or "")
                 return f"повтор проверки полноты: {m.group(1) if m else 'итог не разобран'}"
         return "повтора ещё нет"
-    if e.role == "classifier":
+    if e.role == classify.ROLE:
+        unsure = classify.unsure_before(p.journal[:i])
         counts: dict[str, int] = defaultdict(int)
-        for c in p.claims.claims:
-            v = c.verdict
+        by_id = {c.id: c for c in p.claims.claims}
+        for cid in unsure:
+            v = by_id[cid].verdict if cid in by_id else None
             if v is not None and v.upgraded and v.model == e.model:
                 counts[v.verdict] += 1
-        if not counts:
-            return "повтора ещё нет"
-        return "вердикты после повышения: " + ", ".join(f"{k} {n}" for k, n in sorted(counts.items()))
+        done = sum(counts.values())
+        head = f"повторено {done} из {len(unsure)} «не уверен»"
+        return head + (": " + ", ".join(f"{k} {n}" for k, n in sorted(counts.items())) if counts else "")
     return "итог повтора CLI не отслеживает"
 
 

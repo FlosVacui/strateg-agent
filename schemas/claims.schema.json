@@ -298,9 +298,26 @@
         },
         "upgraded": {
           "default": false,
-          "description": "Вынесен после повышения модели роли на этом шаге",
+          "description": "Повтор после повышения: пара была «не уверен» до повышения модели роли на этом шаге",
           "title": "Upgraded",
           "type": "boolean"
+        },
+        "classifier_call": {
+          "anyOf": [
+            {
+              "enum": [
+                "подтверждён",
+                "не подтверждён"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Только при by: классификатор. «подтверждён» — в журнале есть событие «роль выполнена» для classifier на этом шаге после прошлой записи вердикта; «не подтверждён» — нет",
+          "title": "Classifier Call"
         },
         "at": {
           "format": "date-time",

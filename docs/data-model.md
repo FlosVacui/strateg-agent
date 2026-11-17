@@ -10,7 +10,7 @@
 | `cost.jsonl` | JSONL, только добавление; «по сообщению» пишут и хуки, без повторов `message_id`; `web_search_usd` — веб-поиск в `cost_usd` | CLI и хук | `cost-record.schema.json` (строка) |
 | `.tmp/cost/offsets.json`, `.tmp/search.sqlite` | JSON смещений разбора; индекс поиска SQLite, пересобирается; не в архиве | хук; `search` | — |
 | `sources.yaml` | YAML; `other_urls`, `rechecked_at`, `refreshes` | только CLI | `sources.schema.json` |
-| `claims.yaml` | YAML; `verdict` | скиллы через CLI | `claims.schema.json` |
+| `claims.yaml` | YAML | скиллы через CLI | `claims.schema.json` |
 | `sources/` | снимки i-<n>, хеш sha256; без записи — ошибка | CLI | — |
 | `inputs/` | материалы человека (при ПДн — обезличенная копия) и их текст | человек кладёт, текст пишет CLI | — |
 | `frame.yaml` | YAML: десять полей `{value, origin[, source]}`; те же в событии В1 (`gate.frame`) | только CLI | `frame.schema.json` |
@@ -24,7 +24,7 @@
 | `completeness.yaml` | YAML: итог полноты: `by` (`критик` или `агент`), часть А, ответы части Б, `result`, `failed`, `critic_call` (вызов критика подтверждён) | только CLI (`rubric record`) | `completeness.schema.json` |
 | `history/` | прежние версии: `history/frame.v1.yaml`, `history/outputs/options.v2.md`, `history/release-1/` (выпуск) | CLI (`write`, `rubric record`, `step done 7`) | — |
 
-Файлы выводов необязательны, `completeness.yaml` — с шага 6. Документы — Markdown в `outputs/`.
+Семь файлов выводов необязательны, `completeness.yaml` появляется на шаге 6. Документы — Markdown в `outputs/`, поля для проверок — в YAML.
 
 ## Общие правила
 - Ключи английские, snake_case; значения закрытых списков русские. В каждом файле и записи JSONL есть `schema_version` (сейчас 1). Неизвестные поля и повтор ключа YAML — ошибка. Несовместимое изменение поднимает `schema_version` и попадает в `CHANGELOG.md`.
@@ -45,7 +45,7 @@
 - Ссылки ведут на существующие номера. `plan_question` вида `ВП-n` сверяется с `plan.yaml`, `baseline` вида `П-n` — с `gaps.yaml`; похожее на номер (латиница, строчные, нуль впереди) — ошибка с подсказкой.
 - Типы: прогноз у ячейки сравнения, факт у обещания, гипотеза у показателя, пре-мортема и `gaps[].hypothesis`, допущение у `gaps[].assumption`, допущение или гипотеза у `decisions[].assumptions`, факт или прогноз у `metric_coverage[].claims`, факт или слово «гипотеза» у `objections[].basis`.
 - У рекомендации есть факт с цитатой не «о себе» (`self_reported: false`). Номера `П-n`, `У-n`, `Вар-n` в тексте файлов выхода ведут на реестры.
-- Синтетики нет в показателе, пре-мортеме, `recommendation.claims` (там же хоть один факт), `metric_coverage[].claims`, `closed_by`, `decisions.basis`, `objections[].basis`. Отозванное или заменённое нельзя только в рекомендации и обещании; «не подтверждает» — и в решении, `why`.
+- Синтетики нет в показателе, пре-мортеме, `recommendation.claims` (там же хоть один факт), `metric_coverage[].claims`, `closed_by`, `decisions.basis`, `objections[].basis`. Отозванное или заменённое нельзя только в рекомендации и обещании.
 - Причина пре-мортема ведёт в строку «защитный»; условие решения с `row` — в существующую строку с тем же порогом; порог строки с `from_change_mind` равен порогу записи `recommendation.change_mind`.
 - `history/`: имена `<файл>.v<N>.<расширение>`; в `release-<n>/` только файлы выхода и `outputs/*.md`; версии рамки 1…N−1, нехватка — одно сообщение, выше N−1 — ошибка; прежняя версия — рамка с тем же номером.
 - `completeness.yaml`: номера частей А и Б есть в рубрике, на все вопросы части Б есть ответ, `failed` — номера «нет», `result` равен выводу по `pass_rule`.

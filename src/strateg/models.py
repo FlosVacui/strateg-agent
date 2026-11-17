@@ -330,6 +330,7 @@ CheckMethod = Literal["точное вхождение", "без пробело�
 # Вердикт классификатора о паре «утверждение — цитата» (ADR-0007): подтверждает ли цитата смысл.
 VerdictValue = Literal["подтверждает", "частично", "не подтверждает", "не уверен"]
 VerdictBy = Literal["классификатор", "агент"]
+VerdictCall = Literal["подтверждён", "не подтверждён"]  # след вызова роли в журнале
 
 EventKind = Literal[
     "действие",
@@ -637,8 +638,24 @@ class ClaimVerdict(_Model):
     reason: Text = Field(description="Одна строка причины")
     by: VerdictBy = Field(description="«классификатор» — роль со свежим контекстом, «агент» — запасной путь")
     model: Text = Field(description="Модель, которая вынесла вердикт")
-    upgraded: Flag = Field(False, description="Вынесен после повышения модели роли на этом шаге")
+    upgraded: Flag = Field(
+        False,
+        description="Повтор после повышения: пара была «не уверен» до повышения модели роли на этом шаге",
+    )
+    classifier_call: VerdictCall | None = Field(
+        None,
+        description=(
+            "Только при by: классификатор. «подтверждён» — в журнале есть событие «роль выполнена» для "
+            "classifier на этом шаге после прошлой записи вердикта; «не подтверждён» — нет"
+        ),
+    )
     at: Time
+
+    @model_validator(mode="after")
+    def _rules(self) -> Self:
+        if self.classifier_call is not None and self.by != "классификатор":
+            _raise(["classifier_call бывает только у вердикта by: классификатор"])
+        return self
 
 
 class Claim(_Model):

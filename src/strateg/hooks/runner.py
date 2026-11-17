@@ -78,6 +78,8 @@ def run_pre_tool_use(
         return HookResult()
     try:
         event = parse_event(raw)
+        if rules.passes_unchecked(event):
+            return HookResult()  # MCP, `Skill` … основного агента: как без хука, без новой задержки и отказов
         ctx = ctx or effects.make_ctx(event, env)
         if services is None:
             services = effects.LiveServices(ctx).as_services()

@@ -13,6 +13,12 @@
 
 Классификатор (`classifier`): закрыт любой инструмент — пары «утверждение — цитата» он получает в задании.
 
+Хук вызывается только для инструментов из `matcher` двух записей `PreToolUse` в `.claude/settings.json`.
+Первая — файлы, оболочка, субагенты, веб и Playwright: их права разбирает этот модуль. Вторая — остальные MCP,
+`Skill`, `SendMessage`, ресурсы MCP и `CronCreate`: основной агент и чужая среда проходят их без решения и без
+записи (`passes_unchecked`), исследователь и критик получают отказ, классификатор — отказ. Инструменты вне
+обеих записей (например, `ToolSearch`, `TodoWrite`) хук не видит: у классификатора их закрывает `tools: []`.
+
 Всем ролям закрыты: `WebFetch`; `.env`, `~/.strateg/`, `.tmp/pending/`, `evals/`; правка `AGENTS.md`,
 `CLAUDE.md`, `.claude/` (охрану правил снимает `STRATEG_DEV=1`).
 
@@ -36,6 +42,7 @@ READ_TOOLS = frozenset({"Read", "Grep", "Glob"})
 WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
 SHELL_TOOLS = frozenset({"Bash", "PowerShell", "Monitor"})
 AGENT_TOOLS = frozenset({"Agent", "Task"})
+WEB_TOOLS = frozenset({"WebSearch", "WebFetch"})
 BUILTIN_AGENTS = ("general-purpose", "Explore", "Plan", "claude", "statusline-setup", "claude-code-guide")
 MODEL_ALIASES = frozenset({"sonnet", "opus", "haiku", "fable"})  # модель вызова субагента — только псевдоним
 PLAYWRIGHT_ALLOWED = frozenset({"browser_navigate", "browser_take_screenshot"})
@@ -189,6 +196,24 @@ def role_kind(event: Mapping[str, Any]) -> str:
     if event.get("agent_id"):
         return OTHER
     return MAIN
+
+
+def known_tool(tool: str) -> bool:
+    """Инструмент первой записи `PreToolUse`: права на него разбирает `decide_pre_tool_use` для всех ролей."""
+    return (
+        tool in READ_TOOLS | WRITE_TOOLS | SHELL_TOOLS | AGENT_TOOLS | WEB_TOOLS
+        or playwright_tool(tool) is not None
+    )
+
+
+def passes_unchecked(event: Mapping[str, Any]) -> bool:
+    """Остальной инструмент (MCP, `Skill`, `SendMessage` …) у основного агента или в чужой среде.
+
+    Такой вызов проходит как без хука: ни решения, ни бюджета, ни записи в журнал. Роли проекта — нет.
+    """
+    if known_tool(str(event.get("tool_name") or "")):
+        return False
+    return not is_claude_code(event) or role_kind(event) in (MAIN, OTHER)
 
 
 def playwright_tool(name: str) -> str | None:

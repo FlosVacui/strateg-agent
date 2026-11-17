@@ -2696,6 +2696,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         )
     from strateg import classify  # импорт здесь: classify импортирует этот модуль
 
+    d["claims"]["verdicts"] = classify.full_summary(p)  # с основаниями без вердикта: только полный status
     lines += [f"Внимание: {x}" for x in classify.summary_lines(d["claims"]["verdicts"])]
     if d["waiting_gates"]:
         lines.insert(
