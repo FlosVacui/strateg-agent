@@ -174,6 +174,9 @@ gaps:
 ### Документ `outputs/situation.md`
 Номера пиши русскими буквами: `У-12`, `П-3`, `ВП-2`. Числа бери из утверждений, новых сведений в документ не добавляй.
 
+### Смысл цитат: классификатор
+До В3: `uv run strateg route classifier --reason 'смысл цитат'`, `uv run strateg claim pairs --json`. Задание классификатору — поле `task` целиком. Ответ — Write в `projects/<id>/.tmp/classifier.txt`, затем `uv run strateg claim verdict --file <этот файл> --ids <ids> --by классификатор --model <модель из route>`. «Не подтверждает» — до В3 `claim replace` или `claim revoke`. «Не уверен» — `uv run strateg route classifier --upgrade --reason 'не уверен: У-n, …'` и повтор только этих пар: `uv run strateg claim pairs --json --ids У-n,…`. Роли нет — сам по `knowledge/roles/classifier.md`, `--by агент`.
+
 ### Ворота В3
 - Пилот: `gate open В3 --questions <N>`, жди, `gate answer В3 --answer '…'`.
 - Автопилот: `uv run strateg gate open В3 --questions 0`, пришли картину сообщением со ссылкой на `outputs/situation.md`, иди дальше. Пробелы, которые могут изменить выбор, уйдут на В4.

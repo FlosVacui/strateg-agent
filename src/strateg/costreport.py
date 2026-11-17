@@ -7,7 +7,9 @@
 
 В отчёте разбора: сколько записей транскриптов пропущено (битые строки, сообщения без учётных полей) — по
 служебному файлу смещений `.tmp/cost/offsets.json`, и какие модели без цены. Повышения модели — из событий
-«выбор модели» с именем «повышение».
+«выбор модели» с именем «повышение», у каждого — итог повтора: у критика — следующая запись проверки полноты,
+у классификатора — сколько пар «не уверен» повторено повышенной моделью и с каким вердиктом. Попытки
+проверки полноты — с моделью критика.
 
 Веб-поиск показан отдельной строкой в итоге и у каждой роли: число вызовов и оценка денег (плата за поиск и
 запрос к модели поиска, `config/prices.yaml`); эти деньги уже входят в сумму роли.
@@ -16,16 +18,20 @@
 from __future__ import annotations
 
 import argparse
+import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any
 
-from strateg import accounting, budget
+from strateg import accounting, budget, classify
 from strateg import project as proj
 from strateg.commands import _open, emit
 from strateg.models import CostRecord
 from strateg.project import Project
 from strateg.routing import UPGRADE_EVENT
+from strateg.rubric import CRITIC_ROLE, RECORD_ACTION
+
+RESULT = re.compile(r"^Проверка полноты: (пройдено|не пройдено);")
 
 NO_STEP = "не указан"
 WEB_SEARCH_NOTE = "оценка"  # веб-поиск считается по таблице цен и среднему запросу, а не по данным среды
@@ -121,6 +127,57 @@ def breakdown_records(records: list[CostRecord]) -> list[CostRecord]:
     return out
 
 
+def _critic_model(events: list[Any], step: str) -> str | None:
+    model = None
+    for e in events:
+        if e.kind == "выбор модели" and e.role == CRITIC_ROLE and e.step == step:
+            model = e.model
+    return model
+
+
+def completeness_runs(p: Project) -> list[dict[str, Any]]:
+    """Записи проверки полноты из журнала: итог, кто проверял и модель критика на тот момент."""
+    out = []
+    for i, e in enumerate(p.journal):
+        if e.kind != "действие" or e.name != RECORD_ACTION or e.status != "выполнено":
+            continue
+        m = RESULT.match(e.message or "")
+        by_critic = "проверял: критик" in (e.message or "")
+        out.append(
+            {
+                "time": e.time.isoformat(),
+                "step": e.step,
+                "result": m.group(1) if m else None,
+                "by": "критик" if by_critic else "агент",
+                "model": _critic_model(p.journal[:i], e.step) if by_critic else None,
+            }
+        )
+    return out
+
+
+def upgrade_outcome(p: Project, i: int) -> str:
+    """Итог повтора после повышения: у критика — следующая проверка полноты, у классификатора — вердикты."""
+    e = p.journal[i]
+    if e.role == CRITIC_ROLE:
+        for later in p.journal[i + 1 :]:
+            if later.kind == "действие" and later.name == RECORD_ACTION and later.status == "выполнено":
+                m = RESULT.match(later.message or "")
+                return f"повтор проверки полноты: {m.group(1) if m else 'итог не разобран'}"
+        return "повтора ещё нет"
+    if e.role == classify.ROLE:
+        unsure = classify.unsure_before(p.journal[:i])
+        counts: dict[str, int] = defaultdict(int)
+        by_id = {c.id: c for c in p.claims.claims}
+        for cid in unsure:
+            v = by_id[cid].verdict if cid in by_id else None
+            if v is not None and v.upgraded and v.model == e.model:
+                counts[v.verdict] += 1
+        done = sum(counts.values())
+        head = f"повторено {done} из {len(unsure)} «не уверен»"
+        return head + (": " + ", ".join(f"{k} {n}" for k, n in sorted(counts.items())) if counts else "")
+    return "итог повтора CLI не отслеживает"
+
+
 def report_data(p: Project) -> dict[str, Any]:
     """Данные отчёта; считаются без записи в проект."""
     total, precision, complete = proj.cost_total(p.costs)
@@ -132,8 +189,15 @@ def report_data(p: Project) -> dict[str, Any]:
         if r.cost_usd is None and r.entry == "по сообщению":
             unpriced[r.model] += 1
     upgrades = [
-        {"time": e.time.isoformat(), "step": e.step, "role": e.role, "model": e.model, "reason": e.message}
-        for e in p.journal
+        {
+            "time": e.time.isoformat(),
+            "step": e.step,
+            "role": e.role,
+            "model": e.model,
+            "reason": e.message,
+            "outcome": upgrade_outcome(p, i),
+        }
+        for i, e in enumerate(p.journal)
         if e.kind == "выбор модели" and e.name == UPGRADE_EVENT
     ]
     fee = DEFAULT_SEARCH_FEE
@@ -170,6 +234,7 @@ def report_data(p: Project) -> dict[str, Any]:
         "skipped_records": accounting.skipped_total(p.root),
         "unpriced_models": [{"model": m, "calls": n} for m, n in sorted(unpriced.items())],
         "model_upgrades": upgrades,
+        "completeness_runs": completeness_runs(p),
     }
 
 
@@ -257,7 +322,15 @@ def report_lines(d: dict[str, Any]) -> list[str]:
     if d["model_upgrades"]:
         lines.append("Повышения модели:")
         for u in d["model_upgrades"]:
-            lines.append(f"  шаг {u['step']}: {u['role']} -> {u['model']}; {u['reason'] or 'без причины'}")
+            lines.append(
+                f"  шаг {u['step']}: {u['role']} -> {u['model']}; {u['reason'] or 'без причины'}; "
+                f"итог: {u['outcome']}"
+            )
+    if d["completeness_runs"]:
+        lines.append("Проверки полноты:")
+        for r in d["completeness_runs"]:
+            who = f"критик, модель {r['model'] or 'не названа'}" if r["by"] == "критик" else "агент"
+            lines.append(f"  шаг {r['step']}: {r['result'] or 'итог не разобран'}; {who}")
     return lines
 
 

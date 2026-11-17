@@ -32,6 +32,7 @@ from strateg.models import (
 )
 from strateg.project import CliError, Project, UsageError
 from strateg.project_check import COMPLETENESS_FILE, _format_errors
+from strateg.routing import UPGRADE_EVENT
 from strateg.rubric_checks import CHECKS, STEP_INDEX, Ctx, Result, knowledge_dir
 
 RUBRIC_FILE = "completeness.yaml"
@@ -279,6 +280,25 @@ def critic_call(p: Project) -> str:
     return "подтверждён" if confirmed else "не подтверждён"
 
 
+def role_model(p: Project, role: str = CRITIC_ROLE) -> str | None:
+    """Модель роли на текущем шаге: последний выбор `strateg route` (обычный или повышение)."""
+    for e in reversed(p.journal):
+        if e.kind == "выбор модели" and e.role == role and e.step == p.state.step:
+            return e.model
+    return None
+
+
+def upgraded_since_record(p: Project) -> bool:
+    """После прошлой записи проверки полноты модель критика повышена на этом шаге: это новая попытка."""
+    since = False
+    for e in p.journal:
+        if e.kind == "действие" and e.name == RECORD_ACTION and e.status == "выполнено":
+            since = False
+        elif e.kind == "выбор модели" and e.role == CRITIC_ROLE and e.name == UPGRADE_EVENT:
+            since = since or e.step == p.state.step
+    return since
+
+
 def _unconfirmed_line(step: str) -> str:
     return (
         f"Вызов критика не подтверждён: в журнале нет события «{ROLE_DONE}» для критика на шаге {step} "
@@ -364,8 +384,9 @@ def cmd_rubric_record(args: argparse.Namespace) -> int:
                 old = None
         call = critic_call(p) if by == "критик" else None
         upgraded = call == "подтверждён" and old is not None and old.critic_call != "подтверждён"
+        retry = by == "критик" and upgraded_since_record(p)  # повтор на повышенной модели пишется всегда
         if (
-            old is not None and _same(old, new) and not upgraded
+            old is not None and _same(old, new) and not upgraded and not retry
         ):  # новый вызов критика — запись не «без изменений»
             same = new.model_copy(update={"critic_call": old.critic_call})
             return _emit_record(
@@ -380,6 +401,7 @@ def cmd_rubric_record(args: argparse.Namespace) -> int:
         text = proj.dump_yaml(new)
         history = _history_path(p) if old_bytes is not None else None
         runs = sum(1 for e in p.journal if e.kind == "действие" and e.name == "strateg rubric record")
+        model = role_model(p) if by == "критик" else None  # повтор после повышения виден в журнале с моделью
         if history is not None and old_bytes is not None:
             dest = p.root / history
             dest.parent.mkdir(parents=True, exist_ok=True)
@@ -394,6 +416,7 @@ def cmd_rubric_record(args: argparse.Namespace) -> int:
                 duration_s=round(time.monotonic() - started, 2),
                 message=(
                     f"Проверка полноты: {new.result}; нет: {', '.join(new.failed) or '—'}; проверял: {by}"
+                    + (f", модель {model}" if model else "")
                     + ("; вызов критика не подтверждён" if new.critic_call == "не подтверждён" else "")
                 ),
             )

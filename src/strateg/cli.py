@@ -19,7 +19,7 @@ import tempfile
 from pathlib import Path
 from typing import NoReturn
 
-from strateg import __version__, commands, costreport, followup, routing, rubric, search
+from strateg import __version__, classify, commands, costreport, followup, routing, rubric, search
 from strateg.hooks import flags as hookflags
 
 OK, WARN, ERR = "OK", "WARN", "ERR"
@@ -310,6 +310,33 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--step", help="только утверждения этого шага: 1, 2а, 2б, 3 … 8")
     p.add_argument("--plan-question", help="только утверждения этого вопроса плана, например ВП-2")
     p.add_argument("--status", choices=["действует", "заменено", "отозвано"])
+    p = claim_sub.add_parser(
+        "pairs",
+        parents=[common],
+        help="пары «утверждение — цитата» и задание классификатору; ничего не пишет",
+    )
+    p.set_defaults(func=commands.run, handler=classify.cmd_claim_pairs)
+    p.add_argument("--ids", help="только эти утверждения: У-1,У-2 (по умолчанию — ещё без вердикта)")
+    p.add_argument("--all", action="store_true", help="все действующие с цитатой, и с вердиктом тоже")
+    p = claim_sub.add_parser(
+        "verdict",
+        parents=[common],
+        help="записать вердикт о цитате: один (--verdict) или весь ответ классификатора (--file и --ids)",
+    )
+    p.set_defaults(func=commands.run, handler=classify.cmd_claim_verdict)
+    p.add_argument("id", nargs="?", help="утверждение, например У-3; с --file не нужно")
+    p.add_argument("--verdict", choices=list(classify.VERDICTS), help="подтверждает ли цитата утверждение")
+    p.add_argument("--type-ok", choices=["да", "нет"], help="верен ли тип утверждения")
+    p.add_argument("--reason", help="одна строка причины")
+    p.add_argument("--file", help="ответ классификатора целиком; «-» — стандартный ввод")
+    p.add_argument("--ids", help="с --file: номера пар из задания, У-1,У-2; пара без строки — «не уверен»")
+    p.add_argument(
+        "--by",
+        choices=list(classify.BY_VALUES),
+        help="кто вынес вердикт, обязательно: «классификатор» — роль со свежим контекстом, «агент» — "
+        "запасной путь, проверка не независимая",
+    )
+    p.add_argument("--model", help="модель, которая вынесла вердикт (из `strateg route classifier`)")
 
     p = add("write", commands.cmd_write, "записать файлы выхода (рамка, план, пробелы, варианты …)")
     p.add_argument(

@@ -937,3 +937,59 @@ def test_cli_state_files_match_project_check():
         pc.METRICS_FILE,
     }
     assert set(rules.CLI_STATE_FILES) == expected
+
+
+# --- классификатор: закрыт любой инструмент -----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "tool, tin",
+    [
+        ("Read", {"file_path": "knowledge/roles/classifier.md"}),
+        ("Read", {"file_path": "projects/demo/sources/i-1.txt"}),
+        ("Grep", {"pattern": "x", "path": "knowledge"}),
+        ("Glob", {"pattern": "*.yaml"}),
+        ("Write", {"file_path": "projects/demo/outputs/x.md", "content": "x"}),
+        ("Bash", {"command": "uv run strateg claim verdict У-1 --verdict подтверждает"}),
+        ("WebSearch", {"query": "x"}),
+        ("WebFetch", {"url": "https://example.com"}),
+        ("Agent", {"subagent_type": "researcher", "prompt": "найди"}),
+        ("mcp__playwright__browser_navigate", {"url": "https://example.com"}),
+        ("TodoWrite", {"todos": []}),
+        ("", {}),
+    ],
+)
+def test_classifier_may_use_no_tool(tool, tin):
+    d = refused(decide(tool, tin, "classifier"), "Классификатору закрыт любой инструмент")
+    e = [x for x in d.events if x.kind == "отказ хука"][0]
+    assert e.role == "classifier"
+
+
+def test_classifier_is_a_role_of_its_own_and_the_main_agent_may_launch_it():
+    assert rules.role_kind({"agent_type": "classifier", "agent_id": "a"}) == "classifier"
+    wrappers = WRAPPERS | {"classifier"}
+    d = allowed(launch("classifier", wrappers=wrappers))
+    assert d.updated_input["model"] == "haiku"
+
+
+OTHER = (
+    "mcp__terminal__run_in_terminal",
+    "mcp__github__create_issue",
+    "Skill",
+    "SendMessage",
+    "ReadMcpResourceTool",
+)
+
+
+@pytest.mark.parametrize("tool", OTHER)
+def test_other_tools_pass_the_main_agent_unchecked_and_are_closed_to_the_roles(tool):
+    assert rules.passes_unchecked(event(tool)) and rules.passes_unchecked(event(tool, agent="other-role"))
+    assert rules.passes_unchecked({"tool_name": tool, "conversation_id": "c-1"})  # чужая среда — как без хука
+    for role in ("classifier", "researcher", "critic"):
+        assert not rules.passes_unchecked(event(tool, agent=role)), role
+        refused(decide(tool, {"command": "dir"}, role))
+
+
+@pytest.mark.parametrize("tool", ["Read", "Bash", "Agent", "WebFetch", "mcp__playwright__browser_navigate"])
+def test_tools_of_the_first_matcher_always_get_a_decision(tool):
+    assert rules.known_tool(tool) and not rules.passes_unchecked(event(tool))

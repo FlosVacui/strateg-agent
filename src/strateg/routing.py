@@ -2,7 +2,8 @@
 
 `strateg route <роль>` называет модель роли и пишет выбор в журнал; `--upgrade` — повышение по условию
 из таблицы (не больше `times` раз на роль и шаг, счёт по событиям журнала). Условие повышения критика
-CLI проверяет сам: в `completeness.yaml` итог «не пройдено». Повышение действует до конца шага:
+CLI проверяет сам: в `completeness.yaml` итог «не пройдено»; у классификатора — в `claims.yaml` есть вердикт
+«не уверен», вынесенный до повышения. Повышение действует до конца шага:
 следующий `strateg route <роль>` на этом шаге возвращает повышенную модель. `strateg route --profile`
 переключает профиль проекта («экономнее», «глубже», «обычный»). Таблица — единственный источник выбора
 модели для ролей; субагентам и хукам она советует, а не навязывает.
@@ -18,6 +19,7 @@ from typing import Annotated, Any, Literal, Self
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, Strict, ValidationError, model_validator
 
+from strateg import classify
 from strateg import project as proj
 from strateg.budget import config_dir
 from strateg.commands import _open, emit
@@ -159,20 +161,31 @@ def completeness_failed(p: Project) -> bool:
     return isinstance(raw, dict) and raw.get("result") == "не пройдено"
 
 
+def classifier_unsure(p: Project) -> bool:
+    """Есть действующее утверждение с вердиктом «не уверен», вынесенным до повышения."""
+    return bool(classify.unsure_before_upgrade(p))
+
+
 @dataclass(frozen=True)
 class Guard:
     """Условие повышения, которое CLI проверяет сам."""
 
     holds: Callable[[Project], bool]
     refusal: str
+    hint: str
 
 
-# У остальных ролей условие CLI проверить не может («не уверен» виден только классификатору):
-# оно на совести вызывающего и пишется в журнал текстом.
+# У остальных ролей условие CLI проверить не может: оно на совести вызывающего и пишется в журнал текстом.
 UPGRADE_GUARDS: dict[str, Guard] = {
     "critic": Guard(
         completeness_failed,
         f"в {COMPLETENESS_FILE} нет итога «не пройдено» (файла нет или проверка пройдена)",
+        "сначала запишите проверку полноты: `strateg rubric record`",
+    ),
+    classify.ROLE: Guard(
+        classifier_unsure,
+        "в claims.yaml нет утверждений с вердиктом «не уверен», вынесенным до повышения",
+        "сначала запишите вердикты классификатора: `strateg claim verdict`",
     ),
 }
 
@@ -272,7 +285,7 @@ def _pick(args: argparse.Namespace, role: str) -> int:
             if guard is not None and not guard.holds(p):
                 raise CliError(
                     f"повышение роли «{role}» не по условию «{rule.when}»: {guard.refusal}",
-                    ["сначала запишите проверку полноты: `strateg rubric record`"],
+                    [guard.hint],
                 )
             if rule.to == base.level:
                 raise CliError(f"роль «{role}» уже на уровне «{rule.to}»: повышать некуда")

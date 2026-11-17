@@ -11,6 +11,14 @@
 
 Критик (`critic`): чтение в папке проекта и `knowledge/`; остальное закрыто.
 
+Классификатор (`classifier`): закрыт любой инструмент — пары «утверждение — цитата» он получает в задании.
+
+Хук вызывается только для инструментов из `matcher` двух записей `PreToolUse` в `.claude/settings.json`.
+Первая — файлы, оболочка, субагенты, веб и Playwright: их права разбирает этот модуль. Вторая — остальные MCP,
+`Skill`, `SendMessage`, ресурсы MCP и `CronCreate`: основной агент и чужая среда проходят их без решения и без
+записи (`passes_unchecked`), исследователь и критик получают отказ, классификатор — отказ. Инструменты вне
+обеих записей (например, `ToolSearch`, `TodoWrite`) хук не видит: у классификатора их закрывает `tools: []`.
+
 Всем ролям закрыты: `WebFetch`; `.env`, `~/.strateg/`, `.tmp/pending/`, `evals/`; правка `AGENTS.md`,
 `CLAUDE.md`, `.claude/` (охрану правил снимает `STRATEG_DEV=1`).
 
@@ -27,13 +35,14 @@ from typing import Any
 
 from strateg.hooks import flags, paths, shell
 
-RESEARCHER, CRITIC = "researcher", "critic"
+RESEARCHER, CRITIC, CLASSIFIER = "researcher", "critic", "classifier"
 MAIN, OTHER = "main", "other"
 
 READ_TOOLS = frozenset({"Read", "Grep", "Glob"})
 WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
 SHELL_TOOLS = frozenset({"Bash", "PowerShell", "Monitor"})
 AGENT_TOOLS = frozenset({"Agent", "Task"})
+WEB_TOOLS = frozenset({"WebSearch", "WebFetch"})
 BUILTIN_AGENTS = ("general-purpose", "Explore", "Plan", "claude", "statusline-setup", "claude-code-guide")
 MODEL_ALIASES = frozenset({"sonnet", "opus", "haiku", "fable"})  # модель вызова субагента — только псевдоним
 PLAYWRIGHT_ALLOWED = frozenset({"browser_navigate", "browser_take_screenshot"})
@@ -180,13 +189,31 @@ def is_claude_code(event: Mapping[str, Any]) -> bool:
 
 
 def role_kind(event: Mapping[str, Any]) -> str:
-    """`main` (нет `agent_type`), `researcher`, `critic` или `other` (другая роль: права основного агента)."""
+    """`main` (нет `agent_type`), `researcher`, `critic`, `classifier` или `other` (права основного)."""
     at = event.get("agent_type")
     if isinstance(at, str) and at.strip():
-        return at if at in (RESEARCHER, CRITIC) else OTHER
+        return at if at in (RESEARCHER, CRITIC, CLASSIFIER) else OTHER
     if event.get("agent_id"):
         return OTHER
     return MAIN
+
+
+def known_tool(tool: str) -> bool:
+    """Инструмент первой записи `PreToolUse`: права на него разбирает `decide_pre_tool_use` для всех ролей."""
+    return (
+        tool in READ_TOOLS | WRITE_TOOLS | SHELL_TOOLS | AGENT_TOOLS | WEB_TOOLS
+        or playwright_tool(tool) is not None
+    )
+
+
+def passes_unchecked(event: Mapping[str, Any]) -> bool:
+    """Остальной инструмент (MCP, `Skill`, `SendMessage` …) у основного агента или в чужой среде.
+
+    Такой вызов проходит как без хука: ни решения, ни бюджета, ни записи в журнал. Роли проекта — нет.
+    """
+    if known_tool(str(event.get("tool_name") or "")):
+        return False
+    return not is_claude_code(event) or role_kind(event) in (MAIN, OTHER)
 
 
 def playwright_tool(name: str) -> str | None:
@@ -763,6 +790,13 @@ def decide_pre_tool_use(event: Mapping[str, Any], ctx: Ctx, services: Services) 
     kind = role_kind(event)
     cwd = event.get("cwd") if isinstance(event.get("cwd"), str) and event.get("cwd") else ctx.penv.cwd
 
+    if kind == CLASSIFIER:
+        return _deny(
+            f"Классификатору закрыт любой инструмент ({tool or 'без имени'}): пары «утверждение — цитата» "
+            "уже в задании, ответ — текст в сообщении.",
+            tool,
+            event,
+        )
     if tool == "WebFetch":
         return _deny(
             "WebFetch закрыт всем ролям: он отдаёт пересказ мимо снимка. "

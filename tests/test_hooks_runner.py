@@ -207,15 +207,24 @@ def test_builtin_subagent_refused_with_journal_event_and_role_list(demo):
 def test_real_roles_have_wrapper_and_routing_key():
     live = effects.LiveServices(rules.Ctx(penv=effects.make_ctx({}, env()).penv, env=env()))
     wrappers = live.agents()
-    assert {"researcher", "critic"} <= wrappers
+    assert {"researcher", "critic", "classifier"} <= wrappers
     routing = live.routing()
     assert {"researcher", "critic", "classifier", "respondent"} <= set(routing.roles)
-    assert "classifier" not in wrappers  # роль без обёртки: запуск отказом, не падением
+    assert "respondent" not in wrappers  # роль без обёртки: запуск отказом, не падением
 
 
 def test_role_without_wrapper_is_refused_not_crash(demo):
-    body = pre("Agent", {"subagent_type": "classifier", "prompt": "проверь цитату"})
+    body = pre("Agent", {"subagent_type": "respondent", "prompt": "побеседуй"})
     assert body["permissionDecision"] == "deny" and "нет обёртки" in body["permissionDecisionReason"]
+
+
+def test_classifier_launch_gets_the_cheap_model_and_its_tools_are_closed(demo):
+    body = pre("Agent", {"subagent_type": "classifier", "prompt": "## Пары"})
+    assert body["permissionDecision"] == "allow" and body["updatedInput"]["model"] == "haiku"
+    for tool, tin in (("Read", {"file_path": "README.md"}), ("Bash", {"command": "ls"}), ("Glob", {})):
+        body = pre(tool, tin, agent="classifier")
+        assert body["permissionDecision"] == "deny" and "Классификатору" in body["permissionDecisionReason"]
+    assert kinds(demo)[-1] == "отказ хука"
 
 
 def test_routing_table_missing_is_refusal_with_reason(demo, tmp_path, monkeypatch):

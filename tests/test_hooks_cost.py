@@ -869,3 +869,17 @@ def test_inside_the_window_a_budget_that_was_enough_is_not_read_again(small, tx,
     wall[0] += 5
     assert pre_tx(main, "Bash", {"command": "ls"}) is None
     assert loads  # окно вышло: пересчёт и чтение проекта
+
+
+@pytest.mark.parametrize(
+    "tool", ["mcp__terminal__run_in_terminal", "Skill", "SendMessage", "ReadMcpResourceTool"]
+)
+def test_other_tools_of_the_main_agent_pass_as_without_the_hook_even_when_exhausted(small, tx, tool):
+    """Вторая запись `PreToolUse`: основному агенту ни отказа, ни бюджета, ни записи; классификатору отказ."""
+    main, _ = tx
+    spend(main, 100_000)
+    before = kinds(small)
+    assert pre_tx(main, tool, {"command": "dir"}) is None
+    assert kinds(small) == before and costs(small) == []  # расход не дочитывался: хук ничего не делал
+    body = pre_tx(main, tool, {"command": "dir"}, "classifier")
+    assert body["permissionDecision"] == "deny" and "Классификатору" in body["permissionDecisionReason"]

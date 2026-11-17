@@ -65,6 +65,27 @@
             "onFailure": "block"
           }
         ]
+      },
+      {
+        "matcher": "^mcp__(?!.*(playwright|__browser_))|^(Skill|SendMessage|ListMcpResourcesTool|ReadMcpResourceTool|CronCreate)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv",
+            "args": [
+              "run",
+              "--frozen",
+              "--project",
+              "${CLAUDE_PROJECT_DIR}",
+              "python",
+              "-X",
+              "utf8",
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/pre_tool_use.py"
+            ],
+            "timeout": 15,
+            "onFailure": "continue"
+          }
+        ]
       }
     ],
     "Stop": [

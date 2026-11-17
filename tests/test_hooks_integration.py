@@ -127,6 +127,19 @@ def test_allowed_call_prints_nothing(product):
     assert proc.returncode == 0 and proc.stdout == b"" and proc.stderr == b""
 
 
+@pytest.mark.parametrize("tool", ["mcp__terminal__run_in_terminal", "Skill", "SendMessage"])
+def test_other_tools_pass_the_main_agent_and_are_closed_to_the_classifier(product, tool):
+    """Вторая запись `PreToolUse`: основной агент проходит молча и без записи, классификатор — отказ."""
+    proc = run_hook(product, "pre_tool_use.py", pre_event(tool, {"command": "dir"}, cwd=str(product)))
+    assert proc.returncode == 0 and proc.stdout == b"" and proc.stderr == b""
+    classifier = pre_event(tool, {"command": "dir"}, cwd=str(product), agent_type="classifier", agent_id="c")
+    out = body(run_hook(product, "pre_tool_use.py", classifier))
+    assert (
+        out["permissionDecision"] == "deny"
+        and "Классификатору закрыт любой инструмент" in out["permissionDecisionReason"]
+    )
+
+
 def test_hooks_off_prints_nothing_even_when_package_is_missing(product):
     event = pre_event("WebFetch", {"url": "https://x.com"})
     proc = run_hook(product, "pre_tool_use.py", event, STRATEG_HOOKS="0")
@@ -320,14 +333,16 @@ def test_settings_commands_are_exec_form_with_utf8_and_existing_scripts():
         ("PostToolUseFailure", "post_tool_use_failure.py"),
         ("UserPromptSubmit", "user_prompt_submit.py"),
     ):
-        (hook,) = hook_entries(event)
-        assert (
-            hook["type"] == "command" and hook["command"] == "uv"
-        )  # без оболочки: пути с пробелами и кириллицей
-        args = hook["args"]
-        assert args[:2] == ["run", "--frozen"] and "-X" in args and args[args.index("-X") + 1] == "utf8"
-        assert "${CLAUDE_PROJECT_DIR}" in args[args.index("--project") + 1]
-        assert args[-1] == "${CLAUDE_PROJECT_DIR}/.claude/hooks/" + script
+        hooks = hook_entries(event)
+        assert len(hooks) == (2 if event == "PreToolUse" else 1), event  # у прав — две записи, один скрипт
+        for hook in hooks:
+            assert (
+                hook["type"] == "command" and hook["command"] == "uv"
+            )  # без оболочки: пути с пробелами и кириллицей
+            args = hook["args"]
+            assert args[:2] == ["run", "--frozen"] and "-X" in args and args[args.index("-X") + 1] == "utf8"
+            assert "${CLAUDE_PROJECT_DIR}" in args[args.index("--project") + 1]
+            assert args[-1] == "${CLAUDE_PROJECT_DIR}/.claude/hooks/" + script
         assert (HOOKS / script).is_file()
     assert SETTINGS["env"]["PYTHONUTF8"] == "1"
 
@@ -345,7 +360,13 @@ def test_hook_timeouts_are_short_so_that_a_hang_does_not_hold_the_session():
 
 
 def test_permission_hook_blocks_on_failure_others_do_not():
-    assert hook_entries("PreToolUse")[0]["onFailure"] == "block"
+    groups = SETTINGS["hooks"]["PreToolUse"]
+    # права на чтение, запись, Bash, Agent и сеть: упавший хук закрывает вызов
+    assert all(h["onFailure"] == "block" for h in groups[0]["hooks"])
+    # остальные MCP и Skill: основной агент их проходит без хука, поэтому упавший хук его не закрывает;
+    # у классификатора эти инструменты держит ещё и `tools: []` в обёртке
+    assert groups[1]["matcher"].startswith("^mcp__")
+    assert all(h["onFailure"] == "continue" for h in groups[1]["hooks"])
     for event in ("SessionStart", "Stop", "SubagentStop", "PostToolUseFailure", "UserPromptSubmit"):
         assert hook_entries(event)[0]["onFailure"] == "continue", event
 
@@ -369,6 +390,44 @@ def test_pre_tool_use_matcher_covers_tools(tool):
 )
 def test_pre_tool_use_matcher_does_not_run_on_unrelated_tools(tool):
     assert not re.search(SETTINGS["hooks"]["PreToolUse"][0]["matcher"], tool), tool
+
+
+OTHER_TOOLS = (
+    "mcp__terminal__run_in_terminal",
+    "mcp__github__create_issue",
+    "mcp__rea__read_bytes",
+    "mcp__memory__search",
+    "Skill",
+    "SendMessage",
+    "ListMcpResourcesTool",
+    "ReadMcpResourceTool",
+    "CronCreate",
+)
+
+
+@pytest.mark.parametrize("tool", OTHER_TOOLS)
+def test_second_matcher_covers_the_other_tools_the_classifier_could_reach(tool):
+    assert re.search(SETTINGS["hooks"]["PreToolUse"][1]["matcher"], tool), tool
+    assert not rules.known_tool(tool)
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [
+        "Read", "Bash", "Agent", "Task", "WebSearch", "WebFetch", "mcp__playwright__browser_navigate",
+        "mcp__plugin_playwright_playwright__browser_click", *OTHER_TOOLS,
+        "TodoWrite", "ToolSearch", "TaskCreate",
+    ],
+)  # fmt: skip
+def test_the_two_matchers_never_both_run_the_hook(tool):
+    first, second = (g["matcher"] for g in SETTINGS["hooks"]["PreToolUse"])
+    assert not (re.search(first, tool) and re.search(second, tool)), tool
+
+
+@pytest.mark.parametrize("tool", ["TodoWrite", "ToolSearch", "TaskCreate"])
+def test_tools_outside_both_matchers_do_not_run_the_hook(tool):
+    """Их хук не видит: у классификатора их закрывает `tools: []` обёртки (README, ADR-0007)."""
+    assert not any(re.search(g["matcher"], tool) for g in SETTINGS["hooks"]["PreToolUse"]), tool
 
 
 def test_matcher_covers_every_tool_the_rules_know():
@@ -411,7 +470,7 @@ def test_wrappers_are_thin():
 @pytest.mark.skipif(shutil.which("uv") is None, reason="нужен uv")
 def test_settings_command_really_runs_and_denies_webfetch():
     """Команда из settings.json с подставленным `${CLAUDE_PROJECT_DIR}` рабочая, а не только похожа на неё."""
-    (hook,) = hook_entries("PreToolUse")
+    hook = hook_entries("PreToolUse")[0]
     argv = [hook["command"], *(a.replace("${CLAUDE_PROJECT_DIR}", str(ROOT)) for a in hook["args"])]
     proc = subprocess.run(
         argv,
