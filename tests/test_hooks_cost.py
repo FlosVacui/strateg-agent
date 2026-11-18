@@ -883,3 +883,20 @@ def test_other_tools_of_the_main_agent_pass_as_without_the_hook_even_when_exhaus
     assert kinds(small) == before and costs(small) == []  # расход не дочитывался: хук ничего не делал
     body = pre_tx(main, tool, {"command": "dir"}, "classifier")
     assert body["permissionDecision"] == "deny" and "Классификатору" in body["permissionDecisionReason"]
+
+
+def test_a_refusal_by_budget_is_written_again_in_a_copy(small, tx, cli, home, tmp_path, clock):
+    """Копия считает отказы от своего начала: отказ источника с тем же началом текста её не гасит."""
+    main, _ = tx
+    spend(main, 100_000)
+    pre_tx(main, "WebSearch", {"query": "x"}, "researcher")
+    assert len([e for e in journal_of(small) if e["kind"] == "бюджет" and e["actor"] == "хук"]) == 1
+    clock.advance(60)
+    assert cli("new", "cp", "--from", "demo")[0] == 0
+    clock.advance(60)
+    later = tmp_path / "claude2" / "later.jsonl"
+    write(later, assistant("n1", SONNET, out=1_000_000))  # больше лимита копии ($8): расход копии
+    pre_tx(later, "WebSearch", {"query": "x"}, "researcher", session_id="sess-2")
+    events = [e for e in journal_of(home / "cp") if e["kind"] == "бюджет" and e["actor"] == "хук"]
+    assert len(events) == 2  # отказ источника и отказ копии
+    assert_clean(home / "cp")

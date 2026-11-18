@@ -7,6 +7,8 @@
 
 - `message.id` — ключ против удвоения: сообщение с несколькими блоками (мысль, текст, вызов инструмента)
   записывается несколькими строками с одним id и одним `usage`;
+- `timestamp` строки — когда сообщение записано: по нему учёт копии проекта не берёт сообщения, написанные
+  до копирования (`strateg.accounting`);
 - `message.model` — id модели, как в таблице цен;
 - `message.usage` — токены ввода и вывода, чтения кэша, записи кэша (`cache_creation_input_tokens` — сумма,
   `cache_creation.ephemeral_5m_input_tokens` и `ephemeral_1h_input_tokens` — разбивка), число веб-поисков
@@ -25,6 +27,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import hashlib
 import json
 from collections.abc import Mapping
@@ -52,6 +55,7 @@ class Usage:
     search_calls: frozenset[str] = frozenset()  # id блоков `tool_use` с именем `WebSearch` в этом сообщении
     geo: str | None = None  # `inference_geo`: "us" — ответ из США (цены ×1,1)
     speed: str | None = None  # "fast" — быстрый режим
+    time: dt.datetime | None = None  # `timestamp` строки (с поясом); нет или не разобрать — None
 
     def merged(self, other: Usage) -> Usage:
         """Повтор того же сообщения: числа не убывают, берётся большее (вывод растёт по ходу ответа)."""
@@ -67,6 +71,7 @@ class Usage:
             search_calls=self.search_calls | other.search_calls,
             geo=other.geo or self.geo,
             speed=other.speed or self.speed,
+            time=min((t for t in (self.time, other.time) if t is not None), default=None),
         )
 
 
@@ -154,6 +159,18 @@ def usage_of(message: Mapping[str, Any]) -> Usage | None:
     )
 
 
+def time_of(record: Mapping[str, Any]) -> dt.datetime | None:
+    """Время строки транскрипта (`timestamp`, ISO 8601); без пояса считается UTC. Не разобрать — None."""
+    value = record.get("timestamp")
+    if not isinstance(value, str):
+        return None
+    try:
+        moment = dt.datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return moment if moment.tzinfo is not None else moment.replace(tzinfo=dt.UTC)
+
+
 def parse(data: bytes) -> Parsed:
     """Разбирает байты транскрипта (целые строки). Не бросает исключений на любых входных данных."""
     out = Parsed()
@@ -188,6 +205,7 @@ def parse(data: bytes) -> Parsed:
         )
         if mine != found.search_calls:
             found = replace(found, search_calls=mine)
+        found = replace(found, time=time_of(record))
         before = out.messages.get(found.message_id)
         out.messages[found.message_id] = found if before is None else before.merged(found)
     return out

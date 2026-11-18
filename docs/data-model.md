@@ -6,7 +6,7 @@
 | Файл | Формат | Кто пишет | Схема |
 |---|---|---|---|
 | `state.yaml` | YAML; `profile` — профиль выбора моделей (`route --profile`) | только CLI | `state.schema.json` |
-| `journal.jsonl` | JSONL, только добавление; у «выбор модели» — `role`, `model`, `level`, `effort`; хук (`actor: хук`, с `message`) пишет «отказ хука», «граница прав не активна», «задание исследователю», «роль выполнена» (`role` — `agent_type`), «ответ человека», «учёт недоступен», «бюджет» | CLI и хук | `journal-event.schema.json` (строка) |
+| `journal.jsonl` | JSONL, только добавление; «копия проекта» (`new --from`): время — с неё; у «выбор модели» — `role`, `model`, `level`, `effort`; хук (`actor: хук`, с `message`) пишет «отказ хука», «граница прав не активна», «задание исследователю», «роль выполнена» (`role` — `agent_type`), «ответ человека», «учёт недоступен», «бюджет» | CLI и хук | `journal-event.schema.json` (строка) |
 | `cost.jsonl` | JSONL, только добавление; «по сообщению» пишут и хуки, без повторов `message_id`; `web_search_usd` — веб-поиск в `cost_usd` | CLI и хук | `cost-record.schema.json` (строка) |
 | `.tmp/cost/offsets.json`, `.tmp/search.sqlite` | смещения разбора; индекс поиска (пересобирается); не в архиве | хук; `search` | — |
 | `sources.yaml` | YAML; `other_urls`, `rechecked_at`, `refreshes` | только CLI | `sources.schema.json` |
