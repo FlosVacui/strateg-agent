@@ -488,10 +488,29 @@ class Source(_Model):
     refreshes: SourceId | None = Field(
         None, description="Источник, который этот снимок перепроверил: текст изменился, прежний снимок цел"
     )
+    consent: Text | None = Field(
+        None,
+        description="Интервью: как и когда собеседник согласился на запись и разбор; без имени и контактов",
+    )
+    persona: Text | None = Field(
+        None, description="Синтетика: персона модельного респондента и откуда она взята"
+    )
+    respondent_call: VerdictCall | None = Field(
+        None,
+        description=(
+            "Синтетика: «подтверждён» — в журнале есть событие «роль выполнена» для respondent на этом шаге, "
+            "ещё не истраченное прежней записью; «не подтверждён» — нет, сессия не независимая"
+        ),
+    )
 
     @model_validator(mode="after")
     def _rules(self) -> Self:
         p: list[str] = []
+        if self.consent is not None and self.kind != "интервью":
+            p.append("consent бывает только у источника вида «интервью»")
+        for name in ("persona", "respondent_call"):
+            if getattr(self, name) is not None and self.kind != "синтетика":
+                p.append(f"{name} бывает только у источника вида «синтетика»")
         web = self.url is not None
         local = self.path is not None
         if web == local:

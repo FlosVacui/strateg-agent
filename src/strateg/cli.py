@@ -1,6 +1,6 @@
 """Точка входа CLI `strateg`: `doctor` и команды проекта (`new`, `use`, `status`, `step`, `gate`, `fetch`,
 `add`, `claim`, `write`, `event`, `check`, `cost`, `budget`, `pack`, `rubric`, `route`, `due`, `impact`,
-`metric`, `diff`, `search`). Сами команды
+`metric`, `diff`, `search`, `guide`, `synth`). Сами команды
 проекта — в `strateg.commands`, проверка полноты — в `strateg.rubric`, маршрут роли — в `strateg.routing`.
 
 Коды возврата: 0 — успех, 1 — ошибка данных или правил, 2 — ошибка использования.
@@ -19,7 +19,18 @@ import tempfile
 from pathlib import Path
 from typing import NoReturn
 
-from strateg import __version__, classify, commands, costreport, followup, routing, rubric, search
+from strateg import (
+    __version__,
+    classify,
+    commands,
+    costreport,
+    followup,
+    guide,
+    routing,
+    rubric,
+    search,
+    synth,
+)
 from strateg.hooks import flags as hookflags
 
 OK, WARN, ERR = "OK", "WARN", "ERR"
@@ -269,9 +280,40 @@ def build_parser() -> argparse.ArgumentParser:
         "«заметка пользователя» для текста с незнакомым расширением",
     )
     p.add_argument(
+        "--consent",
+        metavar="КАК-КОГДА",
+        help="расшифровка интервью: как и когда собеседник согласился («письменно в чате, 12.11.2026»); "
+        "без отметки расшифровка не принимается",
+    )
+    p.add_argument(
         "--confirm",
         metavar="И-n",
         help="человек подтвердил замены персональных данных (или что на изображении их нет)",
+    )
+
+    g = add("guide", guide.cmd_guide_check, "гайд интервью")
+    guide_sub = g.add_subparsers(dest="guide_command", required=True, parser_class=_Parser)
+    p = guide_sub.add_parser(
+        "check", parents=[common], help="проверить гайд интервью по рубрике (0 — ошибок нет, 1 — есть)"
+    )
+    p.set_defaults(func=commands.run, handler=guide.cmd_guide_check)
+    p.add_argument("file", help="файл гайда (Markdown по шаблону knowledge/templates/interview-guide.md)")
+
+    sy = add("synth", synth.cmd_synth_add, "синтетические респонденты")
+    synth_sub = sy.add_subparsers(dest="synth_command", required=True, parser_class=_Parser)
+    p = synth_sub.add_parser(
+        "add", parents=[common], help="записать беседу с модельным респондентом источником «синтетика»"
+    )
+    p.set_defaults(func=commands.run, handler=synth.cmd_synth_add)
+    p.add_argument(
+        "--persona",
+        required=True,
+        help="персона одной строкой: кто, ситуация, текущая альтернатива, ограничения и откуда она взята",
+    )
+    p.add_argument(
+        "--file",
+        required=True,
+        help="беседа: пары «Вопрос n: …» и «Ответ n: СИНТЕТИКА: …», обычно projects/<id>/.tmp/<имя>.md",
     )
 
     budget = add("budget", commands.cmd_budget_check, "бюджет проекта")

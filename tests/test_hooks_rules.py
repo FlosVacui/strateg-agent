@@ -993,3 +993,46 @@ def test_other_tools_pass_the_main_agent_unchecked_and_are_closed_to_the_roles(t
 @pytest.mark.parametrize("tool", ["Read", "Bash", "Agent", "WebFetch", "mcp__playwright__browser_navigate"])
 def test_tools_of_the_first_matcher_always_get_a_decision(tool):
     assert rules.known_tool(tool) and not rules.passes_unchecked(event(tool))
+
+
+# --- респондент: закрыт любой инструмент --------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "tool, tin",
+    [
+        ("Read", {"file_path": "knowledge/roles/respondent.md"}),
+        ("Read", {"file_path": "projects/demo/outputs/interview-guide.md"}),
+        ("Grep", {"pattern": "x", "path": "knowledge"}),
+        ("Glob", {"pattern": "*.yaml"}),
+        ("Write", {"file_path": "projects/demo/.tmp/s.md", "content": "x"}),
+        ("Edit", {"file_path": "projects/demo/.tmp/s.md", "old_string": "a", "new_string": "b"}),
+        ("Bash", {"command": "uv run strateg synth add --persona x --file y"}),
+        ("WebSearch", {"query": "x"}),
+        ("WebFetch", {"url": "https://example.com"}),
+        ("Agent", {"subagent_type": "researcher", "prompt": "найди"}),
+        ("mcp__playwright__browser_navigate", {"url": "https://example.com"}),
+        ("mcp__terminal__run_in_terminal", {"command": "dir"}),
+        ("Skill", {"skill": "interview"}),
+        ("TodoWrite", {"todos": []}),
+        ("", {}),
+    ],
+)
+def test_respondent_may_use_no_tool(tool, tin):
+    d = refused(decide(tool, tin, "respondent"), "Респонденту закрыт любой инструмент")
+    e = [x for x in d.events if x.kind == "отказ хука"][0]
+    assert e.role == "respondent"
+
+
+def test_respondent_is_a_role_of_its_own_and_the_main_agent_may_launch_it():
+    assert rules.role_kind({"agent_type": "respondent", "agent_id": "a"}) == "respondent"
+    assert not rules.passes_unchecked(event("Skill", agent="respondent"))
+    d = allowed(launch("respondent", wrappers=WRAPPERS | {"respondent"}))
+    assert d.updated_input["model"] == "sonnet"
+
+
+def test_respondent_gets_the_same_refusal_as_the_classifier_for_every_tool():
+    for tool in ("Read", "Bash", "Agent", "WebSearch", "Skill", "mcp__x__y"):
+        a = decide(tool, {"command": "dir"}, "classifier")
+        b = decide(tool, {"command": "dir"}, "respondent")
+        assert a.action == b.action == "deny", tool

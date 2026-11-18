@@ -262,7 +262,9 @@ def test_broken_office_file_is_a_clear_error(demo, cli):
 
 def test_interview_kind_numbers_lines_for_the_locator(demo, cli):
     put(demo, "interview.txt", "Вопрос один\n\nОтвет: мы часто выключаем защиту\n")
-    code, _, err = cli("add", "interview.txt", "--kind", "интервью")
+    code, _, err = cli(
+        "add", "interview.txt", "--kind", "интервью", "--consent", "письменно в чате, 12.11.2026"
+    )
     assert code == 0, err
     s = sources(demo)[0]
     assert s["kind"] == "интервью"

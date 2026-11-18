@@ -13,6 +13,8 @@
 
 Классификатор (`classifier`): закрыт любой инструмент — пары «утверждение — цитата» он получает в задании.
 
+Респондент (`respondent`): закрыт любой инструмент — персона и вопросы в задании, ответ — текст в сообщении.
+
 Хук вызывается только для инструментов из `matcher` двух записей `PreToolUse` в `.claude/settings.json`.
 Первая — файлы, оболочка, субагенты, веб и Playwright: их права разбирает этот модуль. Вторая — остальные MCP,
 `Skill`, `SendMessage`, ресурсы MCP и `CronCreate`: основной агент и чужая среда проходят их без решения и без
@@ -35,7 +37,7 @@ from typing import Any
 
 from strateg.hooks import flags, paths, shell
 
-RESEARCHER, CRITIC, CLASSIFIER = "researcher", "critic", "classifier"
+RESEARCHER, CRITIC, CLASSIFIER, RESPONDENT = "researcher", "critic", "classifier", "respondent"
 MAIN, OTHER = "main", "other"
 
 READ_TOOLS = frozenset({"Read", "Grep", "Glob"})
@@ -189,10 +191,10 @@ def is_claude_code(event: Mapping[str, Any]) -> bool:
 
 
 def role_kind(event: Mapping[str, Any]) -> str:
-    """`main` (нет `agent_type`), `researcher`, `critic`, `classifier` или `other` (права основного)."""
+    """`main` (нет `agent_type`), роль проекта (четыре) или `other` (права основного)."""
     at = event.get("agent_type")
     if isinstance(at, str) and at.strip():
-        return at if at in (RESEARCHER, CRITIC, CLASSIFIER) else OTHER
+        return at if at in (RESEARCHER, CRITIC, CLASSIFIER, RESPONDENT) else OTHER
     if event.get("agent_id"):
         return OTHER
     return MAIN
@@ -777,6 +779,16 @@ def _check_guard_only(tool: str, raw: str | None, cwd: str, ctx: Ctx) -> str | N
     return None
 
 
+def _deny_respondent(tool: str, event: Mapping[str, Any]) -> Decision:
+    """Респонденту закрыт любой инструмент: персона и вопросы — в задании, ответ — текст в сообщении."""
+    return _deny(
+        f"Респонденту закрыт любой инструмент ({tool or 'без имени'}): персона и вопросы уже в задании, "
+        "ответ — текст в сообщении.",
+        tool,
+        event,
+    )
+
+
 # --- Точка входа -------------------------------------------------------------------------------------------
 
 
@@ -797,6 +809,8 @@ def decide_pre_tool_use(event: Mapping[str, Any], ctx: Ctx, services: Services) 
             tool,
             event,
         )
+    if kind == RESPONDENT:
+        return _deny_respondent(tool, event)
     if tool == "WebFetch":
         return _deny(
             "WebFetch закрыт всем ролям: он отдаёт пересказ мимо снимка. "

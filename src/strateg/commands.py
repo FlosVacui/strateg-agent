@@ -64,6 +64,7 @@ from strateg.project_check import (
     _where,
     check_project,
     frame_key,
+    synthetic_claims,
 )
 
 STEP_NAMES = {
@@ -1366,6 +1367,46 @@ def _pdf_quote(
     return found, f"стр. {number}"
 
 
+def _line_locator(src: SourceModel, q: QuoteIn, text: str, where: str, errors: list[str]) -> str | None:
+    """Место цитаты из расшифровки: строка снимка определяется по тексту, указанная должна с ней совпасть.
+
+    Цитата одной строки: через границу строк она не проходит. В синтетической сессии цитата — из ответа
+    респондента, а не из вопроса или персоны.
+    """
+    hits = quotelib.lines_with_quote(q.text, text)
+    if src.kind == "синтетика":
+        answers = [h for h in hits if quotelib.ANSWER_LINE.match(h[1])]
+        if hits and not answers:
+            errors.append(
+                f"{where}: цитата стоит в вопросе или в описании персоны, а не в ответе респондента: "
+                "цитируйте строку «Ответ n: …»"
+            )
+            return None
+        hits = answers
+    if not hits:
+        errors.append(f"{where}: цитата не умещается в одну строку расшифровки: цитируйте текст одной строки")
+        return None
+    numbers = [n for n, _ in hits]
+    if q.locator is None:
+        if len(numbers) > 1:
+            errors.append(
+                f"{where}: цитата есть в строках {', '.join(map(str, numbers))}: укажите locator «строка N»"
+            )
+            return None
+        return f"строка {numbers[0]}"
+    wanted = _locator_page(q.locator)
+    if wanted is None:
+        errors.append(f"{where}: место «{q.locator}» не разобрать, пишите «строка N»")
+        return None
+    if wanted not in numbers:
+        errors.append(
+            f"{where}: в locator указана «{q.locator}», а цитата найдена в строке: "
+            f"{', '.join(map(str, numbers))}; место определяется по снимку"
+        )
+        return None
+    return f"строка {wanted}"
+
+
 def _build_quotes(p: Project, c: ClaimIn, label: str, errors: list[str]) -> list[Quote]:
     by_id = {s.id: s for s in p.sources.sources}
     out: list[Quote] = []
@@ -1393,6 +1434,18 @@ def _build_quotes(p: Project, c: ClaimIn, label: str, errors: list[str]) -> list
             continue
         if c.type == "факт" and src.kind == "синтетика":
             errors.append(f"{where}: источник {src.id} — синтетика, фактом она не становится")
+            continue
+        if src.kind == "синтетика" and c.type != "синтетика":
+            errors.append(
+                f"{where}: источник {src.id} — синтетика: утверждение на нём только типа «синтетика», "
+                f"а не «{c.type}»; для гипотезы укажите утверждение-синтетику в basis"
+            )
+            continue
+        if c.type == "синтетика" and src.kind != "синтетика":
+            errors.append(
+                f"{where}: утверждение типа «синтетика» цитирует только источник вида «синтетика» "
+                f"(`strateg synth add`), а {src.id} — «{src.kind}»"
+            )
             continue
         if quotelib.PAGE_MARK_INLINE.search(q.text):
             errors.append(f"{where}: в цитате метка страницы «[стр. N]»: цитируйте текст без меток")
@@ -1424,7 +1477,11 @@ def _build_quotes(p: Project, c: ClaimIn, label: str, errors: list[str]) -> list
                     f"{where}: цитата не найдена в снимке {src.id}: {quotelib.explain_miss(q.text, text)}"
                 )
                 continue
-            if src.kind in LOCATOR_KINDS and locator is None:
+            if src.kind in quotelib.LINE_KINDS and quotelib.numbered_lines(text):
+                locator = _line_locator(src, q, text, where, errors)
+                if locator is None:
+                    continue
+            elif src.kind in LOCATOR_KINDS and locator is None:
                 errors.append(f"{where}: для источника вида «{src.kind}» нужно место цитаты (locator)")
                 continue
         if (
@@ -1492,6 +1549,11 @@ def _make_claim(
             errors.append(f"{label}, поле basis: утверждения {ref} нет в реестре")
     if c.dispute is not None and c.dispute.claim not in known_ids:
         errors.append(f"{label}, поле dispute: утверждения {c.dispute.claim} нет в реестре")
+    if c.type == "синтетика" and not c.quotes:
+        errors.append(
+            f"{label}: утверждение типа «синтетика» записывается с цитатой ответа респондента: "
+            "сессия — `strateg synth add`, цитата со строкой «строка N»"
+        )
     quotes = _build_quotes(p, c, label, errors)
     if len(errors) > before:
         return None
@@ -1594,6 +1656,12 @@ def cmd_claim_add(args: argparse.Namespace) -> int:
                 )
             )
         if new_claims:
+            taint = synthetic_claims(p.claims.claims, p.sources)
+            by_result = {r["id"]: r for r in results}
+            for claim, _ in new_claims:
+                found = _synthetic_warnings(claim, taint)
+                if found:
+                    by_result[claim.id]["warnings"] = found
             p.save_claims()
             p.save_state()
     lines = []
@@ -1605,7 +1673,27 @@ def cmd_claim_add(args: argparse.Namespace) -> int:
         )
         if r.get("suspicious"):
             lines.append(f"  внимание: {r['id']} помечено «подозрительный» (источник с обращением к ИИ)")
+        lines += [f"  внимание: {r['id']}: {w}" for w in r.get("warnings", [])]
     return emit(args, {"claims": results}, lines)
+
+
+_PERSONA_WORD = re.compile(r"респондент|персон", re.IGNORECASE)
+
+
+def _synthetic_warnings(c: Claim, taint: dict[str, str]) -> list[str]:
+    """Предупреждения о синтетике: общий текст читается как вывод о людях, гипотеза на ней не проверена."""
+    out: list[str] = []
+    if c.type == "синтетика" and not _PERSONA_WORD.search(c.text):
+        out.append(
+            "текст синтетики читается как вывод о людях: назовите модельного респондента или персону "
+            "(«Модельный респондент … сказал …»), в поиске и пересказе тип теряется"
+        )
+    if c.type == "гипотеза" and taint.get(c.id) == "derived":
+        out.append(
+            "гипотеза опирается только на ответы модельных респондентов: не проверена на людях, "
+            "основанием рекомендации и решения она не станет"
+        )
+    return out
 
 
 # «VP-2»: латинская V вместо русской В (общий разбор «почти номеров» её не знает)
@@ -2082,6 +2170,7 @@ def _add_data(p: Project, o: materials.Outcome) -> dict[str, Any]:
         "snapshot_path": _snapshot_path(p, s),
         "sha256": s.text_sha256,
         "material_sha256": s.material_sha256,
+        "consent": s.consent,
         "anonymized": list(s.anonymized),
         "replacements": [{"label": r.label, "line": r.line} for r in (rep.replacements if rep else [])],
         "keys": dict(rep.key_kinds) if rep else {},
@@ -2097,7 +2186,7 @@ def _add_data(p: Project, o: materials.Outcome) -> dict[str, Any]:
 def cmd_add(args: argparse.Namespace) -> int:
     p = _open(args)
     if args.confirm:
-        if args.path or args.kind:
+        if args.path or args.kind or args.consent:
             raise UsageError("--confirm задаётся отдельно: `strateg add --confirm И-n`")
         res = materials.confirm(p, _source_ref(args.confirm))
         sid = res["source"]
@@ -2122,7 +2211,7 @@ def cmd_add(args: argparse.Namespace) -> int:
         if outcome is None:
             raise
     else:
-        outcome = materials.register(p, file, args.kind)
+        outcome = materials.register(p, file, args.kind, args.consent)
     s, rep = outcome.source, outcome.report
     data = _add_data(p, outcome)
     if outcome.duplicate:
@@ -2130,6 +2219,8 @@ def cmd_add(args: argparse.Namespace) -> int:
         lines += [f"Внимание: {w}" for w in outcome.warnings]
         return emit(args, data, lines)
     lines = [f"{s.id}: материал зарегистрирован ({s.kind})."]
+    if s.consent:
+        lines.append(f"Согласие собеседника: {s.consent}.")
     if s.text_path:
         lines.append(f"Текст: {data['snapshot_path']}")
     elif s.kind == "изображение":
@@ -2143,6 +2234,11 @@ def cmd_add(args: argparse.Namespace) -> int:
             lines.append(f"  строка {r.line}: {r.label} — «{materials.line_context(rep.text, r.line)}»")
         if len(rep.replacements) > 30:
             lines.append(f"  … и ещё {len(rep.replacements) - 30}")
+    elif s.kind == "интервью":
+        lines.append(
+            "Имён для замены не нашлось, но расшифровка идёт путём персональных данных: исходник убран "
+            "из inputs/ в .tmp/ проекта и в работу не идёт, пока вы не подтвердите копию."
+        )
     elif materials.NAME_CATEGORY in s.anonymized:
         lines.append(
             "В имени файла найдены персональные данные: текст записан под нейтральным именем. "

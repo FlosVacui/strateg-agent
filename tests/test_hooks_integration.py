@@ -140,6 +140,20 @@ def test_other_tools_pass_the_main_agent_and_are_closed_to_the_classifier(produc
     )
 
 
+@pytest.mark.parametrize("tool", ["mcp__terminal__run_in_terminal", "Skill", "SendMessage", "Read", "Bash"])
+def test_every_tool_is_closed_to_the_respondent_through_both_matchers(product, tool):
+    event = pre_event(
+        tool,
+        {"command": "dir", "file_path": "README.md"},
+        cwd=str(product),
+        agent_type="respondent",
+        agent_id="r",
+    )
+    out = body(run_hook(product, "pre_tool_use.py", event))
+    assert out["permissionDecision"] == "deny"
+    assert "Респонденту закрыт любой инструмент" in out["permissionDecisionReason"]
+
+
 def test_hooks_off_prints_nothing_even_when_package_is_missing(product):
     event = pre_event("WebFetch", {"url": "https://x.com"})
     proc = run_hook(product, "pre_tool_use.py", event, STRATEG_HOOKS="0")

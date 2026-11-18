@@ -381,3 +381,30 @@ def find_page(quote: str, text: str) -> int | None:
         if best is None or found.similarity > best[0]:
             best = (found.similarity, number)
     return best[1] if best else None
+
+
+# ---------------------------------------------------------------------------
+# Строки расшифровки (интервью и синтетическая сессия)
+# ---------------------------------------------------------------------------
+
+LINE_MARK = re.compile(r"^\[строка (\d+)\] ?(.*)$")
+LINE_KINDS = frozenset({"интервью", "синтетика"})  # виды источника, где цитата привязана к строке
+ANSWER_LINE = re.compile(r"Ответ(?: \d+)?:")  # строка ответа респондента в снимке синтетической сессии
+
+
+def numbered_lines(text: str) -> list[tuple[int, str]]:
+    """Строки снимка с меткой `[строка N]`: (номер, текст без метки). Без меток — пустой список."""
+    out = []
+    for line in text.split("\n"):
+        m = LINE_MARK.match(line)
+        if m:
+            out.append((int(m.group(1)), m.group(2)))
+    return out
+
+
+def lines_with_quote(quote: str, text: str) -> list[tuple[int, str]]:
+    """Строки расшифровки, в каждой из которых цитата целиком находится: (номер, текст строки).
+
+    Цитата через границу строк не проходит: между строками стоит метка `[строка N]`.
+    """
+    return [(n, line) for n, line in numbered_lines(text) if check_quote(quote, line) is not None]

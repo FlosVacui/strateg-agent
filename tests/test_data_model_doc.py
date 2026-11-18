@@ -61,3 +61,31 @@ def test_doc_keeps_the_rule_that_an_incompatible_change_goes_to_the_changelog():
 
 def test_doc_keeps_the_note_on_output_files():
     assert "Семь файлов выводов необязательны" in DOC and "поля для проверок — в YAML" in DOC
+
+
+def test_doc_keeps_the_rules_that_the_size_limit_once_cut():
+    for rule in (
+        "`web_search_usd`",
+        "цифры ASCII",
+        "латинскую ошибка называет",
+        "шаг на паузе (ворота, остановка) не прерывается",
+        "«обещание → возможность → источник»",
+        "`route --profile`",
+        "не короче 10 знаков, с буквами",
+        "метка `[О-n]` в `outputs/comms-strategy.md` ведёт на обещание",
+        "циклов нет ни в заменах, ни в основаниях",
+    ):
+        assert rule in DOC, rule
+
+
+def test_doc_names_the_interview_and_synthetic_fields_and_rules():
+    for rule in (
+        "`consent`",
+        "`persona`",
+        "`respondent_call`",
+        "расшифровка интервью",
+        "цепочка `basis`",
+        "`И-n` синтетики",
+        "кроме полей гипотез",
+    ):
+        assert rule in DOC, rule
