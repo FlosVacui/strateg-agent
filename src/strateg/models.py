@@ -326,7 +326,10 @@ PublisherKind = Literal[
     "отзыв пользователя",
     "материал пользователя",
 ]
-CheckMethod = Literal["точное вхождение", "без пробелов и дефисов"]
+CheckMethod = Literal["точное вхождение", "без пробелов и дефисов", "по изображению"]
+# Способ проверки у цитаты с изображения: текста в снимке нет, код сверяет не смысл, а условия записи
+# (подтверждение человека, место «экран …; элемент …», целый файл изображения). ADR-0005.
+IMAGE_CHECK = "по изображению"
 # Вердикт классификатора о паре «утверждение — цитата» (ADR-0007): подтверждает ли цитата смысл.
 VerdictValue = Literal["подтверждает", "частично", "не подтверждает", "не уверен"]
 VerdictBy = Literal["классификатор", "агент"]
@@ -355,7 +358,7 @@ CostEntry = Literal["по сообщению", "итог сессии"]
 CostSource = Literal["измерено", "оценка", "нет данных"]
 
 # Виды источника, цитату из которых нужно искать по месту (ADR-0004: `locator`).
-LOCATOR_KINDS = frozenset({"PDF", "документ", "таблица", "презентация", "интервью"})
+LOCATOR_KINDS = frozenset({"PDF", "документ", "таблица", "презентация", "интервью", "изображение"})
 
 
 class _Model(BaseModel):
@@ -407,6 +410,38 @@ def strip_spaces_and_hyphens(text: str) -> str:
 def has_meaning(text: str) -> bool:
     """После нормализации в цитате есть хотя бы одна буква или цифра."""
     return any(ch.isalnum() for ch in normalize_quote(text))
+
+
+_IMAGE_LOCATOR = re.compile(
+    r"^\s*экран\s+(?P<screen>[^;]+?)\s*;\s*элемент\s+(?P<element>.+?)\s*$", re.IGNORECASE | re.DOTALL
+)
+IMAGE_LOCATOR_FORM = "экран <название>; элемент <что и где>"
+
+
+def parse_image_locator(locator: str | None) -> tuple[str, str] | None:
+    """Место цитаты с изображения: «экран <название>; элемент <что и где>». Обе части непустые, иначе None."""
+    m = _IMAGE_LOCATOR.match(locator or "")
+    if m is None:
+        return None
+    screen, element = " ".join(m["screen"].split()), " ".join(m["element"].split())
+    if not has_meaning(screen) or not has_meaning(element) or ";" in element:
+        return None
+    return screen, element
+
+
+# Слова о поведении и желаниях людей: по снимку экрана это не видно, такое утверждение — гипотеза.
+_BEHAVIOUR = re.compile(
+    r"не\s+(?:наход|замеча|могут|поймут|понима|видят|успевают|дочитыва)|"
+    r"путаю|хотят|хочет|предпочита|кликают|нажимают|пропускают|уходят|бросают|пользуются|используют|"
+    r"большинств|часто|обычно|редко|чаще|трудно\s+(?:найти|понять)|непонятно\s+пользовател",
+    re.IGNORECASE,
+)
+
+
+def behaviour_words(text: str) -> str | None:
+    """Первое слово о поведении или желаниях пользователей в тексте; None — таких нет."""
+    m = _BEHAVIOUR.search(normalize_quote(text))
+    return m.group() if m else None
 
 
 @lru_cache(maxsize=32)
@@ -616,7 +651,13 @@ class Quote(_Model):
             p.append(
                 "в цитате нет ни буквы, ни цифры после нормализации — так цитата нашлась бы в любом снимке"
             )
-        if self.check is not None and self.check.method != "точное вхождение":
+        if self.check is not None and self.check.method == IMAGE_CHECK:
+            if parse_image_locator(self.locator) is None:
+                p.append(
+                    "у цитаты с изображения место записывается строго: «" + IMAGE_LOCATOR_FORM + "», "
+                    "обе части непустые"
+                )
+        elif self.check is not None and self.check.method != "точное вхождение":
             n = len(" ".join(self.text.split()))
             if n < MIN_COMPACT_QUOTE_LEN:
                 p.append(

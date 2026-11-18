@@ -356,6 +356,7 @@ def test_audio_and_video_are_refused_with_a_hint(demo, cli, name):
     put(demo, name, b"\x00\x01\x02")
     code, _, err = cli("add", name)
     assert code == 1 and "не разбираются" in err and "расшифровку текстом" in err
+    assert "--kind интервью --consent" in err and "заметка" in err
     assert sources(demo) == [] and check_project(demo) == []
     assert (demo / "inputs" / name).is_file()  # файл человека не тронут
 

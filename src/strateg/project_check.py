@@ -24,7 +24,9 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, ValidationError
 
+from strateg import imagequote
 from strateg.models import (
+    IMAGE_CHECK,
     LOCATOR_KINDS,
     Claim,
     ClaimsFile,
@@ -452,6 +454,23 @@ def _snapshot_text(root: Path, src: Source, cache: dict[str, str | None]) -> str
     return cache[src.id]
 
 
+def _check_image_quote(root: Path, src: Source, c: Claim, q: Any, where: str, err: Any) -> None:
+    """Цитата с изображения: те же условия, что при записи, и запись проверки по файлу изображения."""
+    problem = (
+        imagequote.source_problem(src, root)
+        or imagequote.locator_problem(q.locator)
+        or imagequote.behaviour_problem(c.type, c.text)
+    )
+    if problem:
+        err(f"{where}: {problem}")
+    if q.check is None:
+        err(f"{where}: у цитаты с изображения нет записи проверки")
+    elif q.check.method != IMAGE_CHECK:
+        err(f"{where}: у цитаты с изображения способ проверки «{q.check.method}», а нужен «{IMAGE_CHECK}»")
+    elif q.check.snapshot_sha256 != imagequote.image_sha(root, src):
+        err(f"{where}: цитата записана по другому файлу изображения, чем сейчас у {src.id}; запишите заново")
+
+
 def _line_problem(kind: str, locator: str, quote: str, text: str) -> str | None:
     """Место цитаты из расшифровки не указывает строку, в которой цитата стоит; None — всё верно.
 
@@ -603,6 +622,15 @@ def _check_claims(root: Path, sources: SourcesFile, claims: ClaimsFile, errors: 
                 err(f"{where}: ссылка на несуществующий источник {q.source}")
                 continue
             quote_sources.append(src)
+            if src.kind == "изображение":
+                _check_image_quote(root, src, c, q, where, err)
+                continue
+            if q.check is not None and q.check.method == IMAGE_CHECK:
+                err(
+                    f"{where}: способ проверки «{IMAGE_CHECK}» бывает только у цитаты с изображения, "
+                    f"а {src.id} — «{src.kind}»"
+                )
+                continue
             if src.text_sha256 is None:
                 err(f"{where}: у источника {src.id} нет снимка текста (доступ: «{src.access}»)")
                 continue
@@ -830,10 +858,25 @@ class _Claims:
         # утверждения без опоры, кроме синтетики: сама синтетика и стоящие только на ней
         self.synthetic = synthetic_claims(claims.claims, sources) if claims else {}
         self.synthetic_sources = synthetic_ids(sources)
+        self.image_sources = {s.id for s in sources.sources if s.kind == "изображение"} if sources else set()
 
     def type_of(self, ref: str) -> str | None:
         c = self.by_id.get(ref) if self.by_id is not None else None
         return c.type if c else None
+
+    def only_image_facts(self, refs: list[str]) -> list[str] | None:
+        """Факты среди `refs`, если все они стоят только на изображениях, а гипотезы среди `refs` нет;
+        иначе None. Снимок экрана показывает интерфейс, а не поведение людей: рекомендация «пользователи
+        хотят или не могут» нуждается в гипотезе с проверкой (ADR-0005)."""
+        if self.by_id is None or not self.image_sources:
+            return None
+        claims = [self.by_id[r] for r in refs if r in self.by_id]
+        facts = [c for c in claims if c.type == "факт"]
+        if not facts or any(c.type == "гипотеза" for c in claims):
+            return None
+        if all(q.source in self.image_sources for c in facts for q in c.quotes):
+            return [c.id for c in facts]
+        return None
 
     def only_self_reported(self, refs: list[str]) -> list[str] | None:
         """Факты среди `refs`, если они все — заявления издателя о себе; иначе (есть независимый или
@@ -1174,6 +1217,13 @@ def _check_options(opts: OptionsFile, cl: _Claims, errors: list[str]) -> None:
             f"{', '.join(only_self)} взяты из источников, где издатель пишет о себе или своём продукте "
             "(self_reported: true); добавьте факт из независимого источника (отчёт регулятора, "
             "исследование, отзывы пользователей) или честно назовите это пробелом"
+        )
+    only_image = cl.only_image_facts(rec.claims)
+    if only_image:
+        errors.append(
+            f"{where}, поле claims: рекомендация держится только на фактах с изображений "
+            f"({', '.join(only_image)}): снимок экрана показывает интерфейс, а не поведение людей; "
+            "добавьте гипотезу о поведении (она требует способа проверки) или факт из другого источника"
         )
     if opts.chosen:
         own.check(errors, OPTIONS_FILE, "chosen", opts.chosen)
