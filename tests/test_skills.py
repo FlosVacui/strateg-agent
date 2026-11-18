@@ -1243,7 +1243,7 @@ def test_update_skill_keeps_the_order_claim_impact_stop_recalculation_diff():
         "claim revoke",
         "uv run strateg impact",
         "--json",
-        "uv run strateg stop --reason",
+        "uv run strateg stop --reason '<что задето>'",
         "uv run strateg write",
         "uv run strateg diff",
         "uv run strateg step done 8",
@@ -1266,8 +1266,8 @@ def test_update_skill_keeps_the_order_claim_impact_stop_recalculation_diff():
     assert "inputs/" in text and "Спор и замену `impact` проходит сам" in text
     assert text.splitlines()[2].startswith('description: "Только после выпуска (шаг 7 выполнен)')
     assert (
-        text.count("uv run strateg stop") == 2
-    )  # выбор или рамка; бюджет. Остальные случаи — вопрос без stop
+        text.count("uv run strateg stop") == 3
+    )  # нет материала; выбор или рамка; бюджет. Остальные случаи — вопрос без stop
     assert "без `stop`" in text and "одна на пересмотр" in text
     assert "только по слову человека" in text and "write --by пользователь" in text
     assert "Ориентир" in text and "K из N" in text and "верхн" not in text and "«Нет данных»" in text
@@ -1510,3 +1510,211 @@ def test_the_card_does_not_claim_what_its_sources_do_not_say():
     text = (METHODS / "interviews.md").read_text(encoding="utf-8")
     assert "2023–2025" in text and "2023–2026" not in text
     assert "ложную уверенность" not in text
+
+
+# ---------------------------------------------------------------------------
+# Поведение агента: самопроверка части Б, доработка до остановки, автопилот, шаг 8, поиск
+# ---------------------------------------------------------------------------
+
+OPTIONS_SKILL = SKILLS / "options" / "SKILL.md"
+STRATEGY_SKILL = SKILLS / "strategy" / "SKILL.md"
+COMPLETENESS = SKILLS / "strategy" / "completeness.md"
+
+
+def _line(text: str, anchor: str) -> str:
+    """Единственная строка (абзац или пункт) с опорной фразой."""
+    hits = [x for x in text.splitlines() if anchor in x]
+    assert len(hits) == 1, f"«{anchor}»: строк {len(hits)}"
+    return hits[0]
+
+
+def _line_with(text: str, *anchors: str) -> str:
+    """Единственная строка, где есть все опорные слова (порядок слов не важен)."""
+    hits = [x for x in text.splitlines() if all(a in x for a in anchors)]
+    assert len(hits) == 1, f"{anchors}: строк {len(hits)}"
+    return hits[0]
+
+
+def _sentence(line: str, *anchors: str) -> str:
+    hits = [x for x in re.split(r"(?<=\.)\s+", line) if all(a in x for a in anchors)]
+    assert hits, f"нет фразы с {anchors}"
+    return hits[0]
+
+
+def _lacks(text: str, words: tuple[str, ...], where: str) -> None:
+    low = text.casefold()
+    for word in words:
+        assert word.casefold() not in low, f"{where}: появилось «{word}»"
+
+
+def _has(text: str, words: tuple[str, ...], where: str) -> None:
+    low = text.casefold()
+    for word in words:
+        assert word.casefold() in low, f"{where}: нет «{word}»"
+
+
+# признак самопроверки: слова в вопросе и слово в действии при «Нет —»
+SELF_CHECK = {
+    "Б-2": (("(п. 2)", "осью", "масштаб"), "замени"),
+    "Б-3": (("(п. 8)", "две формулировки", "два вида источника"), "поищи"),
+    "Б-4": (("(п. 5)", "каждого", "рекомендованн"), "перепиши"),
+    "Б-15": (("change_mind", "утверждени"), "по утверждению"),
+}
+
+
+def test_the_self_check_asks_each_part_b_sign_and_names_the_action_on_no():
+    options = OPTIONS_SKILL.read_text(encoding="utf-8")
+    for sign, (words, verb) in SELF_CHECK.items():
+        line = _line(options, f"   - {sign}")
+        question, _, action = line.partition("Нет —")
+        _has(question, words, f"самопроверка {sign}")
+        assert "?" in question and verb in action, f"{sign}: после «Нет —» нет действия «{verb}»"
+        # при «нет» агент исправляет сам, а не откладывает критику или человеку
+        _lacks(action, ("отметь", "критик", "оставь", "пропусти", "спроси"), f"самопроверка {sign}")
+    head = _line(options, "Сначала самопроверка части Б")
+    _has(head, ("исправь", "проверь снова"), "заголовок самопроверки")
+    _lacks(head, ("отметь", "в сообщении", "критик разбер"), "заголовок самопроверки")
+    assert options.index("Сначала самопроверка части Б") < options.index(
+        "`uv run strateg route critic --reason 'возражения'`"
+    )
+    assert "самопроверка части Б (п. 9)" in _line(options, "Перед каждым повторным `gate open В4")
+
+
+def test_the_check_of_b_15_also_stands_before_step_done_5():
+    line = _line(STRATEGY_SKILL.read_text(encoding="utf-8"), "Б-15")
+    assert line.startswith("12.")
+    _has(
+        line,
+        ("входы расчёта пользы", "`У-n`", "`why`", "`change_mind`", "по утверждению"),
+        "строка Б-15",
+    )
+    assert line.index("Б-15") < line.index("выровняй") < line.index("`uv run strateg step done 5")
+
+
+def test_the_stop_on_completeness_comes_only_after_the_repeat_and_the_budget_check_decides():
+    text = COMPLETENESS.read_text(encoding="utf-8")
+    ban = _sentence(_line_with(text, "Повтора", "запрещена"), "Повтора", "запрещена")
+    # запрет безусловный: в той же фразе нет места исключению
+    assert "остановк" in ban.casefold() and len(ban.split()) <= 8, ban
+    _lacks(ban, ("кроме", "только если", "исключени", "хватает", "если"), "запрет остановки")
+    assert text.index("запрещена") < text.index("## Повтор")
+    repeat = _line_with(text, "budget check", "route critic --upgrade")
+    _has(
+        repeat,
+        ("uv run strateg budget check", "код 1", "0 мин", "бюджет израсходован", "числами из вывода"),
+        "«Повтор»",
+    )
+    paths = repeat.split("Код 0")[0]
+    assert "выпуск" in paths and "бюджет" in paths  # человеку два пути
+    assert "Код 0 — повтор" in repeat and "словами не оценивай" in repeat
+    assert repeat.index("budget check") < repeat.index("route critic --upgrade")
+    # остаток и цену прохода решает CLI, а не оценка агента
+    _lacks(
+        text,
+        ("исключени", "дороже", "по твоей оценке", "оцени сам", "заранее", "порядка $"),
+        "completeness.md",
+    )
+
+
+def test_the_strategy_skill_reworks_before_it_stops_and_asks_the_budget_first():
+    line = _line(STRATEGY_SKILL.read_text(encoding="utf-8"), "Нашёл «нет»")
+    _has(
+        line,
+        ("сначала доработай", "пройди снова один раз", "budget check", "внеплановая остановка"),
+        "шаг 6, п. 3",
+    )
+    assert line.index("сначала доработай") < line.index("budget check") < line.index("внеплановая остановка")
+    _lacks(line, ("заранее", "оцени", "словами"), "шаг 6, п. 3")
+
+
+def test_autopilot_goes_on_after_an_answer_to_a_gate_or_a_stop():
+    line = _line(AGENTS.read_text(encoding="utf-8"), "- **Ворота ждут ответа.**")
+    rule = _sentence(line, "в том же ходе")
+    _has(
+        rule,
+        ("ответ", "ворота", "остановк", "«продолжить?»", "«начать?»", "не спрашивай", "подтверждени"),
+        "правило автопилота",
+    )
+    # без сужения до В4, без оговорок и паузы после остановки
+    _lacks(rule, ("только", "кроме", "уточни", "если", "В4"), "правило автопилота")
+    _lacks(line.split(rule)[1], ("уточни", "спроси", "жди", "только на"), "после правила автопилота")
+
+
+def test_step_8_stops_instead_of_waiting_in_the_chat():
+    text = UPDATE.read_text(encoding="utf-8")
+    bullet = _line(text, "не открылась")
+    _has(
+        bullet,
+        ("ссылка не открылась", "uv run strateg stop --reason", "inputs/", "не жди", "прервано"),
+        "шаг 8, нет материала",
+    )
+    assert bullet.index("stop --reason") < bullet.index("не жди")
+    _lacks(bullet, ("попроси", "дождись"), "шаг 8, нет материала")
+    rule = _sentence(_line(text, "4. **Остановка по задетому**"), "одна на пересмотр")
+    assert "нужен материал" in rule  # остановка «нужен материал» выбор не заслоняет
+
+
+def test_step_8_writes_by_user_only_for_what_the_human_named():
+    text = UPDATE.read_text(encoding="utf-8")
+    flag = _sentence(_line(text, "5. **Пересчёт**"), "решите сами")
+    _has(flag, ("--by", "`пользователь`", "только", "названн", "решите сами", "`агент`"), "п. 5, флаг")
+    assert flag.index("только") < flag.index("решите сами") < flag.index("`агент`")
+    new = _line(text, "6. **Новое решение.**")
+    _has(new, ("только по слову человека", "решите сами", "предложи значение", "спроси"), "п. 6")
+    _lacks(new, ("`агент`", "--by агент"), "п. 6")  # порог и срок агент сам не назначает
+
+
+def test_step_8_calls_diff_and_does_not_close_over_check_errors():
+    text = UPDATE.read_text(encoding="utf-8")
+    rule = _sentence(_line(text, "8. **Было → стало.**"), "`uv run strateg diff`")
+    _has(rule, ("обязателен", "перед `step done 8`"), "п. 8")
+    _lacks(rule, ("по просьбе", "если", "можно", "по желанию", "при необходимости"), "п. 8")
+    check = _line(text, "7. `uv run strateg check`")
+    done = _sentence(check, "`step done 8`")
+    _has(done, ("с ошибками", "не вызывай"), "п. 7")
+    assert done.index("с ошибками") < done.index("не вызывай")
+    _has(check, ("перескажи человеку", "исправь", "не исправить через CLI", "остановка", "AGENTS.md"), "п. 7")
+    _lacks(check, ("вызывай после", "после пересказа"), "п. 7")
+    impact = _line(text, "3. **Что задето.**")
+    assert "`И-n`" in impact and "uv run strateg impact" in impact
+
+
+def test_the_search_line_says_when_to_search_how_and_that_the_result_is_a_hint():
+    line = _line(AGENTS.read_text(encoding="utf-8"), "- **Поиск по проекту и методике**")
+    _has(
+        line,
+        (
+            "uv run strateg search",
+            "--also",
+            "--in методика",
+            "«что мы уже знаем о…»",
+            "перед запросом в сеть",
+        ),
+        "поиск",
+    )
+    hint = _sentence(line, "Выдача")
+    _has(hint, ("подсказка", "а не источник", "цитату бери из снимка"), "поиск")
+    _lacks(hint, ("годится", "как источник"), "поиск")
+
+
+def test_the_step_skills_do_not_end_an_answer_with_a_question_to_continue():
+    """После ответа автопилот идёт дальше сам: скиллы шагов 4–6 и `AGENTS.md` не велят спрашивать."""
+    for path in (OPTIONS_SKILL, STRATEGY_SKILL, COMPLETENESS):
+        text = path.read_text(encoding="utf-8").casefold()
+        for bad in ("продолжить?", "начать?", "продолжим?", "приступать?"):
+            assert bad not in text.replace("«продолжить?» и «начать?» не спрашивай", ""), (rel(path), bad)
+    agents = (
+        AGENTS.read_text(encoding="utf-8").casefold().replace("«продолжить?» и «начать?» не спрашивай", "")
+    )
+    assert "продолжить?" not in agents
+
+
+def test_the_behaviour_rules_fit_the_instruction_limits():
+    assert len(UPDATE.read_bytes()) <= MAX_FOLLOW_UP_SKILL_BYTES
+    assert len(AGENTS.read_text(encoding="utf-8").splitlines()) <= MAX_AGENTS_LINES
+
+
+def test_update_does_not_carry_done_promises_into_a_confirmed_decision():
+    text = (SKILLS / "update" / "SKILL.md").read_text(encoding="utf-8")
+    line = next(s for s in text.splitlines() if s.startswith("Из `follow-up`"))
+    assert "выполненные обязательства не переноси" in line.lower()
