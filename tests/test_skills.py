@@ -1243,7 +1243,7 @@ def test_update_skill_keeps_the_order_claim_impact_stop_recalculation_diff():
         "claim revoke",
         "uv run strateg impact",
         "--json",
-        "uv run strateg stop --reason",
+        "uv run strateg stop --reason '<что задето>'",
         "uv run strateg write",
         "uv run strateg diff",
         "uv run strateg step done 8",
@@ -1266,8 +1266,8 @@ def test_update_skill_keeps_the_order_claim_impact_stop_recalculation_diff():
     assert "inputs/" in text and "Спор и замену `impact` проходит сам" in text
     assert text.splitlines()[2].startswith('description: "Только после выпуска (шаг 7 выполнен)')
     assert (
-        text.count("uv run strateg stop") == 2
-    )  # выбор или рамка; бюджет. Остальные случаи — вопрос без stop
+        text.count("uv run strateg stop") == 3
+    )  # нет материала; выбор или рамка; бюджет. Остальные случаи — вопрос без stop
     assert "без `stop`" in text and "одна на пересмотр" in text
     assert "только по слову человека" in text and "write --by пользователь" in text
     assert "Ориентир" in text and "K из N" in text and "верхн" not in text and "«Нет данных»" in text
@@ -1510,3 +1510,90 @@ def test_the_card_does_not_claim_what_its_sources_do_not_say():
     text = (METHODS / "interviews.md").read_text(encoding="utf-8")
     assert "2023–2025" in text and "2023–2026" not in text
     assert "ложную уверенность" not in text
+
+
+# ---------------------------------------------------------------------------
+# Поведение агента: самопроверка части Б, доработка до остановки, автопилот, шаг 8, поиск
+# ---------------------------------------------------------------------------
+
+OPTIONS_SKILL = SKILLS / "options" / "SKILL.md"
+STRATEGY_SKILL = SKILLS / "strategy" / "SKILL.md"
+COMPLETENESS = SKILLS / "strategy" / "completeness.md"
+
+BEHAVIOUR_PHRASES = {
+    "самопроверка части Б до критика": [
+        (OPTIONS_SKILL, "Сначала самопроверка части Б по своим файлам"),
+        (OPTIONS_SKILL, "- Б-2: варианты различаются способом (ось), а не масштабом?"),
+        (OPTIONS_SKILL, "- Б-3: у пробела запросы разные по формулировке и виду источника?"),
+        (
+            OPTIONS_SKILL,
+            "- Б-4: `why` называет `У-n`, который различает выбранный вариант и ближайшего соперника?",
+        ),
+        (OPTIONS_SKILL, "- Б-15: входы расчёта пользы и порога `change_mind` — те же `У-n` и числа"),
+        (OPTIONS_SKILL, "самопроверка части Б (п. 9) и один вызов критика только по изменённому"),
+    ],
+    "доработка до остановки": [
+        (STRATEGY_SKILL, "сначала доработай и пройди снова один раз"),
+        (STRATEGY_SKILL, "Остановка — только после повтора; хватит ли остатка — по `status`"),
+        (COMPLETENESS, "Остановка до «Повтора» запрещена."),
+        (COMPLETENESS, "Остаток бюджета и времени — по `uv run strateg status`, не словами"),
+        (COMPLETENESS, "заранее остановиться можно, только если остатка не хватает на один проход"),
+        (COMPLETENESS, "в `--reason` идут числа из `status`"),
+    ],
+    "автопилот не спрашивает «продолжить?»": [
+        (AGENTS, "После ответа на ворота или остановку продолжай в том же ходе"),
+        (AGENTS, "до следующих ворот режима или остановки; «продолжить?»"),
+        (AGENTS, "«продолжить?» и «начать?» не спрашивай"),
+    ],
+    "шаг 8: stop, by, diff, check": [
+        (UPDATE, "Материала нет — `uv run strateg stop --reason '<что нужно>'` и вопрос человеку"),
+        (UPDATE, "В чате не жди: следующий вызов запишет шагу «прервано»"),
+        (
+            UPDATE,
+            "Флаг — только для правки, названной человеком; решённая тобой («решите сами») — `--by агент`",
+        ),
+        (UPDATE, "обязателен перед `step done 8`"),
+        (UPDATE, "Прочие ошибки — перескажи человеку и исправь; `step done 8` с ошибками не вызывай"),
+    ],
+    "поиск по проекту и методике": [
+        (AGENTS, "`uv run strateg search '<запрос>' [--in методика]`"),
+        (AGENTS, "на «что мы уже знаем о…» и перед новым запросом в сеть"),
+        (AGENTS, "Выдача — подсказка, а не источник"),
+    ],
+}
+BEHAVIOUR_CASES = [
+    (rule, path, phrase) for rule, items in BEHAVIOUR_PHRASES.items() for path, phrase in items
+]
+
+
+@pytest.mark.parametrize(
+    ("rule", "path", "phrase"), BEHAVIOUR_CASES, ids=lambda v: v if isinstance(v, str) else ""
+)
+def test_behaviour_rules_keep_their_key_phrases(rule, path, phrase):
+    assert phrase in path.read_text(encoding="utf-8"), f"{rule}: в {rel(path)} нет фразы «{phrase}»"
+
+
+def test_the_self_check_comes_before_the_critic_call_and_the_stop_after_the_second_pass():
+    options = OPTIONS_SKILL.read_text(encoding="utf-8")
+    assert options.index("Сначала самопроверка части Б") < options.index(
+        "`uv run strateg route critic --reason 'возражения'`"
+    )
+    completeness = COMPLETENESS.read_text(encoding="utf-8")
+    assert completeness.index("Остановка до «Повтора» запрещена.") < completeness.index("## Повтор")
+
+
+def test_the_step_skills_do_not_end_an_answer_with_a_question_to_continue():
+    """После ответа автопилот идёт дальше сам: скиллы шагов 4–6 и `AGENTS.md` не велят спрашивать."""
+    for path in (OPTIONS_SKILL, STRATEGY_SKILL, COMPLETENESS):
+        text = path.read_text(encoding="utf-8").casefold()
+        for bad in ("продолжить?", "начать?", "продолжим?", "приступать?"):
+            assert bad not in text.replace("«продолжить?» и «начать?» не спрашивай", ""), (rel(path), bad)
+    agents = (
+        AGENTS.read_text(encoding="utf-8").casefold().replace("«продолжить?» и «начать?» не спрашивай", "")
+    )
+    assert "продолжить?" not in agents
+
+
+def test_the_behaviour_rules_fit_the_instruction_limits():
+    assert len(UPDATE.read_bytes()) <= MAX_FOLLOW_UP_SKILL_BYTES
+    assert len(AGENTS.read_text(encoding="utf-8").splitlines()) <= MAX_AGENTS_LINES
