@@ -1,7 +1,8 @@
 """Проверка гайда интервью по рубрике `knowledge/rubrics/interview-guide.yaml` (`strateg guide check`).
 
-Гайд — Markdown по шаблону `knowledge/templates/interview-guide.md`. Вопросы берутся только из раздела
-«Вопросы…»: примеры того, чего спрашивать нельзя, лежат в другом разделе и вопросами не считаются.
+Гайд — Markdown по шаблону `knowledge/templates/interview-guide.md`. Вопросы берутся из всех разделов
+«…вопросы…» (и пунктов со знаком «?» в прочих): разделы «Чего не спрашиваем» и «Что слушаем» вопросами не
+считаются, примеры того, чего спрашивать нельзя, лежат там.
 
 Часть А рубрики — признаки, которые видно по тексту, без модели: вопрос о будущем, наводящий, закрытый
 «да» или «нет» без продолжения, питч продукта, мнение вместо случая, число вопросов. Разбор консервативный:
@@ -132,6 +133,7 @@ class GuideRubric:
     max_questions: int
     sections: tuple[str, ...]
     open_words: re.Pattern[str]
+    continue_words: re.Pattern[str]
     rules: dict[str, Rule]
     part_b: tuple[dict[str, str], ...]
 
@@ -181,6 +183,7 @@ def load_rubric(path: Path | None = None) -> GuideRubric:
         max_questions=int(raw["max_questions"]),
         sections=tuple(str(s) for s in raw["sections"]),
         open_words=re.compile(str(raw["open_words"])),
+        continue_words=re.compile(str(raw["continue_words"])),
         rules=rules,
         part_b=part_b,
     )
@@ -225,8 +228,21 @@ def _bulleted(lines: list[str]) -> list[Question]:
     return out
 
 
+_SKIPPED = ("чего не спрашиваем", "что слушаем")
+
+
+def _is_questions_title(title: str) -> bool:
+    """«Вопросы…», «Уточняющие вопросы»: раздел с вопросами; «Какие вопросы не задаём» — нет."""
+    t = fold(title)
+    return "вопрос" in t and not re.search(r"\b(?:не|нельзя|плох|запрещ)\w*", t)
+
+
 def parse_guide(text: str) -> Guide:
-    """Вопросы раздела «Вопросы…»; нет такого раздела — нумерованные пункты всего файла."""
+    """Вопросы гайда: нумерованные пункты всех разделов «…вопросы…» и пункты с «?» в прочих разделах.
+
+    Разделы «Чего не спрашиваем» и «Что слушаем» вопросами не считаются. Нет раздела с вопросами —
+    нумерованные пункты всего файла, кроме этих двух.
+    """
     lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     heads: list[tuple[int, str, int]] = []  # (уровень, заголовок, индекс строки)
     fenced = False
@@ -236,17 +252,41 @@ def parse_guide(text: str) -> Guide:
         m = None if fenced else _HEADING.match(line)
         if m:
             heads.append((len(m.group(1)), m.group(2), i))
-    section = None
+    has_section = any(_is_questions_title(h[1]) for h in heads)
+    blocks: list[tuple[list[str], str]] = []  # (строки раздела, вид)
+    first = heads[0][2] if heads else len(lines)
+    if first:
+        blocks.append((lines[:first], "other"))
+    chain: list[tuple[int, str]] = []
     for k, (level, title, idx) in enumerate(heads):
-        if fold(title).startswith("вопрос"):
-            end = next((h[2] for h in heads[k + 1 :] if h[0] <= level), len(lines))
-            section = lines[idx + 1 : end]
-            break
-    body = section if section is not None else lines
-    questions = _numbered(body) or (_bulleted(body) if section is not None else [])
-    return Guide(
-        questions=questions, headings=[h[1] for h in heads], has_questions_section=section is not None
-    )
+        while chain and chain[-1][0] >= level:
+            chain.pop()
+        chain.append((level, title))
+        end = heads[k + 1][2] if k + 1 < len(heads) else len(lines)
+        if any(fold(t).startswith(_SKIPPED) for _, t in chain):
+            kind = "skipped"
+        elif any(_is_questions_title(t) for _, t in chain):
+            kind = "questions"
+        else:
+            kind = "other"
+        blocks.append((lines[idx + 1 : end], kind))
+    questions: list[Question] = []
+    for body, kind in blocks:
+        if kind == "skipped":
+            continue
+        if kind == "questions":
+            found = _numbered(body) or _bulleted(body)
+        else:
+            found = _numbered(body)
+            if has_section:  # вне разделов с вопросами считаются только пункты со знаком «?»
+                found = [q for q in found if "?" in q.full_text]
+        questions.extend(found)
+    used: set[int] = set()
+    for q in questions:  # номера второго раздела не повторяют номера первого
+        if q.number in used:
+            q.number = max(used) + 1
+        used.add(q.number)
+    return Guide(questions=questions, headings=[h[1] for h in heads], has_questions_section=has_section)
 
 
 # ---------------------------------------------------------------------------
@@ -282,7 +322,7 @@ def check_question(q: Question, rubric: GuideRubric) -> list[Finding]:
         if hit:
             out.append(Finding(check, rule.id, WARNING, rule.reason + " (проверьте)", q.number, hit))
     closed = rubric.rules["closed"]
-    if not q.has_follow_up:
+    if not q.has_follow_up and not rubric.continue_words.search(text):
         hit = first_hit(closed.patterns, text)
         if hit:
             out.append(Finding("closed", closed.id, ERROR, closed.reason, q.number, hit))

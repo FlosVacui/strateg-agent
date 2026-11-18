@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from guide_corpus import CORPUS
 from strateg import guide
 from strateg.guide import Question
 
@@ -20,6 +21,7 @@ BAD = [
     ("Купили бы вы подписку на доставку обедов за 199 рублей в месяц?", "future"),
     ("Если бы такой сервис существовал, вы бы его установили?", "future"),
     ("Хотели бы вы получать напоминания о заказе?", "future"),
+    ("Если бы у вас было приложение, что бы изменилось?", "future"),
     ("Планируете ли вы менять способ заказа в следующем году?", "future"),
     ("Не правда ли, что заказывать обеды по телефону неудобно?", "leading"),
     ("Согласитесь, что общий список заказов экономит время?", "leading"),
@@ -80,8 +82,8 @@ def test_closed_question_with_a_follow_up_is_allowed():
 
 
 def test_doubtful_signs_are_warnings_not_errors():
-    assert checks("Что бы вы сделали в такой ситуации?", "ошибка") == set()
-    assert "future" in checks("Что бы вы сделали в такой ситуации?", "предупреждение")
+    assert checks("Что бы изменилось в заказе обедов?", "ошибка") == set()
+    assert "future" in checks("Что бы изменилось в заказе обедов?", "предупреждение")
     assert "opinion" in checks("Как вы думаете, почему заказ занимает так много времени?", "предупреждение")
     assert "closed" in checks("Вы заказывали обеды на прошлой неделе?", "предупреждение")
 
@@ -196,3 +198,76 @@ def test_rubric_patterns_do_not_flag_the_template_wording():
     """Описания в шаблоне гайда — не вопросы: рубрика не должна ловить сам шаблон как плохой гайд."""
     text = (ROOT / "knowledge" / "templates" / "interview-guide.md").read_text(encoding="utf-8")
     assert guide.parse_guide(text).questions == []
+
+
+# --- корпус, собранный отдельно от правил ------------------------------------------------------------
+
+
+def _verdict(text: str) -> str:
+    found = guide.check_question(q(text), RUBRIC)
+    if any(f.level == "ошибка" for f in found):
+        return "E"
+    return "W" if found else "O"
+
+
+@pytest.mark.parametrize(("want", "text"), CORPUS)
+def test_independent_corpus_in_both_directions(want, text):
+    got = _verdict(text)
+    if want == "E":
+        assert got == "E", text  # плохой вопрос — ошибка
+    elif want == "W":
+        assert got in ("E", "W"), text  # плохой, но не всегда проверяемый по тексту — хотя бы предупреждение
+    else:
+        assert got != "E", text  # хороший вопрос ложной ошибки не получает
+
+
+def test_a_dash_inside_a_word_does_not_open_the_question():
+    assert "closed" in checks("Вы когда-нибудь отменяли заказ?", "ошибка")
+    assert "closed" not in checks("Что-то пошло не так — вы отменили заказ?", "ошибка")
+
+
+def test_continuation_in_the_same_sentence_makes_a_closed_question_allowed():
+    assert "closed" not in checks("Было ли так, что заказ не приехал, и что вы тогда сделали?")
+    assert "closed" in checks("Было ли так, что заказ не приехал, когда вы звонили?", "ошибка")
+
+
+def _two_section_guide(extra_question: str) -> str:
+    items = "\n".join(f"{n}. {t}" for n, t in enumerate(GOOD[:8], start=1))
+    return (
+        "# Гайд\n\n## Цель\nц\n\n## Кого спрашиваем\nк\n\n## Вопросы о прошлом опыте\n"
+        f"{items}\n\n## Уточняющие вопросы\n1. {extra_question}\n\n"
+        "## Что слушаем\nс\n\n## Чего не спрашиваем\n1. Будете ли вы?\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Купите ли вы подписку?",
+        "Согласитесь, что звонить неудобно?",
+        "Сколько бы вы заплатили за наш сервис?",
+    ],
+)
+def test_a_second_section_of_questions_is_checked_too(text):
+    report = guide.check_guide(_two_section_guide(text), RUBRIC)
+    assert len(report.guide.questions) == 9, "второй раздел считается, «Чего не спрашиваем» нет"
+    assert report.errors and report.errors[0].question == 9
+    assert guide.check_guide(_two_section_guide(GOOD[9]), RUBRIC).errors == []
+
+
+def test_numbered_items_with_a_question_mark_outside_a_question_section_are_counted():
+    items = "\n".join(f"{n}. {t}" for n, t in enumerate(GOOD[:8], start=1))
+    body = f"## Вопросы\n{items}\n\n## Дальше\n1. Купите ли вы подписку?\n2. Без знака вопроса\n"
+    g = guide.parse_guide(body)
+    assert len(g.questions) == 9 and g.questions[-1].number == 9
+
+
+def test_part_b_asks_about_the_product_name_in_the_questions():
+    assert "Г-Б7" in [x["id"] for x in RUBRIC.part_b]
+
+
+def test_each_new_sign_works_on_its_own():
+    assert "future" in checks("Сколько бы стоило такое решение вашей команде?", "ошибка")
+    assert "future" in checks("Будет ли это удобно, когда курьер приедет вовремя?", "ошибка")
+    assert "closed" in checks("Вы где-то заказывали обеды на команду?", "предупреждение")
+    assert "closed" not in checks("Где вы заказывали обеды на команду?")

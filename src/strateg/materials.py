@@ -416,13 +416,15 @@ def _known_material(p: Project, rel: str, sha: str) -> Source | None:
 
 CONSENT_TEMPLATE = "knowledge/templates/consent.md"
 MAX_CONSENT_CHARS = 300
+_CONSENT_DATE = re.compile(r"(?<![\d.])(?:\d{1,2}\.\d{1,2}\.(?:\d{4}|\d{2})|\d{4}-\d{2}-\d{2})(?![\d.])")
 
 
-def check_consent(raw: str | None) -> str:
+def check_consent(raw: str | None) -> tuple[str, list[str]]:
     """Отметка согласия собеседника: как и когда оно получено, без его имени и контактов.
 
     Без отметки расшифровка интервью в работу не идёт. Отметка хранится в реестре источников, поэтому
     персональных данных в ней быть не должно: «письменно в чате, 12.11.2026», а не «Иван, +7…».
+    Возвращает отметку и предупреждения (слово латиницей с заглавной может оказаться именем).
     """
     text = " ".join((raw or "").split())
     if not text:
@@ -435,27 +437,100 @@ def check_consent(raw: str | None) -> str:
         raise CliError(
             f"отметка согласия длиннее {MAX_CONSENT_CHARS} знаков: одна строка, как и когда получено"
         )
-    if not re.search(r"\d", text):
+    if not _CONSENT_DATE.search(text):
         raise CliError(
-            "в отметке согласия нет даты: напишите, как и когда оно получено, например «устно, 12.11.2026»"
+            "в отметке согласия нет даты: напишите, как и когда оно получено, и дату в виде "
+            "ДД.ММ.ГГГГ или ГГГГ-ММ-ДД, например «устно, 12.11.2026»"
         )
     if safety.mask_personal(text)[1] or safety.find_names(text):
         raise CliError(
             "в отметке согласия есть имя, телефон, почта или номер документа собеседника: "
             "в реестре они не хранятся, напишите «собеседник 1» и как получено согласие"
         )
-    return text
+    warnings: list[str] = []
+    latin = safety.find_latin_names(text)
+    if latin:
+        warnings.append(
+            "в отметке согласия есть слова латиницей с заглавной ("
+            + ", ".join(w for w, _ in latin[:5])
+            + "): если это имя собеседника, уберите его, в реестре имён быть не должно"
+        )
+    return text, warnings
 
 
-_INTERVIEW_NAME = re.compile(r"интервью|interview|расшифровк|transcript|респондент", re.IGNORECASE)
-_INTERVIEW_LINE = re.compile(
-    r"^\s*(?:интервьюер|респондент|interviewer|respondent|вопрос|ответ)\s*\d*\s*[:—-]", re.I | re.M
-)
+# Расшифровка без названного вида: отказ только по сильным признакам, слабые дают предупреждение.
+_STRONG_NAME = re.compile(r"расшифровк|transcript", re.IGNORECASE)
+_WEAK_NAME = re.compile(r"интервью|interview|респондент|respondent", re.IGNORECASE)
+_LABEL = re.compile(r"^[\s>*_#-]*([^\W\d_][^:\n]{0,19}?)[\s*_]*:(?=\s*\S)")
+_DASH_LINE = re.compile(r"^\s*[—–-]\s+\S")
+_PAIRS_NOT_DIALOGUE = frozenset({frozenset({"вопрос", "ответ"}), frozenset({"question", "answer"})})
+_MIN_TURNS = 3  # реплик у каждого из двух собеседников для сильного признака
 
 
-def looks_like_interview(name: str, text: str) -> bool:
-    """По имени файла или репликам похоже на расшифровку интервью (подсказка, а не вывод)."""
-    return bool(_INTERVIEW_NAME.search(name) or len(_INTERVIEW_LINE.findall(text)) >= 3)
+def _turns(text: str) -> tuple[int, int]:
+    """Чередование двух коротких ярлыков реплик: (реплик у менее частого, число смен говорящего).
+
+    Ярлык — слово или два до двоеточия в начале строки («Модератор:», «Q:», «Анна:»), цифры в нём не в счёт.
+    Пары «Вопрос»/«Ответ» протокола и FAQ диалогом не считаются.
+    """
+    seq: list[str] = []
+    for line in text.split("\n"):
+        m = _LABEL.match(line)
+        if m:
+            seq.append(re.sub(r"[\d\s]+", " ", m.group(1)).strip().casefold())
+    if len(seq) < 2 * _MIN_TURNS:
+        return 0, 0
+    counts: dict[str, int] = {}
+    for label in seq:
+        counts[label] = counts.get(label, 0) + 1
+    top = sorted(counts, key=lambda k: (-counts[k], k))[:2]
+    if len(top) < 2 or frozenset(top) in _PAIRS_NOT_DIALOGUE:
+        return 0, 0
+    pair = [x for x in seq if x in top]
+    changes = sum(1 for a, b in zip(pair, pair[1:], strict=False) if a != b)
+    return min(counts[top[0]], counts[top[1]]), changes
+
+
+def _dash_turns(text: str) -> int:
+    """Диалог через тире: наибольшее число строк-реплик подряд (по две на пару)."""
+    best = run = 0
+    for line in text.split("\n"):
+        if _DASH_LINE.match(line):
+            run += 1
+            best = max(best, run)
+        elif line.strip():
+            run = 0
+    return best
+
+
+def transcript_signs(name: str, text: str, ext: str) -> tuple[bool, list[str]]:
+    """Признаки расшифровки интервью без названного вида: (сильные ли, названия признаков).
+
+    Сильные: «расшифровка» или `transcript` в имени файла; чередование двух ярлыков реплик не меньше трёх раз
+    у каждого (для тире — не меньше шести строк подряд). Слабые: «интервью» и «респондент» в имени, пары
+    «Вопрос»/«Ответ», короткое чередование. Отказ — только по сильным, слабые дают предупреждение.
+    """
+    strong: list[str] = []
+    weak: list[str] = []
+    if _STRONG_NAME.search(name):
+        strong.append("в имени файла «расшифровка»")
+    elif _WEAK_NAME.search(name):
+        weak.append("в имени файла «интервью» или «респондент»")
+    low, changes = _turns(text)
+    if low >= _MIN_TURNS and changes >= 2 * _MIN_TURNS - 1:
+        strong.append("реплики двух собеседников с ярлыками по очереди")
+    elif low >= 2 and changes >= 3:
+        weak.append("реплики двух собеседников по очереди")
+    dash = _dash_turns(text)
+    if dash >= 2 * _MIN_TURNS:
+        strong.append("диалог через тире")
+    elif dash >= 4:
+        weak.append("диалог через тире")
+    if re.search(r"^\s*(?:вопрос|ответ)\s*\d*\s*:", text, re.I | re.M):
+        weak.append("пары «Вопрос»/«Ответ»")
+    if ext not in TEXT_LIKE:  # таблица или презентация расшифровкой интервью не принимается
+        return False, [*strong, *weak]
+    return bool(strong), [*strong, *weak]
 
 
 def register(p: Project, file: Path, forced_kind: str | None, consent: str | None = None) -> Outcome:
@@ -473,8 +548,9 @@ def register(p: Project, file: Path, forced_kind: str | None, consent: str | Non
     ext = file.suffix.lower()
     refuse_audio_video(ext)
     kind = pick_kind(ext, forced_kind)
+    consent_warnings: list[str] = []
     if kind == "интервью":
-        consent = check_consent(consent)
+        consent, consent_warnings = check_consent(consent)
     elif consent is not None:
         raise UsageError("--consent относится к расшифровке интервью: добавьте `--kind интервью`")
     name_hit = bool(safety.mask_personal(file.name)[1])
@@ -502,26 +578,39 @@ def register(p: Project, file: Path, forced_kind: str | None, consent: str | Non
 
     report: safety.MaterialReport | None = None
     text: str | None = None
+    hints: list[str] = []
     if kind != "изображение":
         report = safety.inspect_material(extract_text(body, ext, kind))
-        if (
-            kind == "интервью"
-        ):  # в расшифровке главное персональное данное — имя: заменяется, а не только называется
+        if kind == "интервью":
+            # в расшифровке главное персональное данное — имя: заменяется, а не только называется.
+            # Расшифровка всегда идёт путём персональных данных: словарь имён неполон, обезличенную копию
+            # сверяет человек (`add --confirm`), исходник уходит из inputs/.
             masked, named = safety.mask_names(report.text)
             if named:
                 report.text = masked
                 report.replacements = [*report.replacements, *named]
+            if safety.NAMES_CATEGORY not in report.anonymized:
                 report.anonymized = [*report.anonymized, safety.NAMES_CATEGORY]
-            report.names = []
+            report.names = safety.find_latin_names(report.text)  # латиница с заглавной: имена не заменены
         text = report.text
-        if forced_kind is None and kind != "интервью" and looks_like_interview(file.name, text):
-            raise CliError(
-                "похоже на расшифровку интервью, а вид не назван: расшифровку принимают только с согласием "
-                "собеседника, имена в ней заменяются. Интервью — `strateg add <файл> --kind интервью "
-                "--consent '<как получено, дата>'`; не интервью — тот же вызов с "
-                '`--kind "заметка пользователя"` (или другим видом файла)'
-            )
-    pii = bool(report and report.replacements) or name_hit
+        if forced_kind is None and kind != "интервью":
+            strong, signs = transcript_signs(file.name, text, ext)
+            if strong:
+                alt = KIND_BY_EXT.get(ext, "заметка пользователя")
+                raise CliError(
+                    "похоже на расшифровку интервью, а вид не назван ("
+                    + "; ".join(signs)
+                    + "): расшифровку принимают только с согласием собеседника, имена в ней заменяются. "
+                    "Интервью — `strateg add <файл> --kind интервью --consent '<как получено, дата>'`; "
+                    f'не интервью — тот же вызов с `--kind "{alt}"`'
+                )
+            if signs:
+                hints.append(
+                    "по признакам это может быть расшифровка интервью (" + "; ".join(signs) + "): "
+                    "если так, добавьте файл заново с `--kind интервью --consent '<как получено, дата>'`, "
+                    "иначе имена в тексте не заменяются"
+                )
+    pii = bool(report and report.replacements) or name_hit or kind == "интервью"
 
     outcome: Outcome | None = None
     with proj.transaction(p, rollback=False):
@@ -606,6 +695,8 @@ def register(p: Project, file: Path, forced_kind: str | None, consent: str | Non
                 shutil.move(str(original_moved), str(file))
             raise
     _warnings(outcome)
+    outcome.warnings[:0] = consent_warnings
+    outcome.warnings.extend(hints)
     return outcome
 
 
@@ -657,7 +748,14 @@ def _duplicate(p: Project, twin: Source, file: Path, rel: str) -> Outcome:
 def _warnings(outcome: Outcome) -> None:
     s, rep = outcome.source, outcome.report
     w = outcome.warnings
-    if (rep is not None and rep.replacements) or NAME_CATEGORY in s.anonymized:
+    if s.kind == "интервью":
+        w.append(
+            "в работу идёт только обезличенная копия, исходник вынесен из inputs/ и ждёт вашего "
+            f"подтверждения: `strateg add --confirm {s.id}`. Сверьте копию с исходником: словарь имён "
+            "неполон, он пропускает имена латиницей и строчными и принимает за имена названия сервисов "
+            "и городов («Макс», «в Королёве»). Проверьте названия сервисов и городов"
+        )
+    elif (rep is not None and rep.replacements) or NAME_CATEGORY in s.anonymized:
         w.append(
             f"найдены {safety.found_what(s.anonymized)}: в работу идёт только обезличенная копия, исходник "
             "вынесен из inputs/ "
@@ -667,8 +765,8 @@ def _warnings(outcome: Outcome) -> None:
         w.append(safety.keys_message(rep.key_kinds))
     if rep is not None and rep.names:
         w.append(
-            "возможные имена людей в тексте (словарь ошибается: «Роза», «Вера»); имена не заменены, "
-            "решаете вы: "
+            "возможные имена людей в тексте (словарь ошибается: «Роза», «Вера»; латиницей с заглавной "
+            "имена не заменяются); имена не заменены, решаете вы: "
             + ", ".join(f"{n} (строка {line})" for n, line in rep.names[:12])
             + (f" и ещё {len(rep.names) - 12}" if len(rep.names) > 12 else "")
         )

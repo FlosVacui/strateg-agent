@@ -288,8 +288,8 @@ def test_without_gitleaks_the_built_in_patterns_still_work(work, cli, tmp_path, 
 
 
 def test_archive_never_holds_personal_data(work, cli, tmp_path, private):
-    (work / "inputs" / "созвон.txt").write_text(NOTE_WITH_PII, encoding="utf-8")
-    assert cli("add", "созвон.txt")[0] == 0
+    (work / "inputs" / "интервью.txt").write_text(NOTE_WITH_PII, encoding="utf-8")
+    assert cli("add", "интервью.txt")[0] == 0
     # до подтверждения замен упаковка отказывает, исходник в .tmp/ в архив не попал бы в любом случае
     assert cli("pack", "--out", str(tmp_path / "demo.zip"))[0] == 1
     assert cli("add", "--confirm", "И-3")[0] == 0
@@ -300,13 +300,13 @@ def test_archive_never_holds_personal_data(work, cli, tmp_path, private):
         assert secret not in text, secret
     assert "[телефон]" in text and "[почта]" in text
     assert not any("pending" in n or "private" in n for n in names(tmp_path / "demo.zip"))
-    assert (private / "demo" / "И-3" / "созвон.txt").is_file()
+    assert (private / "demo" / "И-3" / "интервью.txt").is_file()
 
 
 def test_original_with_personal_data_left_in_the_project_blocks_the_archive(work, cli, tmp_path, private):
-    original = work / "inputs" / "созвон.txt"
+    original = work / "inputs" / "интервью.txt"
     original.write_text(NOTE_WITH_PII, encoding="utf-8")
-    assert cli("add", "созвон.txt")[0] == 0
+    assert cli("add", "интервью.txt")[0] == 0
     assert cli("add", "--confirm", "И-3")[0] == 0
     (work / "inputs" / "резерв.txt").write_text(NOTE_WITH_PII, encoding="utf-8")  # человек вернул исходник
     code, _, err = cli("pack", "--out", str(tmp_path / "demo.zip"))

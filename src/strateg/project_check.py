@@ -475,8 +475,83 @@ def _line_problem(kind: str, locator: str, quote: str, text: str) -> str | None:
     return None
 
 
+_SOURCE_REF = re.compile(r"(?<![\w-])И-([1-9][0-9]*)(?!\d)")
+_SYNTHETIC_DIRECT, _SYNTHETIC_DERIVED = "direct", "derived"
+
+
+def synthetic_ids(sources: SourcesFile | None) -> set[str]:
+    return {s.id for s in sources.sources if s.kind == "синтетика"} if sources else set()
+
+
+def synthetic_mentions(text: str | None, synth: set[str]) -> list[str]:
+    """Номера `И-n` синтетических источников, названные в тексте."""
+    return sorted({f"И-{n}" for n in _SOURCE_REF.findall(text or "") if f"И-{n}" in synth})
+
+
+def synthetic_claims(claims: Iterable[Claim], sources: SourcesFile | None) -> dict[str, str]:
+    """Утверждения, у которых нет опоры, кроме синтетики: `direct` — тип «синтетика», `derived` — опирается
+    только на синтетику по цепочке basis или цитирует только синтетический источник, либо в taken_from
+    названа синтетическая сессия (пересказ без ссылки). Утверждения с настоящей опорой в словарь не входят.
+    """
+    synth = synthetic_ids(sources)
+    by_id = {c.id: c for c in claims}
+    found: dict[str, str | None] = {}
+
+    # Обход в глубину явным стеком: цепочка basis бывает длиннее предела рекурсии Python.
+    # Основание, которое уже стоит на текущем пути, — цикл: опорой на синтетику не считается,
+    # сам цикл называет другая проверка.
+    for start in by_id.values():
+        if start.id in found:
+            continue
+        if start.type == "синтетика":
+            found[start.id] = _SYNTHETIC_DIRECT
+            continue
+        path = [start.id]
+        on_path = {start.id}
+        pending = {start.id: iter([r for r in start.basis if r in by_id])}
+        support: dict[str, list[bool]] = {start.id: [q.source in synth for q in start.quotes]}
+        while path:
+            cid = path[-1]
+            ref = next(pending[cid], None)
+            if ref is not None:
+                child = by_id[ref]
+                if ref in found:
+                    support[cid].append(bool(found[ref]))
+                elif child.type == "синтетика":
+                    found[ref] = _SYNTHETIC_DIRECT
+                    support[cid].append(True)
+                elif ref in on_path:
+                    support[cid].append(False)
+                else:
+                    path.append(ref)
+                    on_path.add(ref)
+                    pending[ref] = iter([r for r in child.basis if r in by_id])
+                    support[ref] = [q.source in synth for q in child.quotes]
+                continue
+            c = by_id[cid]
+            got = support.pop(cid)
+            retold = bool(synthetic_mentions(c.taken_from, synth))
+            res: str | None = _SYNTHETIC_DERIVED if (got and all(got)) or retold else None
+            found[cid] = res
+            path.pop()
+            on_path.discard(cid)
+            del pending[cid]
+            if path:
+                support[path[-1]].append(bool(res))
+    return {k: v for k, v in found.items() if v}
+
+
+def _synthetic_note(ref: str, kind: str, note: str) -> str:
+    """Почему ссылка на `ref` не годится: сама синтетика или утверждение, стоящее только на ней."""
+    if kind == _SYNTHETIC_DIRECT:
+        return f"{ref} — синтетика: {note}"
+    return f"{ref} опирается только на синтетику (basis или цитата из сессии): {note}"
+
+
 def _check_claims(root: Path, sources: SourcesFile, claims: ClaimsFile, errors: list[str]) -> None:
     snapshots: dict[str, str | None] = {}
+    synth_ids = synthetic_ids(sources)
+    taint = synthetic_claims(claims.claims, sources)
     by_src = {s.id: s for s in sources.sources}
     by_id = {c.id: c for c in claims.claims}
     for dup in sorted(_duplicates([c.id for c in claims.claims])):
@@ -572,10 +647,18 @@ def _check_claims(root: Path, sources: SourcesFile, claims: ClaimsFile, errors: 
             )
         if c.type == "синтетика" and any(s.kind != "синтетика" for s in quote_sources):
             err("утверждение типа «синтетика» цитирует источник другого вида: нужен источник «синтетика»")
-        if c.type in ("факт", "прогноз"):
+        if c.type in ("факт", "прогноз", "допущение"):
             for ref in c.basis:
-                if ref in by_id and by_id[ref].type == "синтетика":
-                    err(f"поле basis: {ref} — синтетика: {_SYNTHETIC_PROOF}")
+                if ref in taint:
+                    err("поле basis: " + _synthetic_note(ref, taint[ref], _SYNTHETIC_PROOF))
+            for field, text in (("taken_from", c.taken_from), ("text", c.text)):
+                named = synthetic_mentions(text, synth_ids)
+                if named:
+                    err(
+                        f"поле {field}: назван источник вида «синтетика» ({', '.join(named)}): пересказ "
+                        f"ответов модельного респондента не делает утверждение типа «{c.type}»; "
+                        "оно ссылается на опору человека"
+                    )
         if any(s.suspicious for s in quote_sources) and not c.suspicious:
             err("источник помечен «подозрительный», а утверждение нет (suspicious)")
 
@@ -739,9 +822,14 @@ class _Registry:
 class _Claims:
     """Ссылки на утверждения: номер существует, тип и статус подходят месту ссылки."""
 
-    def __init__(self, claims: ClaimsFile | None, errors: list[str]) -> None:
+    def __init__(
+        self, claims: ClaimsFile | None, errors: list[str], sources: SourcesFile | None = None
+    ) -> None:
         self.by_id: dict[str, Claim] | None = {c.id: c for c in claims.claims} if claims else None
         self.errors = errors
+        # утверждения без опоры, кроме синтетики: сама синтетика и стоящие только на ней
+        self.synthetic = synthetic_claims(claims.claims, sources) if claims else {}
+        self.synthetic_sources = synthetic_ids(sources)
 
     def type_of(self, ref: str) -> str | None:
         c = self.by_id.get(ref) if self.by_id is not None else None
@@ -779,8 +867,10 @@ class _Claims:
         if c is None:
             self.errors.append(f"{where}, поле {field}: ссылка на несуществующее утверждение {ref}")
             return
-        if c.type == "синтетика" and synthetic_note:
-            self.errors.append(f"{where}, поле {field}: {ref} — синтетика: {synthetic_note}")
+        if ref in self.synthetic and synthetic_note:
+            self.errors.append(
+                f"{where}, поле {field}: " + _synthetic_note(ref, self.synthetic[ref], synthetic_note)
+            )
         elif type_ is not None and c.type not in ((type_,) if isinstance(type_, str) else type_):
             wanted = "» или «".join((type_,) if isinstance(type_, str) else type_)
             self.errors.append(f"{where}, поле {field}: {ref} имеет тип «{c.type}», а здесь нужен «{wanted}»")
@@ -791,11 +881,6 @@ class _Claims:
             )
         if live_for:
             self.supported(where, field, ref, live_for)
-
-    def not_synthetic(self, where: str, field: str, ref: str) -> None:
-        """Ошибка, если ссылка из текстового поля ведёт на синтетику: довод она не даёт."""
-        if self.by_id is not None and ref in self.by_id and self.by_id[ref].type == "синтетика":
-            self.errors.append(f"{where}, поле {field}: {ref} — синтетика: {_SYNTHETIC_PROOF}")
 
     def supported(self, where: str, field: str, ref: str, what: str) -> None:
         """Ошибка, если у действующего утверждения вердикт «не подтверждает» (ADR-0007)."""
@@ -853,7 +938,7 @@ def _check_outputs(
 
     Возвращает: есть ли `frame.yaml` и его разобранная модель (None, если файл не разобран).
     """
-    cl = _Claims(claims, errors)
+    cl = _Claims(claims, errors, sources)
     source_ids = {s.id for s in sources.sources} if sources else None
     frame_ok, frame = _load_optional(root, FRAME_FILE, FrameFile, (), errors)
     plan_ok, plan = _load_optional(root, PLAN_FILE, PlanFile, ("questions",), errors)
@@ -906,6 +991,7 @@ def _check_outputs(
         gap_reg,
         opt_reg,
         errors,
+        synthetic_files=frozenset({OPTIONS_FILE, DECISIONS_FILE, PROMISES_FILE}),
     )
     _check_promise_marks(root, prom_ok, prom, errors)
     _check_history(root, frame, errors)
@@ -943,6 +1029,7 @@ def _check_completeness(comp: CompletenessFile, errors: list[str]) -> None:
 # Номера в свободном тексте: «закроем П-9», «как в Вар-2», «см. У-14». Не путать с «ВП-2» и «ПП-3»:
 # перед буквой не должно быть слова или дефиса.
 _TEXT_REF = re.compile(r"(?<![\w-])(Вар|П|У)-([1-9][0-9]*)(?!\d)")
+_HYPOTHESIS_FIELDS = frozenset({"hypothesis", "hypotheses"})
 _ONLY_REF = re.compile(r"(?:Вар|ВП|ПП|Реш|[ПУО])-[1-9][0-9]*")
 
 
@@ -963,9 +1050,15 @@ def _check_text_refs(
     gap_reg: _Registry,
     opt_reg: _Registry,
     errors: list[str],
+    synthetic_files: frozenset[str] = frozenset(),
 ) -> None:
     """Номера `П-n`, `У-n` и `Вар-n` в текстовых полях файлов выхода сверяются с реестрами, как ссылки
-    в полях-ссылках. Поле, в котором стоит только номер, — ссылка: её сверяют правила своего поля."""
+    в полях-ссылках. Поле, в котором стоит только номер, — ссылка: её сверяют правила своего поля.
+
+    В файлах `synthetic_files` в тексте нельзя назвать синтетику: утверждение, стоящее только на ней, и
+    источник вида «синтетика» — пересказ ответов модельных респондентов довода не даёт. Исключение — поля
+    гипотез (по имени поля): там сказать, что гипотеза пока на синтетике, можно.
+    """
     for file, sections, model in files:
         if model is None:
             continue
@@ -978,12 +1071,24 @@ def _check_text_refs(
                 field = _where(path[2:])
             else:
                 where, field = file, _where(path)
+            check_synthetic = file in synthetic_files and not _HYPOTHESIS_FIELDS & {str(k) for k in path}
+            if check_synthetic:
+                for ref in synthetic_mentions(text, cl.synthetic_sources):
+                    errors.append(
+                        f"{where}, поле {field}: в тексте назван {ref}, источник вида «синтетика»: "
+                        f"{_SYNTHETIC_PROOF}"
+                    )
             for letter, number in dict.fromkeys(_TEXT_REF.findall(text)):
                 ref = f"{letter}-{number}"
                 head = f"{where}, поле {field}: в тексте названо {ref}"
                 if letter == "У":
                     if cl.by_id is not None and ref not in cl.by_id:
                         errors.append(f"{head}, такого утверждения нет в реестре")
+                    elif check_synthetic and ref in cl.synthetic:
+                        errors.append(
+                            f"{where}, поле {field}: в тексте названо "
+                            + _synthetic_note(ref, cl.synthetic[ref], _SYNTHETIC_PROOF)
+                        )
                     continue
                 reg = gap_reg if letter == "П" else opt_reg
                 if not reg.exists:
@@ -1055,7 +1160,6 @@ def _check_options(opts: OptionsFile, cl: _Claims, errors: list[str]) -> None:
         cl.ref(where, "claims", ref, live_for="рекомендацию", synthetic_note=_SYNTHETIC_PROOF)
     for letter, number in dict.fromkeys(_TEXT_REF.findall(rec.why)):
         if letter == "У":
-            cl.not_synthetic(where, "why", f"У-{number}")
             cl.supported(where, "why", f"У-{number}", "довод рекомендации")
     known = [cl.type_of(ref) for ref in rec.claims]
     if None not in known and "факт" not in known:

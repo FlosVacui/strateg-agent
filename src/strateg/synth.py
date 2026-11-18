@@ -38,8 +38,8 @@ HEADER = (
     f"{LABEL}: сессия модельного респондента. Ответы написаны моделью, это не слова людей и не данные "
     "о людях: из них получаются гипотезы и вопросы для гайда, а не факты."
 )
-_TURN = re.compile(r"^(Вопрос|Ответ)(?:\s+\d+)?\s*:\s*(.*)$")
-_LABELLED = re.compile(r"^СИНТЕТИКА\b\s*[:\-—]?\s*(.*)$", re.IGNORECASE)
+_TURN = re.compile(r"^(Вопрос|Ответ)(?:\s+(\d+))?\s*:\s*(.*)$")
+_LABELLED = re.compile(rf"^{LABEL}:\s*(.*)$")  # метка ровно «СИНТЕТИКА:» в начале ответа
 _FLATTERY = re.compile(
     r"отличн\w+\s+иде|было\s+бы\s+(?:здорово|отлично|круто|замечательно)|с\s+удовольствием|"
     r"обязательно\s+(?:куплю|буду|воспользуюсь|попробую)|звучит\s+(?:здорово|отлично|круто)",
@@ -55,12 +55,14 @@ _PERSONA_ORIGIN = ("рамк", "картин", "аудитори", "матери
 def parse_session(raw: str) -> list[tuple[str, str]]:
     """Пары (вопрос, ответ без метки): вход должен чередовать «Вопрос» и «Ответ», каждый ответ — с меткой."""
     turns: list[list[str]] = []
+    numbers: list[str | None] = []
     for n, line in enumerate(raw.replace("\r\n", "\n").replace("\r", "\n").split("\n"), start=1):
         if not line.strip():
             continue
         m = _TURN.match(line.strip())
         if m:
-            turns.append([m.group(1), m.group(2).strip()])
+            turns.append([m.group(1), m.group(3).strip()])
+            numbers.append(m.group(2))
         elif turns:
             turns[-1][1] = f"{turns[-1][1]} {line.strip()}".strip()
         else:
@@ -77,6 +79,11 @@ def parse_session(raw: str) -> list[tuple[str, str]]:
     unlabelled: list[str] = []
     for k in range(0, len(turns), 2):
         question, answer = turns[k][1], turns[k + 1][1]
+        asked, answered = numbers[k], numbers[k + 1]
+        if asked and answered and int(asked) != int(answered):
+            raise CliError(
+                f"пара {k // 2 + 1}: «Ответ {answered}» стоит после «Вопрос {asked}»: номера должны совпадать"
+            )
         m = _LABELLED.match(answer)
         if not m:
             unlabelled.append(str(k // 2 + 1))

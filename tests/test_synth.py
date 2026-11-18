@@ -118,6 +118,36 @@ def test_every_answer_must_carry_the_label(started, cli):
 
 
 @pytest.mark.parametrize(
+    "answer",
+    [
+        "синтетика была хорошая",
+        "Синтетика: ответ",
+        "СИНТЕТИКА ответ",
+        "СИНТЕТИКА - ответ",
+        "СИНТЕТИКА— ответ",
+    ],
+)
+def test_the_label_is_exactly_the_word_with_a_colon_at_the_start_of_the_answer(started, cli, answer):
+    bad = SESSION.replace("Ответ 1: СИНТЕТИКА: В прошлую", f"Ответ 1: {answer} В прошлую")
+    code, _, err = synth(cli, started, bad)
+    assert code == 1 and "нет метки «СИНТЕТИКА»" in err
+    assert len(sources_of(started)) == 1
+
+
+def test_the_number_of_the_answer_must_equal_the_number_of_its_question(started, cli):
+    bad = SESSION.replace("Ответ 2:", "Ответ 7:")
+    code, _, err = synth(cli, started, bad)
+    assert code == 1 and "номера должны совпадать" in err and "Ответ 7" in err
+    assert len(sources_of(started)) == 1
+
+
+def test_a_session_without_numbers_is_still_accepted(started, cli):
+    plain = SESSION.replace("Вопрос 1:", "Вопрос:").replace("Ответ 1:", "Ответ:")
+    plain = plain.replace("Вопрос 2:", "Вопрос:").replace("Ответ 2:", "Ответ:")
+    assert synth(cli, started, plain)[0] == 0
+
+
+@pytest.mark.parametrize(
     "text",
     [
         "Просто текст без пар",
@@ -325,7 +355,7 @@ def test_negative_why_of_the_recommendation_names_a_synthetic_claim(project):
         d["recommendation"]["why"] += " Это подтвердил модельный респондент (У-7)."
 
     edit_yaml(project, "options.yaml", change)
-    assert_error(project, "options.yaml", "recommendation", "поле why", "У-7 — синтетика")
+    assert_error(project, "options.yaml", "recommendation.why", "У-7 — синтетика")
 
 
 def test_negative_recommendation_claims_decision_basis_and_gaps_stay_closed(project):

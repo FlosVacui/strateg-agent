@@ -64,6 +64,7 @@ from strateg.project_check import (
     _where,
     check_project,
     frame_key,
+    synthetic_claims,
 )
 
 STEP_NAMES = {
@@ -1655,6 +1656,12 @@ def cmd_claim_add(args: argparse.Namespace) -> int:
                 )
             )
         if new_claims:
+            taint = synthetic_claims(p.claims.claims, p.sources)
+            by_result = {r["id"]: r for r in results}
+            for claim, _ in new_claims:
+                found = _synthetic_warnings(claim, taint)
+                if found:
+                    by_result[claim.id]["warnings"] = found
             p.save_claims()
             p.save_state()
     lines = []
@@ -1666,7 +1673,27 @@ def cmd_claim_add(args: argparse.Namespace) -> int:
         )
         if r.get("suspicious"):
             lines.append(f"  внимание: {r['id']} помечено «подозрительный» (источник с обращением к ИИ)")
+        lines += [f"  внимание: {r['id']}: {w}" for w in r.get("warnings", [])]
     return emit(args, {"claims": results}, lines)
+
+
+_PERSONA_WORD = re.compile(r"респондент|персон", re.IGNORECASE)
+
+
+def _synthetic_warnings(c: Claim, taint: dict[str, str]) -> list[str]:
+    """Предупреждения о синтетике: общий текст читается как вывод о людях, гипотеза на ней не проверена."""
+    out: list[str] = []
+    if c.type == "синтетика" and not _PERSONA_WORD.search(c.text):
+        out.append(
+            "текст синтетики читается как вывод о людях: назовите модельного респондента или персону "
+            "(«Модельный респондент … сказал …»), в поиске и пересказе тип теряется"
+        )
+    if c.type == "гипотеза" and taint.get(c.id) == "derived":
+        out.append(
+            "гипотеза опирается только на ответы модельных респондентов: не проверена на людях, "
+            "основанием рекомендации и решения она не станет"
+        )
+    return out
 
 
 # «VP-2»: латинская V вместо русской В (общий разбор «почти номеров» её не знает)
@@ -2207,6 +2234,11 @@ def cmd_add(args: argparse.Namespace) -> int:
             lines.append(f"  строка {r.line}: {r.label} — «{materials.line_context(rep.text, r.line)}»")
         if len(rep.replacements) > 30:
             lines.append(f"  … и ещё {len(rep.replacements) - 30}")
+    elif s.kind == "интервью":
+        lines.append(
+            "Имён для замены не нашлось, но расшифровка идёт путём персональных данных: исходник убран "
+            "из inputs/ в .tmp/ проекта и в работу не идёт, пока вы не подтвердите копию."
+        )
     elif materials.NAME_CATEGORY in s.anonymized:
         lines.append(
             "В имени файла найдены персональные данные: текст записан под нейтральным именем. "

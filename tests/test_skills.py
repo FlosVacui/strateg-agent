@@ -32,8 +32,8 @@ MAX_SKILL_BODY_LINES = 500
 MAX_AGENTS_LINES = 200
 MAX_ROLE_LINES = 150
 
-# Роли с обёртками и их права по описанию ролей. Ключи `config/routing.yaml` — те же имена плюс
-# `respondent`: у него обёртки нет. У классификатора инструментов нет: текст роли — тело обёртки.
+# Роли с обёртками и их права по описанию ролей; ключи `config/routing.yaml` — те же имена. У классификатора
+# и респондента инструментов нет: текст роли — тело обёртки.
 ROLE_TOOLS = {
     "researcher": ["WebSearch", "Read", "Grep", "Glob", "Bash"],
     "critic": ["Read", "Grep", "Glob"],
@@ -1421,6 +1421,9 @@ INTERVIEW_CARD_ANCHORS = (
     "Признаки угодливости",
     "каждой персоне свой вызов",
     "«пользователи хотят» со ссылкой на синтетику",
+    "(Wang и др.)",
+    "(Sharma и др.)",
+    "Ложная уверенность — по общему знанию",
 )
 
 
@@ -1467,6 +1470,10 @@ def test_interview_skill_says_the_three_turns_and_forbids_the_leak():
         "свой вызов `respondent`",
         "knowledge/templates/consent.md",
         "knowledge/templates/interview-guide.md",
+        "пары «Вопрос n» гайда и «Ответ n» роли",
+        "Гайд правь по ответам",
+        "персоны по одной, без прежних ответов",
+        "(`add --confirm И-n`)",
     ):
         assert needle in text, needle
     for phrase in ("«гайд интервью»", "«поговори с модельными респондентами»", "«вот расшифровка»"):
@@ -1492,3 +1499,14 @@ def test_consent_form_has_its_sections_and_makes_no_legal_promises():
 def test_the_interview_guide_template_asks_for_eight_to_twelve_questions_about_the_past():
     text = (TEMPLATES / "interview-guide.md").read_text(encoding="utf-8")
     assert "8–12 вопросов" in text and "о будущем, мнении и продукте не спрашиваем" in text
+
+
+def test_adr_0007_says_the_call_is_confirmed_not_the_content_of_the_answer():
+    text = (ROOT / "docs" / "adr" / "0007-subagents.md").read_text(encoding="utf-8")
+    assert "подтверждён вызов, а не содержание ответа" in text
+
+
+def test_the_card_does_not_claim_what_its_sources_do_not_say():
+    text = (METHODS / "interviews.md").read_text(encoding="utf-8")
+    assert "2023–2025" in text and "2023–2026" not in text
+    assert "ложную уверенность" not in text

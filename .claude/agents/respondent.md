@@ -1,6 +1,6 @@
 ---
 name: respondent
-description: "Модельный респондент: отвечает в образе персоны, метка «СИНТЕТИКА»."
+description: "Модельный респондент, метка «СИНТЕТИКА»."
 tools: []
 model: inherit
 readonly: true

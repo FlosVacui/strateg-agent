@@ -83,6 +83,7 @@ def test_interview_with_consent_stores_the_mark_at_the_source(demo, cli):
     assert s["kind"] == "интервью" and s["consent"] == CONSENT
     lines = (demo / s["text_path"]).read_text(encoding="utf-8").splitlines()
     assert lines[0].startswith("[строка 1] Интервьюер:") and lines[2].startswith("[строка 4] Интервьюер:")
+    assert cli("add", "--confirm", s["id"])[0] == 0
     assert check_project(demo) == []
 
 
@@ -145,6 +146,7 @@ def test_old_project_without_the_field_stays_clean(demo, cli):
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
     del data["sources"][0]["consent"]
     path.write_bytes(yaml.safe_dump(data, allow_unicode=True).encode("utf-8"))
+    assert cli("add", "--confirm", "И-1")[0] == 0
     assert check_project(demo) == []
 
 
@@ -214,6 +216,7 @@ def interview_claim(locator: str | None = None, text: str = "ждали курь
 def talk(demo, cli):
     put(demo, "talk.txt", TRANSCRIPT)
     assert add(cli, "talk.txt", "--consent", CONSENT)[0] == 0
+    assert cli("add", "--confirm", "И-1")[0] == 0  # человек сверил обезличенную копию
     return demo
 
 
@@ -262,7 +265,7 @@ def test_docx_transcript_gets_line_marks_too(demo, cli, tmp_path):
 # --- расшифровка под другим видом --------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("name", ["расшифровка.txt", "interview-3.md", "transcript.txt"])
+@pytest.mark.parametrize("name", ["расшифровка.txt", "Расшифровка встречи.md", "transcript.txt"])
 def test_transcript_by_name_without_a_kind_is_refused(demo, cli, name):
     put(demo, name, "Просто текст.\nЕщё строка.\n")
     code, _, err = cli("add", name)
@@ -271,14 +274,14 @@ def test_transcript_by_name_without_a_kind_is_refused(demo, cli, name):
 
 
 def test_transcript_by_dialogue_lines_without_a_kind_is_refused(demo, cli):
-    put(demo, "notes.txt", TRANSCRIPT)
+    put(demo, "notes.txt", TRANSCRIPT + TRANSCRIPT)  # по три реплики у каждого собеседника
     code, _, err = cli("add", "notes.txt")
     assert code == 1 and "похоже на расшифровку интервью" in err
     assert sources(demo) == []
 
 
 def test_saying_that_it_is_a_note_lets_the_file_through(demo, cli):
-    put(demo, "notes.txt", TRANSCRIPT)
+    put(demo, "notes.txt", TRANSCRIPT + TRANSCRIPT)
     assert cli("add", "notes.txt", "--kind", "заметка пользователя")[0] == 0
     assert sources(demo)[0]["kind"] == "заметка пользователя"
 

@@ -463,6 +463,25 @@ def find_names(text: str, limit: int = 50) -> list[tuple[str, int]]:
 
 NAME_LABEL = "[имя]"
 NAMES_CATEGORY = "имена"
+_LATIN_WORD = re.compile(r"(?<![A-Za-z@/._-])[A-Z][a-z]{2,}(?![A-Za-z@/._-])")
+
+
+def find_latin_names(text: str, limit: int = 50) -> list[tuple[str, int]]:
+    """Слова латиницей с заглавной буквы: (слово, строка). Словарь имён их не знает, замены не будет.
+
+    Это предупреждение: «Telegram» и «Excel» тоже попадут сюда, решает человек.
+    """
+    seen: set[str] = set()
+    out: list[tuple[str, int]] = []
+    for m in _LATIN_WORD.finditer(text):
+        word = m.group()
+        if word.lower() in seen:
+            continue
+        seen.add(word.lower())
+        out.append((word, text.count("\n", 0, m.start()) + 1))
+        if len(out) >= limit:
+            break
+    return out
 
 
 def _is_name(word: str, morph) -> bool:
