@@ -150,10 +150,18 @@ def _norm_gate(text: str) -> str:
 def _cmd_new_copy(args: argparse.Namespace) -> int:
     if args.mode is not None or args.region is not None:
         raise UsageError("с --from режим и регион берутся из источника: --mode и --region не нужны")
+    if not args.source.strip():
+        raise UsageError(
+            "не указан проект-источник: после --from нужен номер проекта или папка, например example"
+        )
     done = project_copy.copy_project(args.source, args.id)
     p = done.project
     d = _status_data(p)
-    notes = [f"В копию не вошли {', '.join(project_copy.NOT_COPIED)}: это временные файлы и кэш источника."]
+    notes = (
+        [f"В копию не вошли {', '.join(done.skipped)}: это временные файлы и кэш источника."]
+        if done.skipped
+        else []
+    )
     if done.mentions:
         notes.append(
             f"В файлах копии есть ссылки на папку источника `projects/{done.source}/`: "
@@ -168,7 +176,7 @@ def _cmd_new_copy(args: argparse.Namespace) -> int:
         "path": str(p.root),
         "active": True,
         "files": done.files,
-        "not_copied": list(project_copy.NOT_COPIED),
+        "not_copied": done.skipped,
         "mentions": done.mentions,
         "next_action": d["next_action"],
     }
@@ -189,7 +197,7 @@ def _cmd_new_copy(args: argparse.Namespace) -> int:
 
 
 def cmd_new(args: argparse.Namespace) -> int:
-    if getattr(args, "source", None):
+    if getattr(args, "source", None) is not None:
         return _cmd_new_copy(args)
     p = proj.create_project(args.id, args.mode or "автопилот", args.region)
     proj.set_active(args.id)
@@ -229,9 +237,11 @@ def _open_steps(p: Project) -> dict[str, JournalEvent]:
     return {h: e for h, e in last.items() if e.status == "начато"}
 
 
-def _attempts(p: Project, step: str) -> int:
+def _attempts(p: Project, step: str, *, whole: bool = False) -> int:
+    """Сколько раз шаг начат в этом проекте (у копии — после «копии проекта»); `whole` — по всему журналу."""
     name = proj.step_action_name(step)
-    return sum(1 for e in p.journal if e.kind == "действие" and e.name == name and e.status == "начато")
+    events = p.journal if whole else proj.own_events(p.journal)
+    return sum(1 for e in events if e.kind == "действие" and e.name == name and e.status == "начато")
 
 
 def _refresh_budget(p: Project) -> None:
@@ -268,7 +278,8 @@ def cmd_step_start(args: argparse.Namespace) -> int:
                 step=step,
                 kind="действие",
                 name=proj.step_action_name(step),
-                idempotency_hash=proj.key_hash("step", step, attempt),
+                # ключ не повторяет ключ источника: журнал копии начинается с его событий
+                idempotency_hash=proj.key_hash("step", step, _attempts(p, step, whole=True) + 1),
                 status="начато",
             )
         )
@@ -453,12 +464,13 @@ def cmd_stop(args: argparse.Namespace) -> int:
     if not reason:
         raise UsageError('причина остановки пустая: укажите --reason "<текст>"')
     with proj.transaction(p):
-        stops = sum(1 for e in p.journal if e.kind == "действие" and e.name == "внеплановая остановка")
+        stops = sum(1 for e in proj.own_events(p.journal) if proj.is_stop(e))
+        earlier = sum(1 for e in p.journal if proj.is_stop(e))  # ключ не повторяет ключ остановки источника
         p.add_event(
             p.event(
                 kind="действие",
                 name="внеплановая остановка",
-                idempotency_hash=proj.key_hash("stop", stops + 1),
+                idempotency_hash=proj.key_hash("stop", earlier + 1),
                 status="выполнено",
                 duration_s=0,
                 message=reason,
@@ -2382,7 +2394,7 @@ def cmd_budget_check(args: argparse.Namespace) -> int:
     # Один отказ по одной причине, пока лимит не менялся: числа в тексте растут и не сравниваются,
     # а событие «бюджет изменён» (и любое другое событие вида «бюджет») начинает счёт заново.
     with proj.transaction(p):
-        last = next((e for e in reversed(p.journal) if e.kind == "бюджет"), None)
+        last = next((e for e in reversed(proj.own_events(p.journal)) if e.kind == "бюджет"), None)
         if not (last is not None and (last.message or "").startswith(head)):
             p.add_event(p.event(kind="бюджет", message=message))
             p.save_state()
@@ -2574,7 +2586,9 @@ def _status_data(p: Project) -> dict[str, Any]:
             "verdicts": classify.summary(p),
         },
         "failures": sum(
-            1 for e in p.journal if e.kind == "ошибка" or (e.kind == "действие" and e.status == "ошибка")
+            1
+            for e in proj.own_events(p.journal)
+            if e.kind == "ошибка" or (e.kind == "действие" and e.status == "ошибка")
         ),
         "work_minutes": round(proj.work_seconds(p.journal, at=proj.now()) / 60, 2),
         "running_minutes": running,

@@ -15,12 +15,15 @@
 - хеши файлов в `state.yaml` пересчитываются, поэтому `check` копии чист, а «изменено вне агента» не
   возникает; расхождения, которые уже были в источнике, записываются обычным событием.
 
-Копия строится в новой папке под её блокировкой; при любой ошибке папка убирается целиком.
+Копия строится во временной папке рядом под её блокировкой и переименовывается в `projects/<номер>/` в конце;
+при любой ошибке временная папка убирается целиком.
 """
 
 from __future__ import annotations
 
 import shutil
+import tempfile
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -31,6 +34,7 @@ from strateg.project import CliError, Project, UsageError
 from strateg.project_check import COST_FILE, check_project, key_hash
 
 NOT_COPIED = (".tmp/", ".cache/")
+CHANGED_TEXT = "источник менялся во время копирования, копия не создана: повторите команду"
 
 
 @dataclass
@@ -40,6 +44,7 @@ class CopyResult:
     source_step: str
     files: int
     mentions: list[str] = field(default_factory=list)  # файлы копии, где упомянута папка источника
+    skipped: list[str] = field(default_factory=list)  # что из `NOT_COPIED` было в источнике и не вошло
 
 
 def resolve_source(name: str) -> Path:
@@ -79,8 +84,36 @@ def _earlier_work(src: Project) -> str:
     return f"{minutes:.1f}".replace(".", ",") + f" мин работы, {money}"
 
 
+def _digest(root: Path, files: list[Path]) -> dict[str, str] | None:
+    """Хеши файлов источника; None — какой-то файл исчез или не читается (источник меняют)."""
+    try:
+        return {p.relative_to(root).as_posix(): proj.sha256_bytes(p.read_bytes()) for p in files}
+    except OSError:
+        return None
+
+
+def _source_changed(src_root: Path, before: dict[str, str] | None) -> bool:
+    """Менялся ли источник с начала копирования: набор файлов или их содержимое."""
+    after = _digest(src_root, packlib.project_files(src_root))
+    return before is None or after is None or after != before
+
+
+def _skipped(src_root: Path) -> list[str]:
+    """Что из `NOT_COPIED` в источнике было и в копию не вошло."""
+    return [
+        name
+        for name in NOT_COPIED
+        if (src_root / name.rstrip("/")).is_dir()
+        and any(p.is_file() for p in (src_root / name.rstrip("/")).rglob("*"))
+    ]
+
+
 def copy_project(source: str, new_id: str) -> CopyResult:
-    """Копирует проект-источник в `projects/<new_id>/`. Отказ — `CliError`; источник не меняется."""
+    """Копирует проект-источник в `projects/<new_id>/`. Отказ — `CliError`; источник не меняется.
+
+    Копия собирается во временной папке рядом (`projects/.<номер>-….copy`) и одним переименованием встаёт
+    на место `projects/<номер>/`: если процесс убит посреди копирования, полупапки с номером не остаётся.
+    """
     from strateg.commands import STEP_NAMES  # импорт здесь: commands импортирует этот модуль
 
     proj.check_project_id(new_id)
@@ -104,34 +137,64 @@ def copy_project(source: str, new_id: str) -> CopyResult:
         )
     src = Project.load_readonly(src_root)
     files = packlib.project_files(src_root)
+    before = _digest(src_root, files)
+    skipped = _skipped(src_root)
 
-    try:
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.mkdir()  # занимает номер: параллельная копия с тем же номером получит отказ
-    except FileExistsError:
-        raise CliError(f"проект {new_id} уже существует: {dest.name}") from None
-
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    work = Path(tempfile.mkdtemp(prefix=f".{new_id}-", suffix=".copy", dir=dest.parent))
     failure: BaseException | None = None
     result: CopyResult | None = None
     try:
-        with proj.locked(dest):
+        with proj.locked(work):
             for path in files:
-                target = dest / path.relative_to(src_root)
+                target = work / path.relative_to(src_root)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(path, target)
             for name in proj.SUBFOLDERS:  # git пустых папок не хранит
-                (dest / name).mkdir(exist_ok=True)
-            proj.write_text(dest / COST_FILE, "")
-            result = _finish(dest, src, src_root, files, new_id, STEP_NAMES)
+                (work / name).mkdir(exist_ok=True)
+            proj.write_text(work / COST_FILE, "")
+            result = _finish(work, src, src_root, files, new_id, STEP_NAMES)
     except BaseException as exc:  # noqa: BLE001 - папка убирается при любой причине, ошибка идёт дальше
         failure = exc
+    if failure is None and result is not None:
+        try:
+            if _source_changed(src_root, before):
+                failure = CliError(CHANGED_TEXT)
+            else:
+                _put_in_place(work, dest, new_id)
+        except BaseException as exc:  # noqa: BLE001
+            failure = exc
     if failure is not None or result is None:
-        shutil.rmtree(dest, ignore_errors=True)  # блокировка уже отпущена: на Windows занятый файл не удалить
+        shutil.rmtree(work, ignore_errors=True)  # блокировка отпущена: на Windows занятый файл не удалить
+        if (
+            isinstance(failure, CliError)
+            and failure.message != CHANGED_TEXT
+            and _source_changed(src_root, before)
+        ):
+            raise CliError(CHANGED_TEXT) from failure  # копия не прошла проверку из-за правки источника
         if failure is not None:
             raise failure
         raise CliError("копия не создана")
     proj.set_active(new_id)
+    result.project = Project.load_readonly(dest)
+    result.skipped = skipped
     return result
+
+
+def _put_in_place(work: Path, dest: Path, new_id: str) -> None:
+    """Переименовывает готовую копию в `projects/<номер>/`; занятый номер — отказ."""
+    for attempt in range(5):
+        if dest.exists():
+            raise CliError(f"проект {new_id} уже существует: {dest.name}")
+        try:
+            work.rename(dest)
+            return
+        except FileExistsError:
+            raise CliError(f"проект {new_id} уже существует: {dest.name}") from None
+        except PermissionError:  # Windows: антивирус или индексатор держат файл, пока не отпустит
+            if attempt == 4:
+                raise
+            time.sleep(0.2)
 
 
 def _finish(

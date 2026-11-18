@@ -27,8 +27,10 @@ def assistant(
     geo: str | None = None,
     speed: str | None = None,
     tools: tuple[tuple[str, str], ...] = (),
+    at: str | None = None,
 ) -> str:
-    """Строка ассистента. `tools` — вызовы инструментов в `content`: пары (id блока, имя инструмента)."""
+    """Строка ассистента. `tools` — вызовы инструментов в `content`: пары (id блока, имя инструмента);
+    `at` — `timestamp` строки (ISO 8601, как пишет среда)."""
     usage: dict = {
         "input_tokens": inp,
         "output_tokens": out,
@@ -48,7 +50,10 @@ def assistant(
             {"type": "tool_use", "id": block, "name": name, "input": {"query": "синтетический запрос"}}
             for block, name in tools
         ]
-    return json.dumps({"type": "assistant", "message": message}, ensure_ascii=False)
+    record: dict = {"type": "assistant", "message": message}
+    if at is not None:
+        record["timestamp"] = at
+    return json.dumps(record, ensure_ascii=False)
 
 
 def searches(*ids: str) -> tuple[tuple[str, str], ...]:

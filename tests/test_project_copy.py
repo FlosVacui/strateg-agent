@@ -16,9 +16,12 @@ from pathlib import Path
 import pytest
 
 from helpers import PUBLISHER, edit_text, journal_of, load_yaml, write_claims
+from strateg import accounting, project_copy
+from strateg import pack as packlib
 from strateg import project as proj
-from strateg import project_copy
+from strateg.budget import load_defaults
 from strateg.project_check import check_project
+from transcripts import OPUS, append, assistant, write
 
 FIXTURES = Path(__file__).parent / "fixtures"
 NAMES = ("project_valid", "project_complete", "project_follow_up")
@@ -26,8 +29,9 @@ MSK = dt.timezone(dt.timedelta(hours=3))
 
 
 def put_example(home: Path, fixture: str = "project_follow_up", name: str = "example") -> Path:
+    """Фикстура без `.tmp/`: тесты рубрики открывают её на месте и оставляют там `.tmp/lock`."""
     dest = home / name
-    shutil.copytree(FIXTURES / fixture, dest)
+    shutil.copytree(FIXTURES / fixture, dest, ignore=shutil.ignore_patterns(".tmp"))
     return dest
 
 
@@ -97,12 +101,12 @@ def test_json_output(cli, example):
     data = json.loads(out)
     assert data["ok"] is True and data["project"] == "mine" and data["from"] == "example"
     assert data["active"] is True and data["step"] == "7" and data["files"] > 10
-    assert data["not_copied"] == [".tmp/", ".cache/"] and data["next_action"]
+    assert data["not_copied"] == [] and data["next_action"]  # в источнике нечего было не копировать
 
 
 def test_source_may_be_a_folder_path(cli, tmp_path, home):
     elsewhere = tmp_path / "чужая папка" / "пример проекта"
-    shutil.copytree(FIXTURES / "project_valid", elsewhere)
+    shutil.copytree(FIXTURES / "project_valid", elsewhere, ignore=shutil.ignore_patterns(".tmp"))
     before = snapshot(elsewhere)
     code, out, err = new_copy(cli, source=str(elsewhere))
     assert code == 0, err
@@ -144,6 +148,36 @@ def test_source_with_service_files_is_read_without_touching_them(cli, example):
     before = snapshot(example)
     assert new_copy(cli)[0] == 0
     assert snapshot(example) == before
+
+
+def test_fixture_is_put_without_its_service_folder(home, tmp_path, monkeypatch):
+    """Тесты рубрики оставляют `.tmp/lock` в самой фикстуре; в тест она попадает без него."""
+    fixtures = tmp_path / "fixtures"
+    shutil.copytree(
+        FIXTURES / "project_valid", fixtures / "project_valid", ignore=shutil.ignore_patterns(".tmp")
+    )
+    (fixtures / "project_valid" / ".tmp").mkdir()
+    (fixtures / "project_valid" / ".tmp" / "lock").write_bytes(b"\n")
+    monkeypatch.setitem(globals(), "FIXTURES", fixtures)
+    dest = put_example(home, "project_valid")
+    assert not (dest / ".tmp").exists()
+    assert ".tmp/lock" not in snapshot(dest)
+
+
+def test_the_note_about_skipped_files_names_only_what_was_there(cli, home, example):
+    code, out, err = new_copy(cli, "--json", name="clean")
+    assert code == 0, err
+    assert json.loads(out)["not_copied"] == []
+    code, out, err = new_copy(cli, name="plain")
+    assert code == 0 and "В копию не вошли" not in out
+    (example / ".cache").mkdir()
+    (example / ".cache" / "fetch.json").write_text("{}", encoding="utf-8")
+    code, out, err = new_copy(cli, "--json", name="cached")
+    assert code == 0 and json.loads(out)["not_copied"] == [".cache/"]
+    (example / ".tmp" / "pending").mkdir(parents=True)
+    (example / ".tmp" / "pending" / "И-9.txt").write_text("x", encoding="utf-8")
+    code, out, err = new_copy(cli, name="both")
+    assert code == 0 and "В копию не вошли .tmp/, .cache/" in out
 
 
 def test_service_files_are_not_carried_over(cli, home, example):
@@ -431,3 +465,223 @@ def test_router_skill_has_the_continue_example_entry():
     assert "uv run strateg new <id> --from example" in text
     entry = next(line for line in text.splitlines() if "Продолжи пример" in line)
     assert "status" in entry and "Дальше" in entry and "projects/example/" in entry
+
+
+# --- пустой --from ---
+
+
+@pytest.mark.parametrize("empty", ["", "  "])
+def test_an_empty_source_is_a_refusal_not_a_new_empty_project(cli, home, example, empty):
+    code, out, err = cli("new", "mine", "--from", empty)
+    assert code == 2 and "не указан проект-источник" in err
+    assert not (home / "mine").exists() and not (home / ".active").exists()
+    code, out, err = cli("new", "mine", "--from", empty, "--json")
+    assert code == 2 and json.loads(out)["ok"] is False
+
+
+# --- сбои, попытки, остановки и отказы по бюджету считаются от копии ---
+
+
+def test_failures_attempts_and_stops_count_from_the_copy(cli, home, clock):
+    assert cli("new", "example")[0] == 0
+    assert cli("event", "error", "--message", "сбой в источнике")[0] == 0
+    clock.advance(5)
+    assert cli("step", "start", "1")[0] == 0 and cli("step", "done", "1")[0] == 0
+    assert cli("stop", "--reason", "вопрос")[0] == 0
+    assert json.loads(cli("status", "--json")[1])["failures"] == 1
+    clock.advance(60)
+    assert new_copy(cli)[0] == 0
+    assert json.loads(cli("status", "--json")[1])["failures"] == 0
+    assert "сбоев 0" in cli("status", "--line")[1]
+    code, out, err = cli("step", "start", "1", "--json")
+    assert code == 0, err
+    assert json.loads(out)["attempt"] == 1  # попытки источника не в счёт
+    assert cli("step", "done", "1")[0] == 0
+    assert cli("check")[0] == 0  # ключ шага не повторяет ключ шага источника
+    assert json.loads(cli("stop", "--reason", "вопрос копии", "--json")[1])["stops"] == 1
+    assert cli("check")[0] == 0  # ключ остановки не повторяет ключ остановки источника
+    assert json.loads(cli("stop", "--reason", "ещё вопрос", "--json")[1])["stops"] == 2
+    assert cli("check")[0] == 0
+    assert cli("event", "error", "--message", "сбой копии")[0] == 0
+    assert json.loads(cli("status", "--json")[1])["failures"] == 1
+
+
+def budget_events(root: Path) -> list[dict]:
+    return [e for e in journal_of(root) if e["kind"] == "бюджет"]
+
+
+def test_a_budget_refusal_is_written_again_in_the_copy(cli, home, clock):
+    assert cli("new", "example")[0] == 0
+    assert cli("step", "start", "2б")[0] == 0
+    clock.advance(61 * 60)
+    assert cli("budget", "check", "--action", "fetch")[0] == 1  # время источника вышло
+    assert new_copy(cli)[0] == 0
+    assert cli("step", "start", "2б")[0] == 0
+    clock.advance(61 * 60)
+    assert cli("budget", "check", "--action", "fetch")[0] == 1  # и время копии: отказ той же причины
+    assert len(budget_events(home / "mine")) == 2  # отказ источника и отказ копии
+    assert cli("budget", "check", "--action", "fetch")[0] == 1  # повтор в копии не пишется
+    assert len(budget_events(home / "mine")) == 2
+
+
+# --- бюджет копии ---
+
+
+def test_budget_limits_of_the_copy_come_from_the_defaults_not_from_the_source(cli, home, example):
+    source = state_of(example)["budget"]
+    defaults = load_defaults().budget
+    assert (source["limit_usd"], source["limit_minutes"]) != (defaults.usd, defaults.minutes)
+    assert new_copy(cli)[0] == 0
+    budget = state_of(home / "mine")["budget"]
+    assert (budget["limit_usd"], budget["limit_minutes"]) == (defaults.usd, defaults.minutes)
+    data = json.loads(cli("status", "--json")[1])["budget"]
+    assert (data["limit_usd"], data["limit_minutes"]) == (defaults.usd, defaults.minutes)
+
+
+# --- расход прежнего сеанса ---
+
+
+def iso(moment: dt.datetime) -> str:
+    return moment.astimezone(dt.UTC).isoformat().replace("+00:00", "Z")
+
+
+def session_source(path: Path) -> list[accounting.Source]:
+    return [accounting.Source("main", path, accounting.MAIN_ROLE)]
+
+
+def cost_ids(root: Path) -> list[str]:
+    lines = (root / "cost.jsonl").read_text(encoding="utf-8").splitlines()
+    return [json.loads(x)["message_id"] for x in lines if x.strip()]
+
+
+def test_session_messages_written_before_the_copy_do_not_reach_the_copy(cli, home, clock, tmp_path):
+    assert cli("new", "src")[0] == 0
+    tx = tmp_path / "claude" / "s.jsonl"
+    start = clock.value
+    write(
+        tx,
+        assistant("m1", OPUS, out=5000, at=iso(start)),
+        assistant("m2", OPUS, out=5000, at=iso(start + dt.timedelta(seconds=30))),
+    )
+    assert accounting.account(home / "src", "sess", session_source(tx)).added == 2
+    assert "Записей: 2" in cli("cost", "report")[1]
+    clock.advance(600)
+    assert new_copy(cli, source="src")[0] == 0
+    clock.advance(60)
+    append(tx, assistant("m3", OPUS, out=100, at=iso(clock.value)))  # тот же сеанс, уже после копии
+    clock.advance(60)
+    done = accounting.account(home / "mine", "sess", session_source(tx))
+    assert (done.added, done.earlier) == (1, 2)
+    assert cost_ids(home / "mine") == ["m3"]
+    code, out, err = cli("cost", "report")
+    assert code == 0 and "$0,0020" in out and "Записей: 1" in out
+    assert json.loads(cli("status", "--json")[1])["cost_usd"] == pytest.approx(0.002)
+    assert check_project(home / "mine") == []
+    assert accounting.account(home / "mine", "sess", session_source(tx)).added == 0  # повтор ничего не меняет
+    assert cost_ids(home / "mine") == ["m3"]
+
+
+def test_messages_without_a_time_and_ordinary_projects_are_counted_as_before(cli, home, clock, tmp_path):
+    tx = tmp_path / "claude" / "s.jsonl"
+    old = iso(clock.value - dt.timedelta(days=3))
+    write(tx, assistant("a1", OPUS, out=100, at=old), assistant("a2", OPUS, out=100))
+    assert cli("new", "plain")[0] == 0  # не копия: время сообщения не важно
+    done = accounting.account(home / "plain", "sess", session_source(tx))
+    assert (done.added, done.earlier) == (2, 0)
+    assert cli("new", "example")[0] == 0
+    clock.advance(60)
+    assert new_copy(cli)[0] == 0
+    write(tx, assistant("b1", OPUS, out=100, at=old), assistant("b2", OPUS, out=100))
+    done = accounting.account(home / "mine", "sess", session_source(tx))
+    assert (done.added, done.earlier) == (1, 1)  # со временем до копии — не берётся, без времени — берётся
+    assert cost_ids(home / "mine") == ["b2"]
+
+
+# --- источник менялся во время копирования ---
+
+
+@pytest.mark.parametrize("when", ["before reading", "after reading"])
+def test_a_change_in_the_source_during_the_copy_asks_to_repeat(cli, home, example, monkeypatch, when):
+    order = packlib.project_files(example)
+    victim = order[-1] if when == "before reading" else order[0]  # файл ещё не скопирован / уже скопирован
+    moment = 1 if when == "before reading" else len(order)
+    calls = []
+    real = shutil.copyfile
+
+    def meddling(src, dst, *a, **kw):
+        calls.append(dst)
+        if len(calls) == moment:
+            with victim.open("ab") as f:
+                f.write(b"\n")
+        return real(src, dst, *a, **kw)
+
+    monkeypatch.setattr(project_copy.shutil, "copyfile", meddling)
+    code, out, err = new_copy(cli)
+    assert code == 1 and "источник менялся во время копирования" in err and "повторите команду" in err
+    assert "не прошла проверку" not in err and "state.yaml" not in err
+    assert not (home / "mine").exists() and not (home / ".active").exists()
+    assert not [p.name for p in home.iterdir() if p.name.startswith(".mine")]
+    monkeypatch.setattr(project_copy.shutil, "copyfile", real)
+    code, out, err = new_copy(cli)  # источник теперь не меняется: повтор проходит
+    assert code == 0, err
+
+
+def test_a_copy_broken_by_a_change_in_the_source_is_reported_as_a_change(cli, home, example, monkeypatch):
+    calls = []
+    real = shutil.copyfile
+
+    def meddling(src, dst, *a, **kw):
+        calls.append(dst)
+        if len(calls) == 1:
+            with (example / "state.yaml").open("ab") as f:  # файл ещё не скопирован: копия получит обрывок
+                f.write(b"\n: [\n")
+        return real(src, dst, *a, **kw)
+
+    monkeypatch.setattr(project_copy.shutil, "copyfile", meddling)
+    code, out, err = new_copy(cli)
+    assert code == 1 and "источник менялся во время копирования" in err and "повторите команду" in err
+    assert not (home / "mine").exists() and not [p for p in home.iterdir() if p.name.startswith(".mine")]
+
+
+# --- копия встаёт на место одним переименованием ---
+
+
+def test_the_copy_is_built_beside_and_renamed_at_the_end(cli, home, example, monkeypatch):
+    seen = []
+    real = shutil.copyfile
+
+    def watching(src, dst, *a, **kw):
+        seen.append((home / "mine").exists())
+        return real(src, dst, *a, **kw)
+
+    monkeypatch.setattr(project_copy.shutil, "copyfile", watching)
+    assert new_copy(cli)[0] == 0
+    assert seen and not any(seen)  # пока копируется, `projects/mine/` нет
+    assert (home / "mine" / "state.yaml").is_file()
+    assert not [p.name for p in home.iterdir() if p.name.startswith(".mine")]
+
+
+def test_a_killed_copy_leaves_no_half_folder_under_the_number(cli, home, example, monkeypatch):
+    calls = []
+    real = shutil.copyfile
+
+    def dying(src, dst, *a, **kw):
+        calls.append(dst)
+        if len(calls) == 6:
+            raise OSError("процесс убит")
+        return real(src, dst, *a, **kw)
+
+    monkeypatch.setattr(project_copy.shutil, "copyfile", dying)
+    real_rmtree = shutil.rmtree
+    monkeypatch.setattr(project_copy.shutil, "rmtree", lambda *a, **kw: None)  # убрать за собой не успели
+    with pytest.raises(OSError):
+        new_copy(cli)
+    assert not (home / "mine").exists() and not (home / ".active").exists()
+    assert [p.name for p in home.iterdir() if p.name.startswith(".mine")]  # недостроенная копия — рядом
+    monkeypatch.setattr(project_copy.shutil, "copyfile", real)
+    monkeypatch.setattr(project_copy.shutil, "rmtree", real_rmtree)
+    code, out, err = cli("use", "mine")
+    assert code == 1 and "не найден" in err
+    code, out, err = new_copy(cli)  # номер не занят: копию можно сделать снова
+    assert code == 0, err
+    assert cli("use", "mine")[0] == 0 and cli("check")[0] == 0

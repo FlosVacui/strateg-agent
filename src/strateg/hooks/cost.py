@@ -312,7 +312,7 @@ def gate(event: Mapping[str, Any], ctx: rules.Ctx) -> Gate:
         else:
             head = f"бюджет исчерпан ({' и '.join(reasons)}), хук отказал вызову {tool or 'инструмента'}:"
             text, ask = denial_text(tool, reasons, budget.summary_text(m)), False
-        last = next((e for e in reversed(p.journal) if e.kind == BUDGET_KIND), None)
+        last = next((e for e in reversed(proj.own_events(p.journal)) if e.kind == BUDGET_KIND), None)
         if not (last is not None and (last.message or "").startswith(head)):
             _note(
                 root,
