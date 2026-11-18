@@ -198,12 +198,19 @@ def build_parser() -> argparse.ArgumentParser:
         p.set_defaults(func=commands.run, handler=handler)
         return p
 
-    p = add("new", commands.cmd_new, "создать проект и сделать его активным")
+    p = add("new", commands.cmd_new, "создать проект (или копию проекта) и сделать его активным")
     p.add_argument("id", help="номер проекта: латинские строчные буквы, цифры, «-» и «_»")
     p.add_argument(
-        "--mode", choices=["автопилот", "пилот"], default="автопилот", help="режим (по умолчанию автопилот)"
+        "--mode", choices=["автопилот", "пилот"], default=None, help="режим (по умолчанию автопилот)"
     )
     p.add_argument("--region", help="регион по умолчанию для fetch, например RU-MOW")
+    p.add_argument(
+        "--from",
+        dest="source",
+        metavar="ПРОЕКТ",
+        help="скопировать проект (номер в projects/ или путь к папке), например example, и продолжить копию; "
+        "источник не меняется",
+    )
 
     p = add("use", commands.cmd_use, "выбрать активный проект")
     p.add_argument("id")

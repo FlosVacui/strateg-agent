@@ -20,7 +20,7 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from strateg import __version__, materials, outputs, safety
+from strateg import __version__, materials, outputs, project_copy, safety
 from strateg import budget as budgetlib
 from strateg import fetch as fetchlib
 from strateg import pack as packlib
@@ -147,17 +147,60 @@ def _norm_gate(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _cmd_new_copy(args: argparse.Namespace) -> int:
+    if args.mode is not None or args.region is not None:
+        raise UsageError("с --from режим и регион берутся из источника: --mode и --region не нужны")
+    done = project_copy.copy_project(args.source, args.id)
+    p = done.project
+    d = _status_data(p)
+    notes = [f"В копию не вошли {', '.join(project_copy.NOT_COPIED)}: это временные файлы и кэш источника."]
+    if done.mentions:
+        notes.append(
+            f"В файлах копии есть ссылки на папку источника `projects/{done.source}/`: "
+            + ", ".join(done.mentions)
+        )
+    data = {
+        "project": p.id,
+        "from": done.source,
+        "mode": p.state.mode,
+        "step": p.state.step,
+        "gates": dict(p.state.gates),
+        "path": str(p.root),
+        "active": True,
+        "files": done.files,
+        "not_copied": list(project_copy.NOT_COPIED),
+        "mentions": done.mentions,
+        "next_action": d["next_action"],
+    }
+    return emit(
+        args,
+        data,
+        [
+            f"Проект {p.id} создан как копия «{done.source}» и выбран активным (режим: {p.state.mode}).",
+            f"Папка: {p.root}",
+            f"Источник остановлен на шаге {p.state.step} ({d['step_name']}); ворота: "
+            + ", ".join(f"{g} {s}" for g, s in p.state.gates.items())
+            + ".",
+            "Время и стоимость копии считаются с нуля: работа над источником в них не входит.",
+            *notes,
+            "Дальше: `strateg status`, затем " + (d["next_action"] or "продолжить с текущего шага") + ".",
+        ],
+    )
+
+
 def cmd_new(args: argparse.Namespace) -> int:
-    p = proj.create_project(args.id, args.mode, args.region)
+    if getattr(args, "source", None):
+        return _cmd_new_copy(args)
+    p = proj.create_project(args.id, args.mode or "автопилот", args.region)
     proj.set_active(args.id)
     errors = check_project(p.root)
     if errors:
         return fail(args, CliError("созданный проект не прошёл проверку", errors))
     return emit(
         args,
-        {"project": p.id, "mode": args.mode, "path": str(p.root), "active": True},
+        {"project": p.id, "mode": p.state.mode, "path": str(p.root), "active": True},
         [
-            f"Проект {p.id} создан и выбран активным (режим: {args.mode}).",
+            f"Проект {p.id} создан и выбран активным (режим: {p.state.mode}).",
             f"Папка: {p.root}",
             "Дальше: `strateg step start 1`.",
         ],
@@ -264,8 +307,9 @@ def cmd_step_done(args: argparse.Namespace) -> int:
             )
         start = next(e for e in mine if e.idempotency_hash == last_hash and e.status == "начато")
         end = proj.now()
-        total = max((end - start.time).total_seconds(), 0.0)
-        waited = proj.waited_seconds(start.time, end, proj.human_waits(p.journal))
+        begin = proj.own_start(p.journal, start.time)  # шаг, начатый до копии проекта, считается от копии
+        total = max((end - begin).total_seconds(), 0.0)
+        waited = proj.waited_seconds(begin, end, proj.human_waits(p.journal))
         duration = round(max(total - waited, 0.0), 1)
         message = None
         if step == "7":  # выпуск: снимок файлов выхода и документов, с ним потом сравнивает `strateg diff`
