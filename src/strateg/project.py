@@ -261,6 +261,15 @@ class Project:
             return cls._load(root)
 
     @classmethod
+    def load_readonly(cls, root: Path) -> Project:
+        """Открывает проект без блокировки папки: в `root` ничего не пишется, даже `.tmp/lock`.
+
+        Для чтения чужой папки (источник копии, ADR-0003). Соседняя запись во время чтения не исключена:
+        вызывающий код проверяет прочитанное сам.
+        """
+        return cls._load(root)
+
+    @classmethod
     def _load(cls, root: Path) -> Project:
         try:
             project = cls(
@@ -619,6 +628,8 @@ RESEARCHER_TASK = "задание исследователю"  # событие 
 HUMAN_ANSWER = "ответ человека"  # событие хука: человек ответил на остановку; ход проекта, кончает ожидание
 RESUME_NOTE = "начато и не завершено до перерыва; обнаружено при возобновлении работы"  # пишет сводка
 
+COPY_ACTION = "копия проекта"  # событие CLI в начале копии: учёт времени копии идёт от него
+
 PAUSE_GATE = "ворота"
 PAUSE_STOP = "остановка"
 
@@ -628,6 +639,29 @@ Wait = tuple[dt.datetime, dt.datetime | None]  # начало ожидания �
 def is_resume_note(e: JournalEvent) -> bool:
     """«Прервано», которое пишет сама сводка при возобновлении работы."""
     return e.kind == "действие" and e.status == "прервано" and e.message == RESUME_NOTE
+
+
+def is_copy_event(e: JournalEvent) -> bool:
+    return e.kind == "действие" and e.name == COPY_ACTION
+
+
+def copy_time(events: list[JournalEvent]) -> dt.datetime | None:
+    """Когда проект скопирован из другого (последняя «копия проекта»); None — проект не копия."""
+    return next((e.time for e in reversed(events) if is_copy_event(e)), None)
+
+
+def own_events(events: list[JournalEvent]) -> list[JournalEvent]:
+    """События работы над этим проектом: от последней «копии проекта». Что было до неё — чужая работа."""
+    for i in range(len(events) - 1, -1, -1):
+        if is_copy_event(events[i]):
+            return events[i:]
+    return events
+
+
+def own_start(events: list[JournalEvent], start: dt.datetime) -> dt.datetime:
+    """Начало отсчёта работы не раньше копирования: шаг, начатый в источнике, до копии копии не стоит."""
+    cut = copy_time(events)
+    return start if cut is None else max(start, cut)
 
 
 def progress_events(events: list[JournalEvent]) -> list[JournalEvent]:
@@ -753,8 +787,9 @@ def interrupted_seconds(events: list[JournalEvent], started: JournalEvent) -> fl
     Простой от последнего события до возобновления в работу не входит.
     """
     progress = progress_events(events)
-    end = progress[-1].time if progress else started.time
-    return round(work_between(events, started.time, max(end, started.time)), 1)
+    begin = own_start(events, started.time)
+    end = progress[-1].time if progress else begin
+    return round(work_between(events, begin, max(end, begin)), 1)
 
 
 def work_seconds(events: list[JournalEvent], at: dt.datetime | None = None) -> float:
@@ -762,10 +797,13 @@ def work_seconds(events: list[JournalEvent], at: dt.datetime | None = None) -> f
 
     У «прервано» длительность — работа шага до перерыва; у старых записей её нет, они не прибавляют ничего.
     С `at` к сумме добавляется идущий шаг (начат, не завершён) без ожидания человека на воротах и после
-    «внеплановой остановки».
+    «внеплановой остановки». У копии проекта счёт идёт от события «копия проекта»: работа над источником
+    в неё не входит (шаг, начатый в источнике, считается от копирования).
     """
     total = sum(
-        e.duration_s or 0.0 for e in events if is_step_action(e) and e.status in ("выполнено", "прервано")
+        e.duration_s or 0.0
+        for e in own_events(events)
+        if is_step_action(e) and e.status in ("выполнено", "прервано")
     )
     if at is not None:
         last: dict[str, JournalEvent] = {}
@@ -775,13 +813,14 @@ def work_seconds(events: list[JournalEvent], at: dt.datetime | None = None) -> f
         waits = human_waits(events)
         for e in last.values():
             if e.status == "начато":
-                total += max((at - e.time).total_seconds() - waited_seconds(e.time, at, waits), 0.0)
+                begin = own_start(events, e.time)
+                total += max((at - begin).total_seconds() - waited_seconds(begin, at, waits), 0.0)
     return total
 
 
 def clock_seconds(events: list[JournalEvent]) -> float:
     """Время по часам: от первого до последнего события хода проекта; ожидание ответов и перерывы входят."""
-    progress = progress_events(events)
+    progress = progress_events(own_events(events))
     if len(progress) < 2:
         return 0.0
     return max((progress[-1].time - progress[0].time).total_seconds(), 0.0)

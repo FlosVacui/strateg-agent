@@ -11,6 +11,8 @@
 4. для новых сообщений считает цену по `config/prices.yaml` (`strateg.pricing`); модели нет в таблице —
    токены записываются, цена «нет данных». Вызовы `WebSearch` в сообщении входят в цену (плата за поиск и
    запрос к модели поиска), их доля — в `web_search_usd` записи;
+   в копии проекта (`strateg new --from`) сообщения, записанные в транскрипте раньше события «копия проекта»,
+   — расход источника: в учёт копии они не входят (сообщение без времени считается новым);
 5. дописывает записи в `cost.jsonl` тем же кодом, что журнал (`storage.append_tracked`), и сохраняет смещения,
    время пересчёта и сведение, исчерпан ли бюджет (`strateg.offsets`): по ним хук решает, пересчитывать ли
    расход перед вызовом, который платным не бывает.
@@ -23,6 +25,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -34,7 +37,7 @@ import yaml
 from strateg import budget, offsets, pricing, storage
 from strateg import project as proj
 from strateg import transcript as tr
-from strateg.models import SCHEMA_VERSION, CostRecord
+from strateg.models import SCHEMA_VERSION, CostRecord, JournalEvent
 from strateg.offsets import load_offsets, offsets_path
 
 ENVIRONMENT = "claude-code"
@@ -59,6 +62,7 @@ class Result:
     skipped: int = 0  # пропущено за этот разбор: битые строки и сообщения без учётных полей
     usd: float = 0.0  # цена добавленных сообщений там, где она известна
     unpriced: list[str] = field(default_factory=list)  # модели без цены среди добавленных, по разу
+    earlier: int = 0  # сообщения старше копирования проекта: расход источника, в этот проект не идут
 
 
 # --- Смещения (лёгкая часть — `strateg.offsets`: её читает хук без тяжёлых модулей) -------------------------
@@ -88,6 +92,17 @@ def _save_offsets(root: Path, data: Mapping[str, Any], timeout: float) -> None:
     folder.mkdir(parents=True, exist_ok=True)
     text = json.dumps(data, ensure_ascii=False, sort_keys=True, indent=1) + "\n"
     storage.atomic_write_bytes(offsets_path(root), text.encode("utf-8"), timeout)
+
+
+def copy_cut(root: Path) -> dt.datetime | None:
+    """Время события «копия проекта»; None — проект не копия (или журнал не прочитать)."""
+    try:
+        raw = (root / storage.JOURNAL_FILE).read_bytes()
+        if proj.COPY_ACTION.encode("utf-8") not in raw:
+            return None
+        return proj.copy_time(proj.read_jsonl(root / storage.JOURNAL_FILE, JournalEvent))
+    except (OSError, ValueError):
+        return None
 
 
 # --- Учтённые сообщения ------------------------------------------------------------------------------------
@@ -172,6 +187,7 @@ def account(
         saved = load_offsets(root)
         seen = recorded_ids((root / storage.COST_FILE).read_bytes())
         when = proj.now()
+        cut = copy_cut(root)
         lines: list[bytes] = []
         for src in sources:
             if not src.path.is_file():
@@ -186,6 +202,9 @@ def account(
             for message_id, usage in parsed.messages.items():
                 if message_id in seen:
                     result.duplicates += 1
+                    continue
+                if cut is not None and usage.time is not None and usage.time < cut:
+                    result.earlier += 1
                     continue
                 seen.add(message_id)
                 usd = pricing.message_cost(prices, usage)
