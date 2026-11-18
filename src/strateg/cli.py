@@ -1,6 +1,6 @@
 """Точка входа CLI `strateg`: `doctor` и команды проекта (`new`, `use`, `status`, `step`, `gate`, `fetch`,
 `add`, `claim`, `write`, `event`, `check`, `cost`, `budget`, `pack`, `rubric`, `route`, `due`, `impact`,
-`metric`, `diff`, `search`, `guide`, `synth`). Сами команды
+`metric`, `diff`, `search`, `guide`, `synth`, `data`, `calc`). Сами команды
 проекта — в `strateg.commands`, проверка полноты — в `strateg.rubric`, маршрут роли — в `strateg.routing`.
 
 Коды возврата: 0 — успех, 1 — ошибка данных или правил, 2 — ошибка использования.
@@ -21,9 +21,11 @@ from typing import NoReturn
 
 from strateg import (
     __version__,
+    calc,
     classify,
     commands,
     costreport,
+    datacheck,
     followup,
     guide,
     routing,
@@ -305,6 +307,32 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.set_defaults(func=commands.run, handler=guide.cmd_guide_check)
     p.add_argument("file", help="файл гайда (Markdown по шаблону knowledge/templates/interview-guide.md)")
+
+    d = add("data", datacheck.cmd_data_check, "проверка таблиц")
+    data_sub = d.add_subparsers(dest="data_command", required=True, parser_class=_Parser)
+    p = data_sub.add_parser(
+        "check", parents=[common], help="профиль таблицы: типы, пропуски, единицы, периоды, дубликаты"
+    )
+    p.set_defaults(func=commands.run, handler=datacheck.cmd_data_check)
+    p.add_argument("target", help="источник-таблица (И-n) или её файл в inputs/ после `add`")
+
+    cl = add("calc", calc.cmd_calc_run, "воспроизводимые расчёты")
+    calc_sub = cl.add_subparsers(dest="calc_command", required=True, parser_class=_Parser)
+    p = calc_sub.add_parser(
+        "run", parents=[common], help="выполнить расчёт outputs/calc/<имя>.py и записать <имя>.json"
+    )
+    p.set_defaults(func=commands.run, handler=calc.cmd_calc_run)
+    p.add_argument("script", help="скрипт расчёта в outputs/calc/")
+    p.add_argument(
+        "--timeout", type=int, help=f"предел времени, секунд (по умолчанию {calc.DEFAULT_TIMEOUT})"
+    )
+    p = calc_sub.add_parser(
+        "check", parents=[common], help="пересчитать все расчёты проекта и сравнить с сохранёнными"
+    )
+    p.set_defaults(func=commands.run, handler=calc.cmd_calc_check)
+    p.add_argument(
+        "--timeout", type=int, help=f"предел времени на расчёт, секунд (по умолчанию {calc.DEFAULT_TIMEOUT})"
+    )
 
     sy = add("synth", synth.cmd_synth_add, "синтетические респонденты")
     synth_sub = sy.add_subparsers(dest="synth_command", required=True, parser_class=_Parser)

@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from strateg import __version__, materials, outputs, project_copy, safety
 from strateg import budget as budgetlib
+from strateg import calc as calclib
 from strateg import fetch as fetchlib
 from strateg import pack as packlib
 from strateg import project as proj
@@ -31,6 +32,7 @@ from strateg.hooks import flags as hookflags
 from strateg.models import (
     LOCATOR_KINDS,
     SCHEMA_VERSION,
+    CalcRef,
     Claim,
     ClaimId,
     ClaimType,
@@ -1275,6 +1277,7 @@ class ClaimIn(_In):
     plan_question: Text | None = None
     step: Step | None = None
     dispute: DisputeIn | None = None
+    calc: CalcRef | None = None
 
 
 def _format(prefix: str, exc: ValidationError) -> list[str]:
@@ -1353,6 +1356,7 @@ def _extras(c: ClaimIn | Claim) -> dict[str, Any]:
         "check_method": norm(c.check_method or ""),
         "taken_from": norm(c.taken_from or ""),
         "plan_question": norm(c.plan_question or ""),
+        "calc": (c.calc.name, c.calc.key) if c.calc else None,
     }
     for i, q in enumerate(sorted(c.quotes, key=lambda q: (q.source, quotelib.norm_text(q.text))), start=1):
         out[f"publisher (цитата {i})"] = norm(q.publisher or "")
@@ -1574,6 +1578,11 @@ def _build_quotes(p: Project, c: ClaimIn, label: str, errors: list[str]) -> list
         for q in c.quotes:
             in_quotes |= set(quotelib.numbers(quotelib.norm_text(q.text)))
         missing = sorted(in_claim - in_quotes)
+        if c.calc is not None:  # число из расчёта в цитате не стоит: его сверяет ссылка на расчёт
+            found, value = calclib.calc_value(p.root, c.calc)
+            if found and calclib.is_number(value):
+                from_calc = {m.lstrip("+-") for m in calclib.matching_numbers(c.text, value)}
+                missing = [m for m in missing if m.lstrip("+-") not in from_calc]
         if missing:
             errors.append(
                 f"{label}: числа из текста утверждения нет ни в одной цитате: {', '.join(missing)}; "
@@ -1636,6 +1645,7 @@ def _make_claim(
             dispute=Dispute(claim=c.dispute.claim, reason=c.dispute.reason) if c.dispute else None,
             step=c.step or p.state.step,
             attempt=attempt,
+            calc=c.calc.model_copy() if c.calc else None,
         )
     except ValidationError as exc:
         errors.extend(_format(label, exc))

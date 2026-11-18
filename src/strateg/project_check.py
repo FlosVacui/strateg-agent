@@ -24,6 +24,7 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, ValidationError
 
+from strateg import calc as calclib
 from strateg.models import (
     LOCATOR_KINDS,
     Claim,
@@ -659,6 +660,8 @@ def _check_claims(root: Path, sources: SourcesFile, claims: ClaimsFile, errors: 
                         f"ответов модельного респондента не делает утверждение типа «{c.type}»; "
                         "оно ссылается на опору человека"
                     )
+        for problem in calclib.claim_problems(root, c, sources):
+            err(problem)
         if any(s.suspicious for s in quote_sources) and not c.suspicious:
             err("источник помечен «подозрительный», а утверждение нет (suspicious)")
 
@@ -1574,6 +1577,7 @@ def check_project(root: Path | str) -> list[str]:
         _check_unreferenced_files(root, sources, errors)
     if isinstance(sources, SourcesFile) and isinstance(claims, ClaimsFile):
         _check_claims(root, sources, claims, errors)
+    errors.extend(calclib.stale_problems(root, sources if isinstance(sources, SourcesFile) else None))
 
     frame_present, frame = _check_outputs(
         root,
