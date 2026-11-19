@@ -8,8 +8,11 @@ from __future__ import annotations
 import datetime as dt
 import importlib.util
 import json
+import os
+import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -60,7 +63,7 @@ class Scripted:
         self.sessions.append(session_id)
         self.opts.append(opts)
         item = self.replies[len(self.prompts) - 1]
-        if isinstance(item, Exception):
+        if isinstance(item, BaseException):
             raise item
         if isinstance(item, tuple):
             return item
@@ -79,6 +82,8 @@ class FakeCli:
             return None
         item = self.statuses[min(self.calls, len(self.statuses) - 1)]
         self.calls += 1
+        if isinstance(item, Exception):
+            raise item
         return item
 
     def run(self, *args, **kw):
@@ -245,6 +250,15 @@ def test_copy_works_on_its_own_and_sees_no_repository(tmp_path):
         encoding="utf-8",
     )
     assert Path(probe.stdout.strip()).resolve().is_relative_to(dest.resolve()), probe.stdout + probe.stderr
+    # `strateg` по шаблону `Bash(strateg *)` — команда копии, а не репозитория
+    exe = shutil.which("strateg", path=cli.env["PATH"])
+    assert exe and Path(exe).resolve().is_relative_to(dest.resolve()), exe
+    doctor = subprocess.run(
+        [exe, "doctor"], cwd=dest, env=cli.env, capture_output=True, text=True, encoding="utf-8"
+    )
+    assert (
+        str(dest / "projects") in doctor.stdout.replace("/", "\\") or str(dest / "projects") in doctor.stdout
+    )
 
 
 def test_run_settings_turn_memory_off(tmp_path):
@@ -262,20 +276,40 @@ def test_child_env_has_no_product_project_variables(monkeypatch):
     monkeypatch.setenv("VIRTUAL_ENV", "z")
     env = run.clean_env()
     assert not {"STRATEG_PROJECT", "STRATEG_PROJECTS_DIR", "VIRTUAL_ENV"} & set(env)
+    assert env["PYTHONUTF8"] == "1"  # кириллица в обмене с дочерними процессами
 
 
 # --- права и аргументы вызова --------------------------------------------------------------------------
 
 
 def opts(tmp_path, **kw):
-    return run.CallOptions(cwd=tmp_path, env={}, settings=tmp_path / "s.json", timeout_s=60, **kw)
+    kw.setdefault("timeout_s", 60)
+    return run.CallOptions(cwd=tmp_path, env=dict(os.environ), settings=tmp_path / "s.json", **kw)
+
+
+def fake_exe(folder: Path, source: str) -> str:
+    """Подменённый `claude`: на Windows `.cmd` (как у npm) в папке с пробелом."""
+    folder = folder / "fake bin"
+    folder.mkdir(exist_ok=True)
+    script = folder / "fake_claude.py"
+    script.write_text(source + "\n", encoding="utf-8")
+    if sys.platform == "win32":
+        launcher = folder / "claude.cmd"
+        launcher.write_text(f'@echo off\r\n"{sys.executable}" "{script}" %*\r\n', encoding="utf-8")
+    else:
+        launcher = folder / "claude"
+        launcher.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n', encoding="utf-8")
+        launcher.chmod(0o755)
+    return str(launcher)
 
 
 def test_argv_has_explicit_permissions_and_no_bypass(tmp_path):
     argv = run.build_argv("claude", opts(tmp_path, model="sonnet", max_budget_usd=3.0), None)
     assert argv[:4] == ["claude", "-p", "--output-format", "json"]
     assert run.FORBIDDEN_FLAG not in argv
-    assert argv[argv.index("--permission-mode") + 1] == run.PERMISSION_MODE
+    assert (
+        argv[argv.index("--permission-mode") + 1] == "acceptEdits"
+    )  # литерал, не константа: её правка видна
     tools = argv[argv.index("--allowedTools") + 1].split(",")
     assert {"WebSearch", "Read", "Grep", "Glob"} <= set(tools)
     assert "Bash(uv run strateg *)" in tools
@@ -292,22 +326,17 @@ def test_argv_resume_uses_the_given_session(tmp_path):
 
 
 def test_prompt_goes_through_stdin_not_argv(tmp_path):
-    seen = {}
-
-    def fake_run(argv, **kw):
-        seen.update(argv=argv, **kw)
-        return subprocess.CompletedProcess(argv, 0, b"{}", b"")
-
-    prompt = "Как продавать?\nВот ссылка"
-    original = subprocess.run
-    subprocess.run = fake_run
-    try:
-        run.claude_process("claude")(prompt, None, opts(tmp_path))
-    finally:
-        subprocess.run = original
+    prompt = "Как продавать?\nВот ссылка & 100% | «ответ»"
+    source = (
+        "import json, sys\n"
+        "stdin = sys.stdin.buffer.read().decode('utf-8')\n"
+        "print(json.dumps({'argv': sys.argv[1:], 'stdin': stdin}))"
+    )
+    code, out, _ = run.claude_process(fake_exe(tmp_path, source))(prompt, None, opts(tmp_path))
+    seen = json.loads(out)
+    assert code == 0
     assert prompt not in seen["argv"]
-    assert seen["input"] == prompt.encode("utf-8")
-    assert seen["timeout"] == 60
+    assert seen["stdin"] == prompt
 
 
 # --- ожидание агента -----------------------------------------------------------------------------------
@@ -467,7 +496,7 @@ def test_b4_first_asks_to_close_the_cheapest_numbered_gap_once(tmp_path):
             gap(3, via="закрытые данные"),  # закрытыми данными не закрыть
             gap(2, usd=2),  # дороже $1
             gap(5, minutes=11),  # дольше 10 минут
-            gap(6, affects=False),  # не влияет на выбор
+            gap(1, affects=False),  # не влияет на выбор, хотя номер наименьший
             gap(7, status="закрыт"),
             gap(9),
         ]
@@ -646,18 +675,6 @@ def test_failure_in_the_middle_writes_partial_results_and_code_1(tmp_path):
                 }
             ),
             "is_error",
-        ),
-        (
-            json.dumps(
-                {
-                    "type": "result",
-                    "subtype": "error_max_turns",
-                    "is_error": False,
-                    "result": "",
-                    "session_id": "s-1",
-                }
-            ),
-            "error_max_turns",
         ),
         ("не json", "не JSON"),
         (subprocess.TimeoutExpired(["claude"], 1800), "тайм-аут"),
@@ -869,3 +886,614 @@ def test_main_does_not_touch_card_or_expectations():
         encoding="utf-8",
     ).stdout
     assert status_out.strip() == ""
+
+
+# --- среда, права и настройки вызова ------------------------------------------------------------------
+
+
+def test_child_env_drops_hooks_switch_and_other_product_variables(monkeypatch):
+    for name in ("STRATEG_HOOKS", "STRATEG_DEV", "STRATEG_PROJECT", "STRATEG_ANYTHING"):
+        monkeypatch.setenv(name, "0")
+    env = run.clean_env()
+    assert not [k for k in env if k.upper().startswith("STRATEG_")]
+    # дочерние запуски стенда сами могут задать нужное через extra
+    assert run.clean_env({"STRATEG_PROJECTS_DIR": "x"})["STRATEG_PROJECTS_DIR"] == "x"
+
+
+def test_child_env_drops_parent_claude_session_and_plugins_but_keeps_login(monkeypatch):
+    for name in ("CLAUDE_CODE_PLUGIN_DIRS", "CLAUDE_CODE_SESSION_ID", "CLAUDECODE", "CLAUDE_EFFORT"):
+        monkeypatch.setenv(name, "1")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "cfg")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "t")
+    env = run.clean_env()
+    assert not {"CLAUDE_CODE_PLUGIN_DIRS", "CLAUDE_CODE_SESSION_ID", "CLAUDECODE", "CLAUDE_EFFORT"} & set(env)
+    assert env["CLAUDE_CONFIG_DIR"] == "cfg" and env["CLAUDE_CODE_OAUTH_TOKEN"] == "t"
+    assert env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1"
+
+
+def test_hook_stays_on_when_the_parent_has_hooks_off(monkeypatch, built):
+    """Проба: при `STRATEG_HOOKS=0` у родителя хук копии всё равно закрывает репозиторий и профили Claude."""
+    monkeypatch.setenv("STRATEG_HOOKS", "0")
+    env = run.clean_env({"PYTHONPATH": str(built / "src"), "CLAUDE_PROJECT_DIR": str(built)}, copy=built)
+    assert "STRATEG_HOOKS" not in env
+    probes = [
+        ("Read", {"file_path": str(ROOT / "evals" / "cases" / "fraud-protection" / "expected.md")}),
+        ("Glob", {"pattern": "**/expected.md", "path": str(ROOT.parent)}),
+        ("Grep", {"pattern": "x", "path": str(Path.home() / ".claude" / "projects")}),
+    ]
+    script = built / ".claude" / "hooks" / "pre_tool_use.py"
+    for tool, tin in probes:
+        event = {"hook_event_name": "PreToolUse", "session_id": "s", "cwd": str(built)}
+        event |= {"tool_name": tool, "tool_input": tin}
+        proc = subprocess.run(
+            [sys.executable, "-X", "utf8", str(script)],
+            input=json.dumps(event, ensure_ascii=False).encode("utf-8"),
+            capture_output=True,
+            env=env,
+            cwd=built,
+            timeout=120,
+        )
+        out = json.loads(proc.stdout.decode("utf-8"))["hookSpecificOutput"]
+        assert out["permissionDecision"] == "deny", (tool, proc.stdout, proc.stderr)
+
+
+def test_path_has_the_copys_venv_first_and_no_repository_venv(monkeypatch, tmp_path):
+    repo = tmp_path / "repo"
+    repo_bin = repo / ".venv" / ("Scripts" if os.name == "nt" else "bin")
+    repo_bin.mkdir(parents=True)
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    monkeypatch.setenv("PATH", os.pathsep.join([str(repo_bin), str(tools)]))
+    copy = tmp_path / "copy"
+    parts = run.clean_env(copy=copy, repo=repo)["PATH"].split(os.pathsep)
+    assert parts[0] == str(copy / ".venv" / ("Scripts" if os.name == "nt" else "bin"))
+    assert str(repo_bin) not in parts and str(tools) in parts
+
+
+def test_real_path_of_the_call_has_nothing_from_the_repository(tmp_path):
+    parts = run.clean_env(copy=tmp_path / "copy")["PATH"].split(os.pathsep)
+    assert not [p for p in parts if run._inside(p, ROOT)]  # `uv run` ставит `.venv` репозитория первым
+
+
+def test_run_settings_deny_the_repository_worktrees_and_profiles(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    (home / ".claude-acc9" / "projects").mkdir(parents=True)
+    for name in ("HOME", "USERPROFILE"):
+        monkeypatch.setenv(name, str(home))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    repo = tmp_path / "work" / "repo"
+    repo.mkdir(parents=True)
+    copy = tmp_path / "tmp" / "copy"
+    path = tmp_path / "s.json"
+    run.write_run_settings(path, repo, copy)
+    rules = json.loads(path.read_text(encoding="utf-8"))["permissions"]["deny"]
+    for tool in ("Read", "Grep", "Glob", "Edit", "Write"):
+        for root in (repo.parent, home / ".claude-acc9" / "projects"):  # репозиторий внутри родителя
+            for glob in run.permission_globs(root):
+                assert f"{tool}({glob})" in rules, (tool, glob)
+
+
+def test_deny_rules_never_cover_the_copy_itself(tmp_path):
+    repo = tmp_path / "work" / "repo"
+    repo.mkdir(parents=True)
+    copy = tmp_path / "work" / "runs" / "copy"  # копия лежит рядом с репозиторием
+    roots = run.protected_roots(repo, copy)
+    assert repo.resolve() in roots
+    assert not [r for r in roots if copy.resolve().is_relative_to(r)]
+
+
+def test_permission_globs_use_the_root_form():
+    if sys.platform == "win32":
+        assert run.permission_globs(Path("C:/work/x/repo")) == [
+            "//c/work/x/repo/**",
+            "//C:/work/x/repo/**",
+        ]
+    else:
+        assert run.permission_globs(Path("/home/x/repo")) == ["//home/x/repo/**"]
+
+
+def test_argv_loads_only_project_settings_and_strict_mcp(tmp_path):
+    argv = run.build_argv("claude", opts(tmp_path, mcp_config=tmp_path / ".mcp.json"), None)
+    assert argv[argv.index("--setting-sources") + 1] == "project"
+    assert "--strict-mcp-config" in argv
+    assert argv[argv.index("--mcp-config") + 1] == str(tmp_path / ".mcp.json")
+    assert "--mcp-config" not in run.build_argv("claude", opts(tmp_path), None)
+
+
+def test_allowed_tools_have_no_web_fetch_or_bare_shell():
+    for name in run.ALLOWED_TOOLS:
+        assert name not in ("WebFetch", "Bash", "PowerShell", "Monitor")
+        assert "bypass" not in name.lower() and "curl" not in name
+        assert not (name.startswith("Bash(") and not name.startswith(("Bash(uv run", "Bash(strateg")))
+    assert run.PERMISSION_MODE == "acceptEdits"
+
+
+def test_default_model_is_sonnet_and_turn_limit_is_generous():
+    args = run.build_parser().parse_args(["x"])
+    assert args.model == "sonnet"
+    assert args.max_turns == run.DEFAULT_MAX_TURNS >= 150
+
+
+def test_result_records_claude_version_model_profile_and_commit(tmp_path):
+    run.main(["fraud-protection", "--dry-run", "--no-sync", "--out", str(tmp_path)])
+    (folder,) = list((tmp_path / "fraud-protection").iterdir())
+    res = json.loads((folder / "result.json").read_text(encoding="utf-8"))
+    assert res["model"] == "sonnet" and res["claude_version"] == "dry-run"
+    assert res["actual_models"] == ["claude-sonnet-5-5", "claude-haiku-4-5"]  # по убыванию стоимости
+    assert res["config_dir"]
+    assert res["product_commit"] is None or len(res["product_commit"]) == 40
+    assert res["turn_limit_continuations"] == 0
+
+
+# --- сборка копии: исключения и ссылки ------------------------------------------------------------------
+
+
+def _mini_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "mini"
+    for d in run.COPY_DIRS:
+        (repo / d).mkdir(parents=True)
+        (repo / d / "a.txt").write_text("текст", encoding="utf-8")
+    (repo / ".claude" / "settings.json").write_text("{}", encoding="utf-8")
+    (repo / ".claude" / "settings.local.json").write_text('{"allow": ["личное"]}', encoding="utf-8")
+    for name in run.COPY_FILES:
+        (repo / name).write_text("x", encoding="utf-8")
+    return repo
+
+
+def test_local_settings_are_not_copied(tmp_path):
+    dest = tmp_path / "copy"
+    run.build_copy(_mini_repo(tmp_path), dest)
+    assert (dest / ".claude" / "settings.json").is_file()
+    assert not (dest / ".claude" / "settings.local.json").exists()
+
+
+def test_copy_does_not_keep_symlinks(tmp_path, monkeypatch):
+    calls = []
+    original = run.shutil.copytree
+
+    def spy(src, dst, *args, **kwargs):
+        calls.append(kwargs.get("symlinks"))
+        return original(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(run.shutil, "copytree", spy)
+    run.build_copy(_mini_repo(tmp_path), tmp_path / "copy")
+    assert calls and all(c is False for c in calls)  # ссылка в репозитории не должна стать ссылкой в копии
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="junction есть только на Windows")
+def test_junction_in_the_copy_is_a_leak(tmp_path):
+    target = tmp_path / "docs-elsewhere"
+    target.mkdir()
+    (target / "a.md").write_text("текст", encoding="utf-8")
+    copy = tmp_path / "c"
+    copy.mkdir()
+    made = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(copy / "docs"), str(target)], capture_output=True, check=False
+    )
+    if made.returncode != 0:
+        pytest.skip("junction не создан")
+    assert any("символическая ссылка" in x for x in run.find_leaks(copy, [], ROOT))
+
+
+# --- процессы: тайм-аут убивает дерево ------------------------------------------------------------------
+
+
+def _alive(pid: int) -> bool:
+    if sys.platform == "win32":
+        out = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, check=False
+        ).stdout  # байты: вывод в OEM-кодировке, имена процессов нам не нужны
+        return str(pid).encode() in out.split()
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def test_timeout_kills_the_whole_process_tree(tmp_path):
+    """`claude.cmd` → `claude` → потомок: на тайм-ауте не должно остаться никого, возврат — в срок."""
+    pidfile = tmp_path / "grandchild.pid"
+    grandchild = "import os, sys, time; open(sys.argv[1], 'w').write(str(os.getpid())); time.sleep(120)"
+    source = (
+        "import subprocess, sys, time\n"
+        f"subprocess.Popen([sys.executable, '-c', {grandchild!r}, {str(pidfile)!r}])\n"
+        "time.sleep(120)\n"
+    )
+    exe = fake_exe(tmp_path, source)
+    started = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        run.claude_process(exe)("x", None, opts(tmp_path, timeout_s=6))
+    assert time.monotonic() - started < 40
+    pid = int(pidfile.read_text(encoding="utf-8"))
+    for _ in range(40):
+        if not _alive(pid):
+            break
+        time.sleep(0.5)
+    assert not _alive(pid)
+
+
+def test_call_reaches_the_cmd_wrapper_with_odd_arguments(tmp_path):
+    exe = fake_exe(tmp_path, "import json, sys; print(json.dumps(sys.argv[1:]))")
+    code, out, _ = run.claude_process(exe)("x", "сессия-1", opts(tmp_path, model="sonnet"))
+    argv = json.loads(out)
+    assert code == 0 and argv[argv.index("--resume") + 1] == "сессия-1"
+    assert argv[argv.index("--allowedTools") + 1] == ",".join(run.ALLOWED_TOOLS)  # скобки и звёздочки целыми
+
+
+# --- пределы и ошибки вызова ----------------------------------------------------------------------------
+
+
+def limit_reply(subtype: str, cost: float, *, is_error: bool = True, session: str = "s-1") -> str:
+    """Ответ `claude -p`, упёршегося в предел: у настоящего `claude` — с итогом вызова и кодом выхода 1."""
+    data = {
+        "type": "result",
+        "subtype": subtype,
+        "is_error": is_error,
+        "session_id": session,
+        "total_cost_usd": cost,
+        "modelUsage": {"claude-opus-5-5": {"costUSD": cost - 1.0}, "claude-sonnet-5-5": {"costUSD": 1.0}},
+        "num_turns": 1,
+        "errors": ["Reached maximum budget ($0.02)"],
+    }
+    return json.dumps(data, ensure_ascii=False)
+
+
+def test_budget_exhausted_with_exit_code_1_is_a_limit_not_a_failure(tmp_path):
+    """`error_max_budget_usd` приходит с кодом 1: код проверяется после разбора ответа."""
+    bench, _ = make_bench(
+        tmp_path,
+        [gate("В1", 1), gate("В4", 4)],
+        [reply(1, cost=1.0), (1, limit_reply("error_max_budget_usd", 8.04), "")],
+    )
+    assert bench.run("x") == run.EXIT_LIMIT
+    res = result_of(bench)
+    assert res["outcome"] == "предел бюджета" and res["failure"] is None
+    assert res["total_cost_usd"] == 8.04  # стоимость последнего вызова не потеряна
+    assert res["cumulative_costs"] == [1.0, 8.04]
+    assert res["actual_models"] == ["claude-opus-5-5", "claude-sonnet-5-5"]
+
+
+def test_cost_of_a_failed_call_is_kept(tmp_path):
+    """Сбой с накопительной стоимостью (`is_error`, код 1): итог равен последнему накопительному значению."""
+    failed = limit_reply("error_during_execution", 4.0)
+    bench, _ = make_bench(
+        tmp_path, [gate("В1", 1), gate("В4", 4)], [reply(1, cost=1.0), reply(2, cost=2.0), (1, failed, "")]
+    )
+    assert bench.run("x") == run.EXIT_FAILED
+    res = result_of(bench)
+    assert res["outcome"] == "сбой" and res["total_cost_usd"] == 4.0
+    assert res["cumulative_costs"] == [1.0, 2.0, 4.0]
+    assert res["model_usage"]["claude-opus-5-5"]["costUSD"] == 3.0
+
+
+def test_is_error_with_exit_code_0_also_keeps_the_cost(tmp_path):
+    failed = limit_reply("success", 3.5)  # is_error: true
+    bench, _ = make_bench(tmp_path, [gate("В1", 1), gate("В4", 4)], [reply(1, cost=1.0), failed])
+    assert bench.run("x") == run.EXIT_FAILED
+    assert result_of(bench)["total_cost_usd"] == 3.5
+
+
+def test_turn_limit_is_a_continuation_in_the_same_session(tmp_path):
+    """`error_max_turns`: агент не закончил и ничего не ждёт. Ответ «продолжай» тем же `--resume`."""
+    turns = limit_reply("error_max_turns", 3.0, is_error=False)
+    statuses = [gate("В1", 1), status(step="4", in_progress=True), status(step="5"), RELEASE]
+    bench, invoker = make_bench(
+        tmp_path,
+        statuses,
+        [reply(1, cost=1.0), (1, turns, ""), (1, turns.replace("3.0", "5.0"), ""), reply(4, cost=6.0)],
+    )
+    assert bench.run("x") == run.EXIT_OK
+    assert invoker.prompts[2] == run.CONTINUE_PROMPT == invoker.prompts[3]
+    assert invoker.sessions == [None, "s-1", "s-1", "s-1"]
+    res = result_of(bench)
+    assert res["turn_limit_continuations"] == 2 and res["outcome"] == "выпуск"
+    assert res["calls"] == 4 and res["total_cost_usd"] == 6.0  # вызов засчитан, стоимость учтена
+    assert res["questions"] == [] and res["off_card_answers"] == 0  # это не вопрос руководителю
+    assert any("--max-turns" in n for n in res["notes"])
+
+
+def test_turn_limit_with_open_gate_is_answered_by_the_card(tmp_path):
+    turns = limit_reply("error_max_turns", 2.0, is_error=False)
+    bench, invoker = make_bench(tmp_path, [gate("В4", 4), RELEASE], [(1, turns, ""), reply(2, cost=3.0)])
+    assert bench.run("x") == run.EXIT_OK
+    assert invoker.prompts[1] != run.CONTINUE_PROMPT
+    assert result_of(bench)["turn_limit_continuations"] == 0
+
+
+def test_endless_turn_limits_end_by_the_run_limits(tmp_path):
+    turns = limit_reply("error_max_turns", 1.0, is_error=False)
+    statuses = [status(step=str(i % 5 + 1), in_progress=True) for i in range(30)]
+    bench, invoker = make_bench(tmp_path, statuses, [(1, turns, "")] * 8, limits=run.Limits(max_calls=4))
+    assert bench.run("x") == run.EXIT_LIMIT
+    assert result_of(bench)["outcome"] == "предел вызовов" and len(invoker.prompts) == 4
+
+
+def test_cost_going_down_keeps_the_maximum_and_is_noted(tmp_path):
+    bench, _ = make_bench(
+        tmp_path,
+        [gate("В1", 1), gate("В4", 4), RELEASE],
+        [reply(1, cost=3.0), reply(2, cost=1.0), reply(3, cost=2.0)],
+    )
+    bench.run("x")
+    res = result_of(bench)
+    assert res["total_cost_usd"] == 3.0
+    assert res["cumulative_costs"] == [3.0, 1.0, 2.0]
+    assert sum("не накопительное" in n for n in res["notes"]) == 2
+
+
+# --- сбой `status` ---------------------------------------------------------------------------------------
+
+
+def test_unreadable_status_is_a_failure_not_a_question(tmp_path):
+    """Сбой `status --json` не отвечает «не знаю» на открытые ворота: прогон кончается кодом 1."""
+    broken = run.CliError("strateg status: код 1, ответ не JSON: блокировка проекта")
+    bench, invoker = make_bench(tmp_path, [gate("В1", 1), broken, RELEASE], [reply(1), reply(2), reply(3)])
+    assert bench.run("x") == run.EXIT_FAILED
+    res = result_of(bench)
+    assert res["outcome"] == "сбой" and "блокировка проекта" in res["failure"] and "вызов 2" in res["failure"]
+    assert len(invoker.prompts) == 2  # ответ на ворота не ушёл
+    assert res["off_card_answers"] == 0 and [g["gate"] for g in res["gates"]] == ["B1"]
+    assert res["total_cost_usd"] == 2.0  # итоги вызова, после которого упал status, не потеряны
+
+
+def cli_answering(tmp_path, code, out, err=""):
+    cli = run.Cli(["strateg"], tmp_path, {})
+    cli.run = lambda *a, **k: (code, out, err)  # type: ignore[method-assign]
+    return cli
+
+
+def test_cli_json_tells_no_project_from_an_unreadable_answer(tmp_path):
+    no_project = json.dumps({"ok": False, "error": "активный проект не выбран: выполните `strateg new <id>`"})
+    assert cli_answering(tmp_path, 1, no_project).json("status") is None
+    not_found = json.dumps({"ok": False, "error": "проект не найден: x (нет файла state.yaml)"})
+    assert cli_answering(tmp_path, 1, not_found).json("status") is None
+    assert cli_answering(tmp_path, 0, json.dumps({"ok": True, "step": "1"})).json("status")["step"] == "1"
+    for code, out in [
+        (1, "Traceback: uv упал"),
+        (0, ""),
+        (0, "[1]"),
+        (1, json.dumps({"ok": False, "error": "блокировка"})),
+    ]:
+        with pytest.raises(run.CliError):
+            cli_answering(tmp_path, code, out).json("status")
+
+
+def test_cli_json_failing_to_start_is_an_error(tmp_path):
+    cli = run.Cli(["strateg"], tmp_path, {})
+
+    def boom(*a, **k):
+        raise subprocess.TimeoutExpired("strateg", 300)
+
+    cli.run = boom  # type: ignore[method-assign]
+    with pytest.raises(run.CliError):
+        cli.json("status")
+
+
+def test_final_numbers_survive_an_unreadable_status(tmp_path):
+    broken = run.CliError("strateg status: упал")
+    bench, _ = make_bench(tmp_path, [broken], [])
+    project = tmp_path / "copy" / "projects" / "p1"
+    project.mkdir(parents=True)
+    (project / "state.yaml").write_text("x: 1\n", encoding="utf-8")
+    (tmp_path / "copy" / "projects" / ".active").write_text("p1\n", encoding="utf-8")
+    bench.write()
+    res = result_of(bench)
+    assert res["final"]["check"]["ok"] is True and any("упал" in n for n in res["notes"])
+
+
+# --- остановка после закрытого шага ---------------------------------------------------------------------
+
+STOP_REASON = "бюджет почти израсходован: осталось $0,35 из $8, шагов 5–7 не хватит"
+
+
+def real_cli(tmp_path, name="w1", source="project_valid"):
+    (tmp_path / "projects").mkdir(exist_ok=True)
+    env = run.clean_env({"PYTHONPATH": str(ROOT / "src"), "STRATEG_PROJECTS_DIR": str(tmp_path / "projects")})
+    code = "import sys; from strateg.cli import main; sys.exit(main())"
+    cli = run.Cli([sys.executable, "-c", code], tmp_path, env)
+    assert cli.run("new", name, "--from", str(FIXTURES / source))[0] == 0
+    return cli, tmp_path / "projects" / name
+
+
+def test_stop_after_a_closed_step_is_seen_as_a_stop(tmp_path):
+    """Живой порядок: `step done 4`, затем `stop`. `status --json`: шаг закрыт, `paused` пуст."""
+    cli, project = real_cli(tmp_path)
+    for args in (
+        ("step", "start", "4"),
+        ("gate", "open", "В4", "--questions", "1"),
+        ("gate", "answer", "В4", "--answer", "3"),
+        ("step", "done", "4"),
+        ("stop", "--reason", STOP_REASON),
+    ):
+        assert cli.run(*args)[0] == 0, args
+    st = cli.json("status")
+    assert st["step_in_progress"] is False and st["paused"] is None and st["waiting_gates"] == []
+    assert st["next_action"].startswith("Внеплановая остановка")
+    assert run.classify_wait(st) == run.Wait("вопрос")  # по одному `status` остановки не видно
+    assert run.stop_pending(project)
+    assert run.classify_wait(st, stop_logged=run.stop_pending(project)) == run.Wait("остановка")
+    answer = sup().answer(run.Wait("остановка"), project)
+    assert answer.source == "off_card.stops.budget_exhausted" and not answer.off_card
+    assert cli.run("step", "start", "5")[0] == 0  # агент продолжил работу: ожидания нет
+    assert not run.stop_pending(project)
+
+
+def journal_line(**e) -> str:
+    return json.dumps({"schema_version": 1, "time": "2026-11-19T00:00:00+03:00", **e}, ensure_ascii=False)
+
+
+def test_stop_pending_follows_the_progress_events_only(tmp_path):
+    (tmp_path / "journal.jsonl").write_text("", encoding="utf-8")
+    stop = journal_line(actor="CLI", kind="действие", name="внеплановая остановка", message="м")
+    hook = journal_line(actor="хук", kind="учёт", message="расход")
+    outside = journal_line(actor="CLI", kind="изменено вне агента", message="файл")
+    resume = journal_line(
+        actor="CLI", kind="действие", status="прервано", name="шаг 4", message=run.RESUME_NOTE
+    )
+    answer = journal_line(actor="хук", kind="ответ человека", message="человек ответил")
+    work = journal_line(actor="CLI", kind="действие", name="strateg claim add", status="выполнено")
+
+    def pending(*lines: str) -> bool:
+        (tmp_path / "journal.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return run.stop_pending(tmp_path)
+
+    assert pending(work, stop)
+    assert pending(
+        work, stop, hook, outside, resume
+    )  # события хуков, правки вне агента и сводка паузу не снимают
+    assert not pending(work, stop, answer)  # ответ человека (событие хука) кончает ожидание
+    assert not pending(work, stop, work)
+    assert not pending()
+    assert not run.stop_pending(None) and not run.stop_pending(tmp_path / "нет")
+
+
+def plant_project(tmp_path, *lines: str):
+    project = tmp_path / "copy" / "projects" / "p1"
+    project.mkdir(parents=True)
+    (project / "state.yaml").write_text("x: 1\n", encoding="utf-8")
+    (project / "journal.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    (tmp_path / "copy" / "projects" / ".active").write_text("p1\n", encoding="utf-8")
+    return project
+
+
+def test_run_records_a_stop_written_after_the_step_was_closed(tmp_path):
+    """Вызов 4 из живого прогона: шаг 4 закрыт, остановка записана, `status` — `paused: null`."""
+    live = status(step="4", gates={"В1": "отвечено", "В4": "отвечено", "В5": "впереди"})
+    assert live["paused"] is None and live["step_in_progress"] is False
+    statuses = [live, live, RELEASE]
+    bench, invoker = make_bench(tmp_path, statuses, [reply(1), reply(2)])
+    project = plant_project(
+        tmp_path,
+        journal_line(actor="CLI", kind="действие", name="внеплановая остановка", message=STOP_REASON),
+    )
+
+    def agent_works_after_the_answer(prompt, session, opts):
+        out = invoker(prompt, session, opts)
+        if len(invoker.prompts) == 2:  # ответ на остановку получен: агент продолжил работу
+            with (project / "journal.jsonl").open("a", encoding="utf-8") as f:
+                f.write(journal_line(actor="CLI", kind="действие", name="шаг 7", status="выполнено") + "\n")
+        return out
+
+    bench.invoker = agent_works_after_the_answer
+    assert bench.run("x") == run.EXIT_OK
+    res = result_of(bench)
+    assert [s["source"] for s in res["stops"]] == ["off_card.stops.budget_exhausted"]
+    assert res["questions"] == [] and res["off_card_answers"] == 0
+    assert invoker.prompts[1] == CARD["off_card"]["stops"]["budget_exhausted"]
+
+
+# --- причины остановки: слова скиллов -------------------------------------------------------------------
+
+REPO_TEXT = "\n".join(
+    p.read_text(encoding="utf-8").casefold()
+    for p in [ROOT / "AGENTS.md", *sorted((ROOT / ".claude" / "skills").rglob("*.md"))]
+)
+
+
+@pytest.mark.parametrize(
+    ("reason", "key", "phrase"),
+    [
+        ("бюджет израсходован: $8,02 из $8", "budget_exhausted", "бюджет израсходован"),
+        ("бюджет израсходован", "budget_exhausted", "бюджет израсходован"),
+        ("Бюджет исчерпан: осталось $0", "budget_exhausted", "бюджет исчерпан"),
+        (STOP_REASON, "budget_exhausted", "бюджет израсходован"),
+        (
+            "оценка плана больше остатка бюджета: $3 против $2",
+            "budget_estimate_over",
+            "оценка плана больше остатка бюджета",
+        ),
+        ("не прошли признаки: Б-2, Б-4", "completeness_failed", "проверка полноты не прошла"),
+        ("проверка полноты не прошла после доработки", "completeness_failed", "проверка полноты не прошла"),
+        (
+            "признаки закрытых данных в снимке И-3",
+            "personal_or_closed_data_found",
+            "признаки закрытых данных",
+        ),
+        (
+            "персональные данные в материале И-7",
+            "personal_or_closed_data_found",
+            "персональные данные в материале",
+        ),
+        ("новые сведения противоречат выбору", "new_facts_contradict_choice", "новые сведения противоречат"),
+        ("причина из пре-мортема задевает выбор", "premortem_hits_choice", "причина из пре-мортема"),
+    ],
+)
+def test_stop_reasons_from_the_skills_find_their_card_answer(tmp_path, reason, key, phrase):
+    assert phrase in REPO_TEXT, "формулировка из скиллов или AGENTS.md изменилась: обновите STOP_KEYS"
+    assert run.stop_key(reason) == key
+    (tmp_path / "journal.jsonl").write_text(
+        journal_line(kind="действие", name="внеплановая остановка", message=reason) + "\n", encoding="utf-8"
+    )
+    answer = sup().answer(run.Wait("остановка"), tmp_path)
+    assert answer.source == f"off_card.stops.{key}" and not answer.off_card
+
+
+def test_stop_without_an_answer_in_the_card_says_what_was_missing(tmp_path):
+    (tmp_path / "journal.jsonl").write_text(
+        journal_line(kind="действие", name="внеплановая остановка", message="нужен материал: положите файл")
+        + "\n",
+        encoding="utf-8",
+    )
+    answer = sup().answer(run.Wait("остановка"), tmp_path)
+    assert answer.off_card and "нужен материал" in answer.note and "ответа в карточке нет" in answer.note
+
+
+@pytest.mark.parametrize("reason", ["оценка качества источника", "превышен лимит запросов", "странное", ""])
+def test_a_single_word_does_not_make_a_budget_estimate_stop(reason):
+    assert run.stop_key(reason) is None
+
+
+# --- вопросы без ворот ----------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Какие результаты вам нужны к четвергу?",
+        "Готово. Планы на неделю такие: проверить источники. Нужно что-то ещё?",
+        "Какой цвет у страницы?",
+        "Конверсия посчитана по открытым данным. Нужно что-то ещё?",  # пункт назван вне вопроса
+        "Какая у вас выручка?",  # пункт назван одним словом из нескольких: при сомнении вне карточки
+    ],
+)
+def test_question_with_one_common_word_is_off_card(text):
+    a = sup().answer(run.Wait("вопрос"), None, text)
+    assert a.off_card and a.text == run.IDLE_ANSWER
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["Какая у вас конверсия в оплату?", "Сколько сейчас конверсий? Какие результаты опросов у вас есть?"],
+)
+def test_question_naming_a_closed_item_gets_the_template(text):
+    a = sup().answer(run.Wait("вопрос"), None, text)
+    assert a.source == "unknown_and_closed" and not a.off_card
+
+
+def test_deadline_and_recipient_questions_are_answered_from_the_persona():
+    deadline = sup().answer(run.Wait("вопрос"), None, "К какому сроку нужен результат?")
+    assert not deadline.off_card and deadline.source == "persona.deadline"
+    assert CARD["persona"]["deadline"] in deadline.text
+    recipient = sup().answer(run.Wait("вопрос"), None, "Для кого эта страница?")
+    assert not recipient.off_card and recipient.source == "persona.reports_to"
+    assert CARD["persona"]["reports_to"] in recipient.text
+    assert sup().answer(run.Wait("вопрос"), None, "Срок ясен.").off_card  # не вопрос
+
+
+# --- итоги и пределы ------------------------------------------------------------------------------------
+
+
+def test_results_are_written_after_every_call(tmp_path):
+    """Обрыв на втором вызове: итоги первого уже на диске."""
+    bench, _ = make_bench(tmp_path, [gate("В1", 1), gate("В4", 4)], [reply(1, cost=1.5), KeyboardInterrupt()])
+    with pytest.raises(KeyboardInterrupt):
+        bench.run("x")
+    res = result_of(bench)
+    assert res["calls"] == 1 and res["total_cost_usd"] == 1.5 and [g["gate"] for g in res["gates"]] == ["B1"]
+
+
+def test_call_timeout_shrinks_to_the_time_left(tmp_path):
+    bench, invoker = make_bench(tmp_path, [RELEASE], [reply(1)], limits=run.Limits(max_minutes=1))
+    bench.run("x")
+    assert invoker.opts[0].timeout_s <= 60  # `--call-timeout-min` по умолчанию 30 мин, но осталась минута

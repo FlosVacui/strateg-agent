@@ -31,6 +31,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -78,17 +79,27 @@ FORBIDDEN_FLAG = "--dangerously-skip-permissions"
 DEFAULT_MAX_CALLS = 40
 DEFAULT_MAX_MINUTES = 120.0
 DEFAULT_CALL_TIMEOUT_MIN = 30.0
-DEFAULT_MAX_TURNS = 60  # предохранитель одного вызова
+DEFAULT_MAX_TURNS = 200  # предохранитель одного вызова; между воротами агент делает десятки шагов
+DEFAULT_MODEL = "sonnet"  # модель основного агента: явно, чтобы профиль не менял цену и поведение
 MAX_STALLED = 3  # подряд вызовов без сдвига проекта
+CONTINUE_PROMPT = "продолжай"  # ответ, когда вызов упёрся в предел ходов, а ожидания у агента нет
 
 IDLE_ANSWER = "Не знаю, решите сами и запишите допущение."
-UNSET_ENV = (
-    "STRATEG_PROJECT",
-    "STRATEG_PROJECTS_DIR",
-    "VIRTUAL_ENV",
-    "UV_PROJECT_ENVIRONMENT",
-    "CLAUDE_PROJECT_DIR",
+UNSET_ENV = ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "CLAUDE_PROJECT_DIR")
+UNSET_PREFIXES = (
+    "STRATEG_",
+)  # переменные продукта (STRATEG_HOOKS, STRATEG_DEV и прочие): среда вызова чистая
+# Из `CLAUDE*` родителя (`CLAUDE_CODE_*`, `CLAUDE_EFFORT`, `CLAUDECODE` и прочее) в вызов идёт только нужное
+# для входа и запуска; плагины, наблюдение за ними, номер сессии родителя — нет: иначе прогоны несравнимы.
+KEEP_CLAUDE_ENV = (
+    "CLAUDE_CONFIG_DIR",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "CLAUDE_CODE_GIT_BASH_PATH",
 )
+SETTING_SOURCES = "project"  # настройки профиля (плагины, навыки профиля, `model`, `env`) в вызов не идут
 
 EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_LIMIT = 0, 1, 2, 3
 
@@ -184,7 +195,7 @@ def find_leaks(copy: Path, phrases: list[str], repo: Path | None = None) -> list
         repo_paths = [resolved, resolved.replace("\\", "/")]
     for path in sorted(copy.rglob("*")):
         rel = path.relative_to(copy).as_posix()
-        if path.is_symlink():
+        if path.is_symlink() or path.is_junction():  # junction на Windows — та же ссылка в репозиторий
             found.append(f"{rel}: символическая ссылка")
             continue
         for phrase, match in needles:
@@ -211,35 +222,204 @@ def _matcher(phrase: str) -> Callable[[str], bool]:
     return lambda text: folded in text.casefold()
 
 
-def clean_env(extra: dict[str, str] | None = None) -> dict[str, str]:
-    """Среда дочерних процессов: без переменных проекта продукта и его виртуального окружения."""
-    env = {k: v for k, v in os.environ.items() if k not in UNSET_ENV}
+def _inside(path: str | Path, root: Path) -> bool:
+    try:
+        return Path(path).resolve().is_relative_to(root.resolve())
+    except (OSError, ValueError):
+        return False
+
+
+def clean_path(path: str, copy: Path | None, repo: Path = ROOT) -> str:
+    """`PATH` вызова: каталоги репозитория продукта (его `.venv`) убраны, `.venv` копии — первым.
+
+    Иначе `strateg` в вызове окажется командой репозитория, которая пишет в его `projects/`, а не в копию.
+    """
+    parts = [p for p in path.split(os.pathsep) if p and not _inside(p, repo)]
+    if copy is not None:
+        parts.insert(0, str(copy / ".venv" / ("Scripts" if os.name == "nt" else "bin")))
+    return os.pathsep.join(parts)
+
+
+def clean_env(
+    extra: dict[str, str] | None = None, *, copy: Path | None = None, repo: Path = ROOT
+) -> dict[str, str]:
+    """Среда дочерних процессов: без переменных продукта, его окружения и сессии родителя.
+
+    - `STRATEG_*` не передаются вовсе: `STRATEG_HOOKS=0` выключил бы хук прав, барьер к ответам кейса;
+    - из `CLAUDE*` остаются только нужные для входа (`KEEP_CLAUDE_ENV`);
+    - `PATH`: `.venv` репозитория убран, `.venv` копии первым (`clean_path`).
+    """
+    env: dict[str, str] = {}
+    for k, v in os.environ.items():
+        name = k.upper()
+        if name in UNSET_ENV or name.startswith(UNSET_PREFIXES):
+            continue
+        if name.startswith("CLAUDE") and name not in KEEP_CLAUDE_ENV:
+            continue
+        env[k] = v
+    for k in [k for k in env if k.upper() == "PATH"]:
+        env[k] = clean_path(env[k], copy, repo)
+    if copy is not None and not any(k.upper() == "PATH" for k in env):
+        env["PATH"] = clean_path("", copy, repo)
     env.update({"PYTHONUTF8": "1", "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"})
     env.update(extra or {})
     return env
 
 
-def user_claude_md_excludes() -> list[str]:
-    """Пути пользовательского `CLAUDE.md` и правил профиля: в прогоне они агенту не нужны."""
-    homes = [Path.home() / ".claude"]
+def profile_dirs() -> list[Path]:
+    """Каталоги профилей Claude: `~/.claude*` и `CLAUDE_CONFIG_DIR`. В них общие память и стенограммы."""
+    homes = [p for p in Path.home().glob(".claude*") if p.is_dir()]
     if os.environ.get("CLAUDE_CONFIG_DIR"):
         homes.append(Path(os.environ["CLAUDE_CONFIG_DIR"]))
+    return list(dict.fromkeys(homes))
+
+
+def user_claude_md_excludes() -> list[str]:
+    """Пути пользовательского `CLAUDE.md` и правил профиля: в прогоне они агенту не нужны."""
     out: list[str] = []
-    for h in homes:
+    for h in profile_dirs() or [Path.home() / ".claude"]:
         base = h.as_posix()
         out += [f"{base}/CLAUDE.md", f"{base}/rules/**"]
     return out
 
 
-def write_run_settings(path: Path) -> None:
-    """Настройки вызова вне копии: автопамять выключена, пользовательский `CLAUDE.md` исключён."""
-    data = {"autoMemoryEnabled": False, "claudeMdExcludes": user_claude_md_excludes()}
+def _worktrees(repo: Path) -> list[Path]:
+    """Другие рабочие копии того же репозитория (`git worktree list`); нет git — пусто."""
+    try:
+        r = subprocess.run(
+            ["git", "-C", str(repo), "worktree", "list", "--porcelain"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=20,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if r.returncode != 0:
+        return []
+    lines = [ln for ln in r.stdout.splitlines() if ln.startswith("worktree ")]
+    return [Path(ln[len("worktree ") :].strip()) for ln in lines]
+
+
+def protected_roots(repo: Path, copy: Path | None) -> list[Path]:
+    """Где агенту читать и писать нельзя: репозиторий, его рабочие копии, соседние папки с итогами и профили.
+
+    Копия прогона и всё, что её содержит, в список не входит: иначе запрет закрыл бы и саму копию.
+    """
+    roots = [repo.resolve(), *(w.resolve() for w in _worktrees(repo))]
+    parent = repo.resolve().parent
+    home = Path.home().resolve()
+    if parent != parent.parent and not home.is_relative_to(parent):  # не корень диска и не домашняя папка
+        roots.append(parent)  # соседние рабочие копии и итоги прошлых прогонов
+    out: list[Path] = []
+    for r in roots:
+        if copy is not None and copy.resolve().is_relative_to(r):
+            continue
+        if r not in out:
+            out.append(r)
+    return [r for r in out if not any(o != r and r.is_relative_to(o) for o in out)]
+
+
+def permission_globs(path: Path, tail: str = "/**") -> list[str]:
+    """Шаблон пути для правил прав: `//` — от корня файловой системы; на Windows диск пишется и как `/c/…`."""
+    posix = path.resolve().as_posix().rstrip("/")
+    m = re.match(r"^([A-Za-z]):(/.*)?$", posix)
+    if m:
+        rest = m.group(2) or ""
+        return [f"//{m.group(1).lower()}{rest}{tail}", f"//{m.group(1).upper()}:{rest}{tail}"]
+    return [f"/{posix}{tail}"]
+
+
+def deny_rules(repo: Path = ROOT, copy: Path | None = None) -> list[str]:
+    """`permissions.deny` вызова: чтение и запись по путям репозитория, рабочих копий и профилей Claude.
+
+    Второй барьер: первый — хук прав продукта в копии.
+    """
+    rules: list[str] = []
+    paths = [(r, "/**") for r in protected_roots(repo, copy)]
+    paths += [(p / "projects", "/**") for p in profile_dirs()]  # общие память и стенограммы профилей
+    for path, tail in paths:
+        for glob in permission_globs(path, tail):
+            rules += [f"{tool}({glob})" for tool in ("Read", "Grep", "Glob", "Edit", "Write")]
+    return list(dict.fromkeys(rules))
+
+
+def write_run_settings(path: Path, repo: Path = ROOT, copy: Path | None = None) -> None:
+    """Настройки вызова вне копии: автопамять выключена, `CLAUDE.md` профиля исключён, пути закрыты."""
+    data = {
+        "autoMemoryEnabled": False,
+        "claudeMdExcludes": user_claude_md_excludes(),
+        "permissions": {"deny": deny_rules(repo, copy)},
+    }
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
 
 
 # ---------------------------------------------------------------------------
 # CLI продукта в копии
 # ---------------------------------------------------------------------------
+
+
+def kill_tree(proc: subprocess.Popen[bytes]) -> None:
+    """Завершает процесс и всех потомков: через `claude.cmd` внук (`node`) держит каналы и живёт дальше."""
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, timeout=30, check=False
+            )
+        else:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        proc.kill()
+    except OSError:
+        pass
+
+
+def run_tree(
+    argv: list[str],
+    *,
+    input_bytes: bytes | None,
+    cwd: Path,
+    env: dict[str, str],
+    timeout: float,
+) -> tuple[int, bytes, bytes]:
+    """Как `subprocess.run(..., capture_output=True, timeout=…)`, но на тайм-ауте гибнет всё дерево процессов.
+
+    На Windows — `taskkill /T /F`, на POSIX — группа процессов (`start_new_session`).
+    """
+    extra: dict[str, Any] = {} if os.name == "nt" else {"start_new_session": True}
+    proc = subprocess.Popen(
+        argv,
+        stdin=subprocess.PIPE if input_bytes is not None else subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=cwd,
+        env=env,
+        **extra,
+    )
+    try:
+        out, err = proc.communicate(input_bytes, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        kill_tree(proc)
+        try:
+            proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:  # потомок ушёл из дерева и держит каналы: закрываем свои концы
+            for pipe in (proc.stdin, proc.stdout, proc.stderr):
+                if pipe is not None:
+                    pipe.close()
+        raise subprocess.TimeoutExpired(argv, timeout) from None
+    except BaseException:  # Ctrl+C и прочее: потомков не оставляем
+        kill_tree(proc)
+        raise
+    return proc.returncode, out, err
+
+
+class CliError(Exception):
+    """`strateg … --json` не прочитан: не запустился, ответ не JSON или с ошибкой."""
+
+
+NO_PROJECT = ("активный проект не выбран", "проект не найден")  # «проекта ещё нет»: не сбой чтения
 
 
 class Cli:
@@ -249,23 +429,36 @@ class Cli:
         self.prefix, self.cwd, self.env = prefix, cwd, env
 
     def run(self, *args: str, stdin: str | None = None, timeout: float = 300) -> tuple[int, str, str]:
-        r = subprocess.run(
+        code, out, err = run_tree(
             [*self.prefix, *args],
+            input_bytes=None if stdin is None else stdin.encode("utf-8"),
             cwd=self.cwd,
             env=self.env,
-            input=None if stdin is None else stdin.encode("utf-8"),
-            capture_output=True,
             timeout=timeout,
         )
-        return r.returncode, r.stdout.decode("utf-8", "replace"), r.stderr.decode("utf-8", "replace")
+        return code, out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
 
     def json(self, *args: str) -> dict[str, Any] | None:
+        """Ответ команды с `--json`. `None` — проекта ещё нет; не прочитанный ответ — `CliError`."""
+        name = f"strateg {args[0]}" if args else "strateg"
         try:
-            code, out, _ = self.run(*args, "--json")
+            code, out, err = self.run(*args, "--json")
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise CliError(f"{name}: не запустился: {exc}") from exc
+        try:
             data = json.loads(out)
-        except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
-            return None
-        return data if isinstance(data, dict) and data.get("ok", True) is not False else None
+        except json.JSONDecodeError as exc:
+            raise CliError(f"{name}: код {code}, ответ не JSON: {(err or out).strip()[:300]}") from exc
+        if not isinstance(data, dict):
+            raise CliError(f"{name}: ответ не объект: {out.strip()[:200]}")
+        if data.get("ok", True) is False:
+            reason = str(data.get("error") or "")
+            if any(w in reason for w in NO_PROJECT):
+                return None
+            raise CliError(f"{name}: {reason or 'ok: false'}")
+        if code != 0:
+            raise CliError(f"{name}: код {code}: {(err or out).strip()[:300]}")
+        return data
 
 
 def make_cli(copy: Path, *, sync: bool) -> Cli:
@@ -277,15 +470,17 @@ def make_cli(copy: Path, *, sync: bool) -> Cli:
         r = subprocess.run(
             [uv, "sync", "--frozen"],
             cwd=copy,
-            env=clean_env(),
+            env=clean_env(copy=copy),
             capture_output=True,
             text=True,
             encoding="utf-8",
         )
         if r.returncode != 0:
             raise StandError("uv sync в копии не прошёл: " + (r.stderr or r.stdout).strip()[-400:])
-        return Cli([uv, "run", "--frozen", "strateg"], copy, clean_env())
-    env = clean_env({"PYTHONPATH": str(copy / "src"), "STRATEG_PROJECTS_DIR": str(copy / "projects")})
+        return Cli([uv, "run", "--frozen", "strateg"], copy, clean_env(copy=copy))
+    env = clean_env(
+        {"PYTHONPATH": str(copy / "src"), "STRATEG_PROJECTS_DIR": str(copy / "projects")}, copy=copy
+    )
     code = "import sys; from strateg.cli import main; sys.exit(main())"
     return Cli([sys.executable, "-c", code], copy, env)
 
@@ -306,11 +501,52 @@ class Wait:
 GATE_KEYS = {"В1": "B1", "В2": "B2", "В3": "B3", "В4": "B4", "В5": "B5"}
 
 
-def classify_wait(status: dict[str, Any] | None) -> Wait:
-    """По `strateg status --json`: ворота, остановка, выпуск или вопрос без ворот.
+# Журнал проекта: что двигает ход работы, а что нет. Как у `strateg.project.progress_events`.
+STOP_ACTION = "внеплановая остановка"
+NOT_PROGRESS_KINDS = ("изменено вне агента",)
+HOOK_ACTOR = "хук"
+HOOK_PROGRESS_KINDS = ("задание исследователю", "ответ человека")  # события хуков, которые ход всё же двигают
+RESUME_NOTE = "начато и не завершено до перерыва; обнаружено при возобновлении работы"
+
+
+def _journal(project: Path | None) -> list[dict[str, Any]]:
+    if project is None or not (project / "journal.jsonl").is_file():
+        return []
+    events: list[dict[str, Any]] = []
+    for line in (project / "journal.jsonl").read_text(encoding="utf-8").splitlines():
+        try:
+            e = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(e, dict):
+            events.append(e)
+    return events
+
+
+def stop_pending(project: Path | None) -> bool:
+    """Агент остановился и ждёт ответа: последнее событие хода проекта — «внеплановая остановка».
+
+    `status --json` показывает `paused: остановка` только пока шаг идёт. Агент же закрывает шаг (`step done`)
+    и после этого пишет остановку (например, «бюджет израсходован» на границе шагов): шаг закрыт, `paused`
+    пуст, а ответа человека агент ждёт. Поэтому остановку стенд читает ещё и по журналу.
+    """
+    progress = [
+        e
+        for e in _journal(project)
+        if e.get("kind") not in NOT_PROGRESS_KINDS
+        and not (e.get("actor") == HOOK_ACTOR and e.get("kind") not in HOOK_PROGRESS_KINDS)
+        and not (e.get("status") == "прервано" and e.get("message") == RESUME_NOTE)
+    ]
+    last = progress[-1] if progress else {}
+    return last.get("kind") == "действие" and last.get("name") == STOP_ACTION
+
+
+def classify_wait(status: dict[str, Any] | None, *, stop_logged: bool = False) -> Wait:
+    """По `strateg status --json` и журналу: ворота, остановка, выпуск или вопрос без ворот.
 
     - ворота ждут ответа — в списке `waiting_gates`;
-    - внеплановая остановка — `paused` равно «остановка»;
+    - внеплановая остановка — `paused` равно «остановка» (шаг идёт) или `stop_logged`: остановка — последнее
+      событие хода проекта (`stop_pending`), а шаг к этому времени уже закрыт;
     - выпуск — шаг 7 закрыт: `step` равен 7 (или 8) и шаг не идёт;
     - иначе агент закончил вызов без записи ожидания: вопрос без ворот. Проекта ещё нет — тоже вопрос.
     """
@@ -319,7 +555,7 @@ def classify_wait(status: dict[str, Any] | None) -> Wait:
     waiting = status.get("waiting_gates") or []
     if waiting:
         return Wait("ворота", GATE_KEYS.get(waiting[0], waiting[0]))
-    if status.get("paused") == "остановка":
+    if status.get("paused") == "остановка" or stop_logged:
         return Wait("остановка")
     if str(status.get("step")) in ("7", "8") and not status.get("step_in_progress"):
         return Wait("выпуск")
@@ -344,15 +580,29 @@ def first_quote(text: str) -> str:
     return " ".join((m.group(1) if m else text).split())
 
 
-# Ключевые слова причины остановки -> ключ `off_card.stops` в карточке. Порядок важен: первый совпавший.
-STOP_KEYS: list[tuple[str, tuple[str, ...]]] = [
-    ("asked_to_save_page_forbidden_by_robots", ("robots",)),
-    ("premortem_hits_choice", ("пре-мортем", "премортем")),
-    ("new_facts_contradict_choice", ("противореч",)),
-    ("completeness_failed", ("полнот",)),
-    ("budget_exhausted", ("бюджет исчерп", "исчерпан", "лимит исчерп")),
-    ("budget_estimate_over", ("оценка", "превыш")),
-    ("personal_or_closed_data_found", ("закрыт", "персональн")),
+# Слова причины остановки -> ключ `off_card.stops` в карточке. Слова — из формулировок скиллов и `AGENTS.md`
+# («бюджет израсходован», «оценка плана больше остатка бюджета», «не прошли признаки», «признаки закрытых
+# данных», «новые сведения противоречат», «причина из пре-мортема»). Порядок важен: первый совпавший;
+# «признаки закрытых данных» разбираются раньше «признаков» проверки полноты.
+# Ключ — слово; пара слов в кортеже — нужны обе («оценка плана» и «больше остатка»).
+STOP_KEYS: list[tuple[str, tuple[tuple[str, ...], ...]]] = [
+    ("asked_to_save_page_forbidden_by_robots", (("robots",),)),
+    ("premortem_hits_choice", (("пре-мортем",), ("премортем",))),
+    ("new_facts_contradict_choice", (("противореч",),)),
+    ("personal_or_closed_data_found", (("закрыт",), ("персональн",))),
+    ("budget_estimate_over", (("оценка", "больше остатка"), ("оценка", "превыш"), ("оценка", "не уклад"))),
+    ("budget_exhausted", (("израсходован",), ("исчерп",), ("бюджет", "не хватит"))),
+    (
+        "completeness_failed",
+        (("полнот",), ("не прошл",), ("не прошёл",), ("признаки:",), ("признаков:",), ("признаки б-",)),
+    ),
+]
+# Причины, для которых в карточке ответа нет: ответ вне карточки, но с пояснением, чего не хватило.
+NO_CARD_STOPS: list[tuple[tuple[str, ...], str]] = [
+    (("нужен материал",), "нужен материал: ответа в карточке нет"),
+    (("материал",), "нужен материал: ответа в карточке нет"),
+    (("что задето",), "остановка по задетому при пересмотре: ответа в карточке нет"),
+    (("check",), "ошибка проверки реестра: ответа в карточке нет"),
 ]
 
 
@@ -432,34 +682,80 @@ class Supervisor:
     def _stop(self, project: Path | None) -> Answer:
         reason = last_stop_reason(project)
         stops = (self.card.get("off_card") or {}).get("stops") or {}
+        key = stop_key(reason)
+        if key and key in stops:
+            return Answer(str(stops[key]), f"off_card.stops.{key}")
+        note = "остановка вне карточки: " + (reason or "причина не записана")
         folded = reason.casefold()
-        for key, _ in STOP_KEYS:
-            if key in stops and _stop_matches(key, folded):
-                return Answer(str(stops[key]), f"off_card.stops.{key}")
-        return self._default("остановка вне карточки: " + (reason or "причина не записана"))
+        for words, what in NO_CARD_STOPS:
+            if all(w in folded for w in words):
+                return self._default(f"{note} ({what})")
+        return self._default(note)
 
     def _question(self, agent_text: str) -> Answer:
-        closed = (self.card.get("unknown_and_closed") or {}).get("items") or []
-        if "?" in agent_text:
-            folded = agent_text.casefold()
-            for item in closed:
-                word = str(item).split()[0].casefold().rstrip(",;")
-                if len(word) >= 5 and word in folded:
-                    template = (self.card.get("unknown_and_closed") or {}).get("answer_template")
-                    if template:
-                        return Answer(str(template), "unknown_and_closed")
+        sentences = question_sentences(agent_text)
+        unknown = self.card.get("unknown_and_closed") or {}
+        for sentence in sentences:
+            if any(closed_item_matches(str(item), sentence) for item in unknown.get("items") or []):
+                template = unknown.get("answer_template")
+                if template:
+                    return Answer(str(template), "unknown_and_closed")
+        persona = self.card.get("persona") or {}
+        for sentence in sentences:
+            folded = sentence.casefold()
+            if persona.get("deadline") and any(w in folded for w in DEADLINE_WORDS):
+                return Answer(f"Срок: {persona['deadline']}.", "persona.deadline")
+            if persona.get("reports_to") and any(w in folded for w in RECIPIENT_WORDS):
+                return Answer(
+                    f"Результат читает: {persona['reports_to']}. Одна страница с рекомендацией.",
+                    "persona.reports_to",
+                )
         return self._default("вопрос без ворот вне карточки")
 
     def _default(self, note: str) -> Answer:
         return Answer(IDLE_ANSWER, "вне карточки", True, note)
 
 
-def _stop_matches(key: str, folded: str) -> bool:
-    """Для пары ключевых слов («оценка» и «превыш») нужны оба; у остальных хватает любого."""
-    words = dict(STOP_KEYS)[key]
-    return (
-        all(w in folded for w in words) if key == "budget_estimate_over" else any(w in folded for w in words)
-    )
+DEADLINE_WORDS = ("срок", "дедлайн", "к какому числу", "к какому дню", "когда нужно", "когда вам нужно")
+RECIPIENT_WORDS = ("кому ", "кому?", "получател", "адресат", "для кого", "кто будет читать", "кто прочитает")
+
+
+def stop_key(reason: str) -> str | None:
+    """Ключ `off_card.stops` по причине остановки; `None` — причины в карточке нет."""
+    folded = reason.casefold()
+    for key, variants in STOP_KEYS:
+        if any(all(w in folded for w in words) for words in variants):
+            return key
+    return None
+
+
+def question_sentences(text: str) -> list[str]:
+    """Предложения агента, которые заканчиваются знаком вопроса: только в них агент что-то спрашивает."""
+    return [m.strip() for m in re.findall(r"[^.!?\n]*\?", text) if len(m.strip()) > 1]
+
+
+def _stem(word: str) -> str:
+    return word[: max(4, len(word) - 2)]
+
+
+def closed_item_matches(item: str, sentence: str) -> bool:
+    """Вопрос про пункт «неизвестно и закрыто»: первое слово пункта (показатель) и ещё одно значимое слово.
+
+    Пункт из одного слова до запятой или тире («конверсия — из просмотра…») узнаётся по этому слову. У пункта
+    из нескольких слов нужно второе: одно «результаты» или «планы» в вопросе пункт не называет. При сомнении
+    пункт не совпал: ответ идёт как вне карточки.
+    """
+    words = [w for w in re.findall(r"[а-яёa-z\-]+", item.casefold()) if len(w) >= 4]
+    if not words:
+        return False
+    folded = sentence.casefold()
+    if _stem(words[0]) not in folded:
+        return False
+    head = re.split(r"[—,;:]", item, maxsplit=1)[0]
+    head_words = [w for w in re.findall(r"[а-яёa-z\-]+", head.casefold()) if len(w) >= 4]
+    if len(head_words) <= 1:
+        return True
+    return any(_stem(w) in folded for w in words[1:])
 
 
 def _number(option_id: str) -> int:
@@ -526,13 +822,18 @@ class CallOptions:
     max_budget_usd: float | None = None
     allowed_tools: tuple[str, ...] = ALLOWED_TOOLS
     permission_mode: str = PERMISSION_MODE
+    setting_sources: str = SETTING_SOURCES
+    mcp_config: Path | None = None  # `.mcp.json` копии, если он есть: других MCP-серверов в вызове нет
 
 
 def build_argv(exe: str, opts: CallOptions, session_id: str | None) -> list[str]:
     """Аргументы `claude -p`; сообщение — по stdin: через `claude.cmd` многострочный аргумент не пройдёт."""
     argv = [exe, "-p", "--output-format", "json"]
     argv += ["--permission-mode", opts.permission_mode, "--allowedTools", ",".join(opts.allowed_tools)]
-    argv += ["--settings", str(opts.settings)]
+    argv += ["--settings", str(opts.settings), "--setting-sources", opts.setting_sources]
+    argv += ["--strict-mcp-config"]
+    if opts.mcp_config is not None:
+        argv += ["--mcp-config", str(opts.mcp_config)]
     if opts.model:
         argv += ["--model", opts.model]
     if opts.max_turns:
@@ -548,17 +849,25 @@ def claude_process(exe: str) -> Invoker:
     """Настоящий вызов. Подменённый — любой другой вызываемый объект того же вида."""
 
     def invoke(prompt: str, session_id: str | None, opts: CallOptions) -> tuple[int, str, str]:
-        r = subprocess.run(
+        code, out, err = run_tree(
             build_argv(exe, opts, session_id),
-            input=prompt.encode("utf-8"),
+            input_bytes=prompt.encode("utf-8"),
             cwd=opts.cwd,
             env=opts.env,
-            capture_output=True,
             timeout=opts.timeout_s,
         )
-        return r.returncode, r.stdout.decode("utf-8", "replace"), r.stderr.decode("utf-8", "replace")
+        return code, out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
 
     return invoke
+
+
+def claude_version(exe: str, env: dict[str, str], cwd: Path) -> str | None:
+    """Версия `claude` для итогов (`claude --version`); не удалось — `None`."""
+    try:
+        code, out, _ = run_tree([exe, "--version"], input_bytes=None, cwd=cwd, env=env, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out.decode("utf-8", "replace").strip() or None if code == 0 else None
 
 
 @dataclass
@@ -619,6 +928,12 @@ class RunState:
     dry_run: bool
     started_at: str
     limits: Limits
+    claude_version: str | None = None  # `claude --version`
+    config_dir: str | None = None  # профиль, в котором шёл прогон (`CLAUDE_CONFIG_DIR` или `~/.claude`)
+    product_commit: str | None = None
+    product_dirty: bool | None = None  # в рабочей копии продукта были незафиксированные правки
+    actual_models: list[str] = field(default_factory=list)  # из `modelUsage`, по убыванию стоимости
+    turn_limit_continuations: int = 0  # сколько раз вызов упёрся в `--max-turns`, а стенд ответил «продолжай»
     outcome: str = (
         "идёт"  # идёт | выпуск | предел вызовов | предел бюджета | предел времени | зацикливание | сбой
     )
@@ -743,7 +1058,13 @@ class Bench:
 
     def collect_final(self, project: Path) -> dict[str, Any]:
         """Числа из проекта: время работы агента, итог `strateg check` и проверки полноты."""
-        status = self.cli.json("status") or {}
+        try:
+            status = self.cli.json("status") or {}
+        except CliError as exc:
+            status = {}
+            note = f"итоги: {exc}"
+            if note not in self.state.notes:
+                self.state.notes.append(note)
         code, out, err = self._check()
         done: dict[str, Any] = {
             "step": status.get("step"),
@@ -784,8 +1105,12 @@ class Bench:
             session, last_text = reply.session_id or session, reply.result
             project = active_project(self.copy)
             place_materials(self.card, self.case_dir, project, self.placed)
-            status = self.cli.json("status")
-            wait = classify_wait(status)
+            try:
+                status = self.cli.json("status")
+            except CliError as exc:  # не прочитанный `status` — не «вопрос»: ответ на ворота ушёл бы не туда
+                st.outcome, st.failure = "сбой", f"вызов {st.calls}: {exc}"
+                break
+            wait = classify_wait(status, stop_logged=stop_pending(project))
             st.last_wait = wait.kind if not wait.gate else f"{wait.kind} {wait.gate}"
             if wait.kind == "выпуск":
                 st.outcome = "выпуск"
@@ -797,9 +1122,17 @@ class Bench:
                 st.outcome = "зацикливание"
                 st.failure = f"{MAX_STALLED} вызова подряд без изменений в проекте"
                 break
-            answer = self.supervisor.answer(wait, project, last_text)
-            self._record_answer(wait, answer)
-            prompt = answer.text
+            if reply.subtype == "error_max_turns" and wait.kind == "вопрос":
+                # агент не закончил, а не спросил: ждать от него нечего, сессия продолжается
+                st.turn_limit_continuations += 1
+                note = f"вызов упёрся в --max-turns: агент не закончил, ответ «{CONTINUE_PROMPT}»"
+                if note not in st.notes:
+                    st.notes.append(note)
+                prompt = CONTINUE_PROMPT
+            else:
+                answer = self.supervisor.answer(wait, project, last_text)
+                self._record_answer(wait, answer)
+                prompt = answer.text
             self.write()
         self.write()
         return {"выпуск": EXIT_OK, "сбой": EXIT_FAILED}.get(st.outcome, EXIT_LIMIT)
@@ -818,14 +1151,16 @@ class Bench:
         st, lim = self.state, self.state.limits
         remaining_s = lim.max_minutes * 60 - (self.clock() - self.started).total_seconds()
         remaining_usd = None if lim.budget_usd is None else lim.budget_usd - (st.total_cost_usd or 0)
+        mcp = self.copy / ".mcp.json"
         opts = CallOptions(
             cwd=self.copy,
-            env=clean_env(),
+            env=clean_env(copy=self.copy),
             settings=self.settings,
             timeout_s=max(min(lim.call_timeout_min * 60, remaining_s), 1.0),
             model=st.model,
             max_turns=lim.max_turns,
             max_budget_usd=remaining_usd,
+            mcp_config=mcp if mcp.is_file() else None,
         )
         n = st.calls + 1
         raw = self.out / "raw"
@@ -842,30 +1177,47 @@ class Bench:
         (raw / f"call-{n:02d}.json").write_text(out, encoding="utf-8", newline="\n")
         if err.strip():
             (raw / f"call-{n:02d}.stderr.txt").write_text(err, encoding="utf-8", newline="\n")
-        if code != 0:
-            raise _CallFailed(f"вызов {n}: код {code}: {err.strip()[:300] or out.strip()[:300]}")
+        # Ответ разбирается до проверки кода: `claude -p` с исчерпанным бюджетом или ходами отвечает кодом 1,
+        # но с итогом вызова. Стоимость и `modelUsage` берутся из него и у упавшего вызова.
+        reply: Reply | None = None
+        parse_error: ValueError | None = None
         try:
             reply = parse_reply(out)
         except ValueError as exc:
-            raise _CallFailed(f"вызов {n}: {exc}: {out.strip()[:200]}") from exc
-        if reply.subtype == "error_max_budget_usd":
+            parse_error = exc
+        if reply is not None:
+            if reply.session_id and reply.session_id not in st.session_ids:
+                st.session_ids.append(reply.session_id)
             self._take_cost(reply)
-            return reply
+            if reply.subtype in LIMIT_SUBTYPES:
+                return reply  # предел бюджета и предел ходов — не сбой
+        if code != 0:
+            raise _CallFailed(f"вызов {n}: код {code}: {err.strip()[:300] or out.strip()[:300]}")
+        if reply is None:
+            raise _CallFailed(f"вызов {n}: {parse_error}: {out.strip()[:200]}")
         if reply.is_error or reply.subtype.startswith("error"):
             raise _CallFailed(f"вызов {n}: is_error {reply.subtype}: {reply.result[:300]}".strip())
-        if reply.session_id and reply.session_id not in st.session_ids:
-            st.session_ids.append(reply.session_id)
-        self._take_cost(reply)
         return reply
 
     def _take_cost(self, reply: Reply) -> None:
-        """Стоимость — последнее накопительное значение, не сумма: итог `--resume` накопительный."""
+        """Стоимость — последнее накопительное значение, не сумма: итог `--resume` накопительный.
+
+        Значение меньше прежнего накопительным не считается: остаётся максимум, в `notes` запись.
+        """
         st = self.state
         st.cumulative_costs.append(reply.total_cost_usd)
         if reply.total_cost_usd is not None:
-            st.total_cost_usd = reply.total_cost_usd
+            previous = st.total_cost_usd
+            if previous is not None and reply.total_cost_usd < previous:
+                st.notes.append(
+                    f"вызов {st.calls}: стоимость уменьшилась ({previous} -> {reply.total_cost_usd}): "
+                    "значение не накопительное; оставлен максимум"
+                )
+            else:
+                st.total_cost_usd = reply.total_cost_usd
         if reply.model_usage is not None:
             st.model_usage = reply.model_usage
+            st.actual_models = models_by_cost(reply.model_usage)
         elif reply.total_cost_usd is None:
             st.notes.append(f"вызов {st.calls}: в ответе нет стоимости")
 
@@ -886,6 +1238,19 @@ class Bench:
 
 class _CallFailed(Exception):
     pass
+
+
+LIMIT_SUBTYPES = ("error_max_budget_usd", "error_max_turns")
+
+
+def models_by_cost(usage: dict[str, Any]) -> list[str]:
+    """Модели из `modelUsage`: по убыванию стоимости (основной агент и субагенты)."""
+
+    def cost(item: Any) -> float:
+        v = item.get("costUSD") if isinstance(item, dict) else None
+        return float(v) if isinstance(v, int | float) and not isinstance(v, bool) else 0.0
+
+    return [k for k, _ in sorted(usage.items(), key=lambda kv: -cost(kv[1]))]
 
 
 def _count_interrupted(project: Path) -> int:
@@ -973,11 +1338,34 @@ def _sep() -> str:
 # ---------------------------------------------------------------------------
 
 
+def product_state(repo: Path) -> tuple[str | None, bool | None]:
+    """Коммит продукта и признак незафиксированных правок (`git`); нет `git` или репозитория — `None`."""
+
+    def git(*args: str) -> str | None:
+        try:
+            r = subprocess.run(
+                ["git", "-C", str(repo), *args],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=30,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return r.stdout if r.returncode == 0 else None
+
+    commit = git("rev-parse", "HEAD")
+    changes = git("status", "--porcelain")
+    return (commit.strip() if commit else None), (None if changes is None else bool(changes.strip()))
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Стенд оценки: прогон агента на кейсе без человека")
     p.add_argument("case", help="номер кейса: папка в evals/cases/")
     p.add_argument("--mode", choices=["автопилот", "пилот"], default="автопилот")
-    p.add_argument("--model", help="модель для claude -p (по умолчанию — как в профиле)")
+    p.add_argument(
+        "--model", default=DEFAULT_MODEL, help=f"модель основного агента (по умолчанию {DEFAULT_MODEL})"
+    )
     p.add_argument("--max-calls", type=int, default=DEFAULT_MAX_CALLS, help="предел вызовов claude -p")
     p.add_argument("--budget-usd", type=float, help="предел накопительной стоимости, USD")
     p.add_argument(
@@ -1036,7 +1424,7 @@ def main(argv: list[str] | None = None, *, invoker: Invoker | None = None) -> in
                 print("  " + line, file=sys.stderr)
             return EXIT_USAGE
         settings = work / "run-settings.json"
-        write_run_settings(settings)
+        write_run_settings(settings, ROOT, copy)
         cli = make_cli(copy, sync=not args.no_sync)
         if args.dry_run:
             import dry_run
@@ -1053,6 +1441,12 @@ def main(argv: list[str] | None = None, *, invoker: Invoker | None = None) -> in
             settings=settings, model=args.model, dry_run=args.dry_run,
         )  # fmt: skip
         bench.state.leak_check = {"phrases": leak_phrases(args.case, card), "found": []}
+        bench.state.config_dir = os.environ.get("CLAUDE_CONFIG_DIR") or str(Path.home() / ".claude")
+        bench.state.product_commit, bench.state.product_dirty = product_state(ROOT)
+        if args.dry_run:
+            bench.state.claude_version = "dry-run"
+        elif exe is not None:
+            bench.state.claude_version = claude_version(exe, clean_env(copy=copy), copy)
         code = bench.run(str(card["first_message"]).strip())
         result = bench.state.as_dict()
         if args.record:
