@@ -44,15 +44,6 @@ def record_completeness(cli, proj, *, passed: bool) -> None:
     assert code == (0 if passed else 1), (out, err)
 
 
-def unsure(cli, proj, cid: str = "У-2", model: str = "haiku") -> None:
-    """Вердикт «не уверен» дешёвой модели: условие повышения классификатора, которое CLI проверяет сам."""
-    code, out, err = cli(
-        "claim", "verdict", cid, "--verdict", "не уверен", "--reason", "цитата обрезана",
-        "--by", "классификатор", "--model", model, "--project", str(proj),
-    )  # fmt: skip
-    assert code == 0, (out, err)
-
-
 def picks(proj, role: str | None = None) -> list[dict]:
     return [
         e for e in journal_of(proj) if e["kind"] == "выбор модели" and (role is None or e["role"] == role)
@@ -66,7 +57,7 @@ def test_table_matches_the_decision():
     assert TABLE["schema_version"] == 1
     assert TABLE["levels"] == {"сильная": "opus", "средняя": "sonnet", "дешёвая": "haiku"}
     roles = TABLE["roles"]
-    assert set(roles) == {"researcher", "critic", "classifier", "respondent"}
+    assert set(roles) == {"researcher", "critic", "respondent"}  # классификатор снят по замеру (ADR-0007)
     assert roles["researcher"] == {"level": "средняя", "effort": "medium", "depth": 3}
     assert roles["critic"]["level"] == "средняя" and roles["critic"]["effort"] == "high"
     assert roles["critic"]["upgrade"] == {
@@ -74,8 +65,6 @@ def test_table_matches_the_decision():
         "to": "сильная",
         "times": 1,
     }
-    assert roles["classifier"]["level"] == "дешёвая" and roles["classifier"]["effort"] == "low"
-    assert roles["classifier"]["upgrade"] == {"when": "ответ «не уверен»", "to": "средняя", "times": 1}
     assert roles["respondent"] == {"level": "средняя", "effort": "medium"}
     assert TABLE["profiles"] == {
         "экономнее": {"researcher": {"depth": 2}},
@@ -170,9 +159,18 @@ def test_route_names_model_effort_and_writes_the_event(cli, proj):
 def test_route_researcher_has_depth_and_text_output(cli, proj):
     code, data, _ = route(cli, proj, "researcher")
     assert data["depth"] == 3
-    code, out, _ = cli("route", "classifier", "--project", str(proj))
-    assert code == 0 and "haiku" in out and "low" in out and "дешёвая" in out
-    assert "по таблице маршрутов" in picks(proj, "classifier")[-1]["message"]
+    code, out, _ = cli("route", "respondent", "--project", str(proj))
+    assert code == 0 and "sonnet" in out and "medium" in out and "средняя" in out
+    assert "по таблице маршрутов" in picks(proj, "respondent")[-1]["message"]
+
+
+def test_the_classifier_role_is_gone_from_the_table(cli, proj):
+    """Роль снята по замеру: `route classifier` — ошибка вызова с перечнем ролей, в журнал ничего не пишет."""
+    assert "classifier" not in TABLE["roles"]
+    before = len(journal_of(proj))
+    code, _, err = cli("route", "classifier", "--project", str(proj))
+    assert code == 2 and "classifier" in err and "critic" in err
+    assert len(journal_of(proj)) == before
 
 
 def test_unknown_role_is_a_usage_error_listing_the_roles(cli, proj):
@@ -243,7 +241,8 @@ def test_upgrade_goes_to_the_stronger_model_and_is_logged(cli, proj):
     assert check_project(proj) == []
 
 
-def test_upgrade_is_limited_to_times_per_role_and_step(cli, proj):
+def test_upgrade_is_limited_to_times_per_role_and_step(cli, proj, config):
+    config(lambda d: d["roles"]["respondent"].update(upgrade={"when": "x", "to": "сильная", "times": 1}))
     record_completeness(cli, proj, passed=False)
     assert route(cli, proj, "critic", "--upgrade")[0] == 0
     before = len(journal_of(proj))
@@ -251,8 +250,7 @@ def test_upgrade_is_limited_to_times_per_role_and_step(cli, proj):
     assert code == 1 and "предел" in err and "1 раз" in err
     assert len(journal_of(proj)) == before
     # другая роль на том же шаге — отдельный счёт
-    unsure(cli, proj)
-    assert route(cli, proj, "classifier", "--upgrade")[0] == 0
+    assert route(cli, proj, "respondent", "--upgrade")[0] == 0
     # обычный выбор роли не считается повышением
     assert route(cli, proj, "critic")[0] == 0
     # на другом шаге счёт свой
@@ -262,11 +260,10 @@ def test_upgrade_is_limited_to_times_per_role_and_step(cli, proj):
 
 
 def test_upgrade_limit_follows_times_from_the_table(cli, proj, config):
-    config(lambda d: d["roles"]["classifier"]["upgrade"].update(to="сильная", times=2))
-    unsure(cli, proj)
-    assert route(cli, proj, "classifier", "--upgrade")[1]["model"] == "opus"
-    assert route(cli, proj, "classifier", "--upgrade")[0] == 0
-    code, _, err = cli("route", "classifier", "--upgrade", "--project", str(proj))
+    config(lambda d: d["roles"]["respondent"].update(upgrade={"when": "x", "to": "сильная", "times": 2}))
+    assert route(cli, proj, "respondent", "--upgrade")[1]["model"] == "opus"
+    assert route(cli, proj, "respondent", "--upgrade")[0] == 0
+    code, _, err = cli("route", "respondent", "--upgrade", "--project", str(proj))
     assert code == 1 and "2 раз из 2" in err
 
 
@@ -312,28 +309,6 @@ def test_critic_upgrade_follows_the_last_record_not_an_earlier_one(cli, proj):
     assert code == 1 and picks(proj, "critic") == []
 
 
-def test_classifier_upgrade_needs_an_unsure_verdict_before_the_upgrade(cli, proj):
-    before = len(journal_of(proj))
-    code, _, err = cli(
-        "route", "classifier", "--upgrade", "--reason", "не уверен: У-2", "--project", str(proj)
-    )
-    assert code == 1 and "не уверен" in err and "claim verdict" in err
-    assert len(journal_of(proj)) == before and picks(proj, "classifier") == []
-    unsure(cli, proj)
-    code, data, err = route(cli, proj, "classifier", "--upgrade", "--reason", "не уверен: У-2")
-    assert code == 0, err
-    assert data["model"] == "sonnet" and data["upgrade"] is True
-
-
-def test_unsure_after_the_upgrade_is_not_a_reason_for_another_one(cli, proj, config):
-    config(lambda d: d["roles"]["classifier"]["upgrade"].update(to="сильная", times=2))
-    unsure(cli, proj)
-    assert route(cli, proj, "classifier", "--upgrade")[0] == 0
-    unsure(cli, proj, model="opus")  # повышенная модель тоже не уверена: повтор уже был
-    code, _, err = cli("route", "classifier", "--upgrade", "--project", str(proj))
-    assert code == 1 and "до повышения" in err
-
-
 def test_other_roles_upgrade_condition_stays_with_the_caller(cli, proj, config):
     config(lambda d: d["roles"]["respondent"].update(upgrade={"when": "x", "to": "сильная", "times": 1}))
     code, data, err = route(cli, proj, "respondent", "--upgrade", "--reason", "x")
@@ -363,17 +338,11 @@ def test_upgrade_holds_until_the_end_of_the_step(cli, proj):
 def test_sticky_upgrade_is_per_role_and_per_step(cli, proj):
     record_completeness(cli, proj, passed=False)
     route(cli, proj, "critic", "--upgrade")
-    assert route(cli, proj, "classifier")[1]["model"] == "haiku"  # другая роль не повышена
+    assert route(cli, proj, "researcher")[1]["model"] == "sonnet"  # другая роль не повышена
     assert route(cli, proj, "respondent")[1]["model"] == "sonnet"
     assert cli("step", "start", "6", "--project", str(proj))[0] == 0
     code, data, _ = route(cli, proj, "critic")
     assert data["model"] == "sonnet" and data["upgraded"] is False  # на новом шаге повышения нет
-
-
-def test_sticky_upgrade_of_the_classifier(cli, proj):
-    unsure(cli, proj)
-    route(cli, proj, "classifier", "--upgrade")
-    assert route(cli, proj, "classifier")[1]["model"] == "sonnet"
 
 
 def test_upgrade_limit_message_says_the_upgrade_stays(cli, proj):

@@ -477,3 +477,95 @@ def test_synthetic_options_helper_is_not_shadowed():
 
 def test_old_project_without_the_new_fields_is_clean():
     assert check_project(FIXTURE) == []
+
+
+# --- отказ ответить — не обещание будущего (Д-1) ---------------------------------------------------------
+
+
+def answer_warnings(started, cli, answer: str) -> str:
+    text = f"Вопрос 1: Сколько вы тратите на обеды?\nОтвет 1: СИНТЕТИКА: {answer}\n"
+    code, out, err = synth(cli, started, text)
+    assert code == 0, err
+    return " ".join(json.loads(out)["warnings"])
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "Тратим прилично, но точных цифр называть не буду.",  # живая проба: слово «буду» после глагола
+        "Точную сумму я называть не буду, это внутренние цифры.",
+        "Не буду называть точные цифры, скажу только, что много.",
+        "Сколько именно — не скажу.",
+        "Эти данные не назову, они закрытые.",
+    ],
+)
+def test_a_refusal_to_answer_is_not_a_promise_of_the_future(started, cli, answer):
+    assert "обещает будущее" not in answer_warnings(started, cli, answer)
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "Конечно, буду пользоваться каждый день.",
+        "Я бы купила такой сервис, если бы он был.",
+        "Точных цифр называть не буду, но пользоваться буду точно.",  # отказ и обещание в одном ответе
+        "Не буду отказываться и закажу снова.",
+    ],
+)
+def test_a_real_promise_of_the_future_is_still_marked(started, cli, answer):
+    assert "обещает будущее" in answer_warnings(started, cli, answer)
+
+
+# --- путь к снимку — реальная папка проекта (Д-3) --------------------------------------------------------
+
+
+def test_snapshot_path_is_the_real_folder_of_a_project_outside_projects(started, cli, tmp_path, monkeypatch):
+    """Проект перенесён в папку с другим именем: `projects/<номер>/` по такому пути ничего нет."""
+    import strateg.cli as cli_module
+
+    moved = tmp_path / "work" / "int-probe"
+    shutil.copytree(started, moved)
+    monkeypatch.setattr(cli_module, "find_repo_root", lambda: tmp_path / "work")
+    code, out, err = cli(
+        "synth",
+        "add",
+        "--persona",
+        PERSONA,
+        "--file",
+        str(put_session(moved)),
+        "--project",
+        str(moved),
+        "--json",
+    )
+    assert code == 0, err
+    data = json.loads(out)
+    assert data["snapshot_path"] == "int-probe/inputs/synth-2.md"
+    assert (tmp_path / "work" / data["snapshot_path"]).is_file()
+    assert "projects/demo" not in out
+
+
+def test_snapshot_path_outside_the_repository_is_a_full_path(started, cli, tmp_path):
+    moved = tmp_path / "elsewhere" / "copy"
+    shutil.copytree(started, moved)
+    code, out, err = cli(
+        "synth",
+        "add",
+        "--persona",
+        PERSONA,
+        "--file",
+        str(put_session(moved)),
+        "--project",
+        str(moved),
+        "--json",
+    )
+    assert code == 0, err
+    path = Path(json.loads(out)["snapshot_path"])
+    assert path.is_absolute() and path.is_file() and path.parent.parent == moved.resolve()
+
+
+def test_snapshot_path_in_the_usual_layout_is_relative_to_the_repository(started, cli, tmp_path, monkeypatch):
+    import strateg.cli as cli_module
+
+    monkeypatch.setattr(cli_module, "find_repo_root", lambda: tmp_path)
+    data = json.loads(synth(cli, started)[1])
+    assert data["snapshot_path"] == "projects/demo/inputs/synth-2.md"

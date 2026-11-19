@@ -261,7 +261,9 @@ def test_live_run_calls_claude_from_path_with_the_role_as_system_prompt(capsys, 
         assert argv[:2] == [FAKE, "-p"]  # путь из shutil.which: на Windows это claude.cmd
         assert argv[argv.index("--tools") + 1] == "" and "--strict-mcp-config" in argv
         assert "--no-session-persistence" in argv and argv[argv.index("--effort") + 1] == "low"
-        assert call["prompt"] == classify.role_text()  # роль — системный промпт, а не задание
+        assert (
+            call["prompt"] == ev.ROLE_TEXT.read_bytes().decode("utf-8-sig").strip()
+        )  # роль — системный промпт, а не задание
         assert call["input"].startswith(classify.PAIRS_HEADING) and "# Роль" not in call["input"]
         assert ev.ROOT not in Path(call["cwd"]).parents and Path(call["cwd"]) != ev.ROOT
     assert [c["argv"][c["argv"].index("--model") + 1] for c in seen] == ["haiku", "sonnet"] * 2
