@@ -326,10 +326,14 @@ PublisherKind = Literal[
     "отзыв пользователя",
     "материал пользователя",
 ]
-CheckMethod = Literal["точное вхождение", "без пробелов и дефисов"]
-# Вердикт классификатора о паре «утверждение — цитата» (ADR-0007): подтверждает ли цитата смысл.
+CheckMethod = Literal["точное вхождение", "без пробелов и дефисов", "по изображению"]
+# Способ проверки у цитаты с изображения: текста в снимке нет, код сверяет не смысл, а условия записи
+# (подтверждение человека, место «экран …; элемент …», целый файл изображения). ADR-0005.
+IMAGE_CHECK = "по изображению"
+# Вердикт о паре «утверждение — цитата» (ADR-0007): подтверждает ли цитата смысл. «классификатор» — только
+# в старых проектах: роль снята по замеру, новых вердиктов с ним не пишут, а старые читаются.
 VerdictValue = Literal["подтверждает", "частично", "не подтверждает", "не уверен"]
-VerdictBy = Literal["классификатор", "агент"]
+VerdictBy = Literal["критик", "агент", "классификатор"]
 VerdictCall = Literal["подтверждён", "не подтверждён"]  # след вызова роли в журнале
 
 EventKind = Literal[
@@ -355,7 +359,7 @@ CostEntry = Literal["по сообщению", "итог сессии"]
 CostSource = Literal["измерено", "оценка", "нет данных"]
 
 # Виды источника, цитату из которых нужно искать по месту (ADR-0004: `locator`).
-LOCATOR_KINDS = frozenset({"PDF", "документ", "таблица", "презентация", "интервью"})
+LOCATOR_KINDS = frozenset({"PDF", "документ", "таблица", "презентация", "интервью", "изображение"})
 
 
 class _Model(BaseModel):
@@ -407,6 +411,84 @@ def strip_spaces_and_hyphens(text: str) -> str:
 def has_meaning(text: str) -> bool:
     """После нормализации в цитате есть хотя бы одна буква или цифра."""
     return any(ch.isalnum() for ch in normalize_quote(text))
+
+
+_IMAGE_LOCATOR = re.compile(
+    r"^\s*экран\s+(?P<screen>[^;]+?)\s*;\s*элемент\s+(?P<element>.+?)\s*$", re.IGNORECASE | re.DOTALL
+)
+IMAGE_LOCATOR_FORM = "экран <название>; элемент <что и где>"
+
+
+def parse_image_locator(locator: str | None) -> tuple[str, str] | None:
+    """Место цитаты с изображения: «экран <название>; элемент <что и где>». Обе части непустые, иначе None."""
+    m = _IMAGE_LOCATOR.match(locator or "")
+    if m is None:
+        return None
+    screen, element = " ".join(m["screen"].split()), " ".join(m["element"].split())
+    if not has_meaning(screen) or not has_meaning(element) or ";" in element:
+        return None
+    return screen, element
+
+
+# Слова о поведении и желаниях людей: по снимку экрана это не видно, такое утверждение — гипотеза.
+# Эвристика по словам: ловит частые формы, не все. Текст в кавычках — видимая подпись, её слова не считаются;
+# слова ищутся с начала слова («часто» не находится в «участок»).
+_QUOTED = re.compile(r"«[^»]*»|„[^“”]*[“”]|“[^”]*”|\"[^\"]*\"")
+_WORD_START = r"(?<![\w-])"
+_BEHAVIOUR = re.compile(
+    _WORD_START + r"(?:"
+    r"не\s+(?:наход(?:ят|ит)|найд(?:ут|ет)|нашл\w+|нашел|замет(?:ят|ит)|замеча(?:ют|ет)|пойм(?:ут|ет)|"
+    r"понима(?:ют|ет)|смо(?:гут|жет)|мо(?:гут)|видят|видит|успева(?:ют|ет)|успе(?:ют|ет)|"
+    r"дочитыва(?:ют|ет)|дочита(?:ют|ет)|догад(?:аются|ается|ают|ает)\w*)"
+    r"|хот(?:ят|ел\w*)|хочет|хочешь|предпочита(?:ют|ет)"
+    r"|конверси\w*|отток\w*|неудобн\w*"
+    r"|(?:сложно|трудно|тяжело)\s+\w+"
+    r"|доля\s+(?:пользовател|клиент|посетител|покупател)\w*"
+    r"|непонятно\s+(?:пользовател|клиент|посетител|покупател|люд|человек)\w*"
+    r")",
+    re.IGNORECASE,
+)
+# Глаголы и частотные слова: о людях они только рядом со словом о людях («Покупатель бросает корзину»),
+# а «меню уходит за край», «Часто задаваемые вопросы» — об интерфейсе.
+_BEHAVIOUR_NEAR = re.compile(
+    _WORD_START + r"(?:"
+    r"уходят|уходит|уходил\w*|бросают|бросает|бросил\w*|отказыва\w+|жалу\w+|ошиба\w+|теря(?:ют|ет)\w*"
+    r"|(?:за)?пута(?:ют|ет|ли|л)\w*|раздража\w+|пользу(?:ют|ет)\w*|использу(?:ют|ет)\w*"
+    r"|нажима(?:ют|ет)\w*|клика(?:ют|ет)\w*|пропуска(?:ют|ет)\w*|выбира(?:ют|ет)\w*"
+    r"|часто|обычно|редко|чаще|большинств\w*|многие"
+    r")",
+    re.IGNORECASE,
+)
+_PEOPLE = re.compile(
+    _WORD_START
+    + r"(?:пользовател|клиент|покупател|посетител|человек|аудитори|юзер|гост(?:ь|и|ей|ям)|заказчик|"
+    r"студент|родител|"
+    r"пассажир|люд(?:и|ей|ям|ьми|ях))\w*",
+    re.IGNORECASE,
+)
+_NEAR_WORDS = 4  # слов слева и справа, где ищется слово о людях
+
+
+def strip_quoted(text: str) -> str:
+    """Текст без фрагментов в кавычках «…», „…“, “…”, \"…\": это видимая подпись или цитата."""
+    return _QUOTED.sub(" ", text)
+
+
+def behaviour_words(text: str) -> str | None:
+    """Первое слово о поведении или желаниях пользователей вне кавычек; None — таких нет."""
+    plain = normalize_quote(strip_quoted(text))
+    found = [m for m in (_BEHAVIOUR.search(plain),) if m]
+    words = list(re.finditer(r"\w+", plain))
+    for m in _BEHAVIOUR_NEAR.finditer(plain):
+        i = next((k for k, w in enumerate(words) if w.start() == m.start()), None)
+        if i is None:
+            continue
+        around = words[max(0, i - _NEAR_WORDS) : i] + words[i + 1 : i + 1 + _NEAR_WORDS]
+        if any(_PEOPLE.match(w.group()) for w in around):
+            found.append(m)
+    if not found:
+        return None
+    return min(found, key=lambda m: m.start()).group()
 
 
 @lru_cache(maxsize=32)
@@ -616,7 +698,13 @@ class Quote(_Model):
             p.append(
                 "в цитате нет ни буквы, ни цифры после нормализации — так цитата нашлась бы в любом снимке"
             )
-        if self.check is not None and self.check.method != "точное вхождение":
+        if self.check is not None and self.check.method == IMAGE_CHECK:
+            if parse_image_locator(self.locator) is None:
+                p.append(
+                    "у цитаты с изображения место записывается строго: «" + IMAGE_LOCATOR_FORM + "», "
+                    "обе части непустые"
+                )
+        elif self.check is not None and self.check.method != "точное вхождение":
             n = len(" ".join(self.text.split()))
             if n < MIN_COMPACT_QUOTE_LEN:
                 p.append(
@@ -649,31 +737,56 @@ class ForecastRange(_Model):
     unit: Text
 
 
+CalcName = Annotated[str, Field(pattern=r"^[a-zа-яё0-9][a-zа-яё0-9_-]*$", max_length=64)]
+
+
+class CalcRef(_Model):
+    """Число утверждения получено расчётом `outputs/calc/<name>.py`; `key` — путь к значению в результате."""
+
+    name: CalcName
+    key: Annotated[str, Field(pattern=r"^[^\s.][^\s]*$", max_length=120)]
+
+
 class ClaimVerdict(_Model):
     """Вердикт о смысле цитаты: текущий; прежние — в журнале (`strateg claim verdict`)."""
 
     verdict: VerdictValue
     type_ok: Flag | None = Field(None, description="Верен ли тип утверждения; нет — не оценивали")
     reason: Text = Field(description="Одна строка причины")
-    by: VerdictBy = Field(description="«классификатор» — роль со свежим контекстом, «агент» — запасной путь")
+    by: VerdictBy = Field(
+        description=(
+            "«критик» — роль со свежим контекстом, «агент» — запасной путь; "
+            "«классификатор» — только в старых проектах"
+        )
+    )
     model: Text = Field(description="Модель, которая вынесла вердикт")
     upgraded: Flag = Field(
         False,
-        description="Повтор после повышения: пара была «не уверен» до повышения модели роли на этом шаге",
+        description="Только в старых проектах: повтор после повышения модели классификатора",
     )
-    classifier_call: VerdictCall | None = Field(
+    critic_call: VerdictCall | None = Field(
         None,
         description=(
-            "Только при by: классификатор. «подтверждён» — в журнале есть событие «роль выполнена» для "
-            "classifier на этом шаге после прошлой записи вердикта; «не подтверждён» — нет"
+            "Только при by: критик. «подтверждён» — в журнале есть событие «роль выполнена» для критика "
+            "на этом шаге после прошлой записи вердикта; «не подтверждён» — нет"
         ),
     )
     at: Time
 
+    @model_validator(mode="before")
+    @classmethod
+    def _old_field(cls, data: Any) -> Any:
+        """Старый проект: вердикт классификатора хранил след вызова в `classifier_call`."""
+        if isinstance(data, dict) and "classifier_call" in data:
+            data = dict(data)
+            old = data.pop("classifier_call")
+            data.setdefault("critic_call", old)
+        return data
+
     @model_validator(mode="after")
     def _rules(self) -> Self:
-        if self.classifier_call is not None and self.by != "классификатор":
-            _raise(["classifier_call бывает только у вердикта by: классификатор"])
+        if self.critic_call is not None and self.by == "агент":
+            _raise(["critic_call бывает только у вердикта by: критик"])
         return self
 
 
@@ -706,11 +819,16 @@ class Claim(_Model):
         description="Номер попытки шага: при повторе прерванного шага растёт, записанное не дублируется"
     )
     verdict: ClaimVerdict | None = Field(None, description="Подтверждает ли цитата утверждение по смыслу")
+    calc: CalcRef | None = Field(
+        None, description="Число утверждения получено расчётом: имя расчёта и ключ значения (ADR-0005)"
+    )
 
     @model_validator(mode="after")
     def _rules(self) -> Self:
         p: list[str] = []
         t = self.type
+        if self.calc is not None and t not in ("факт", "прогноз", "допущение"):
+            p.append(f"расчёт (calc) бывает у факта, прогноза и допущения, а не у «{t}»")
         if (t == "синтетика") != (self.origin == "синтетика"):
             p.append("тип и происхождение «синтетика» идут вместе: синтетика не становится другим типом")
         if t == "факт":
@@ -777,6 +895,39 @@ class Claim(_Model):
             p.append("утверждение заменяет само себя")
         if self.verdict is not None and not self.quotes:
             p.append("вердикт о цитате у утверждения без цитат")
+        _raise(p)
+        return self
+
+
+class CalcInput(_Model):
+    source: SourceId
+    path: RelPath = Field(description="Снимок текста источника, который читал расчёт")
+    sha256: Sha256
+
+
+class CalcScript(_Model):
+    path: RelPath
+    sha256: Sha256
+
+
+class CalcResult(_Model):
+    """Файл `outputs/calc/<имя>.json`: результат расчёта, пишет только `strateg calc run`."""
+
+    schema_version: SchemaVersion
+    name: CalcName
+    script: CalcScript
+    inputs: list[CalcInput] = Field(description="Источники, которые расчёт прочитал, с хешами текстов")
+    values: dict[str, Any] = Field(description="Результат: то, что скрипт напечатал в JSON")
+    run_at: Time
+    python: Text = Field(description="Версия Python, которым считали")
+
+    @model_validator(mode="after")
+    def _rules(self) -> Self:
+        p: list[str] = []
+        if self.script.path != f"outputs/calc/{self.name}.py":
+            p.append(f"скрипт должен лежать в outputs/calc/{self.name}.py")
+        if len({i.source for i in self.inputs}) != len(self.inputs):
+            p.append("источник назван во входах дважды")
         _raise(p)
         return self
 
@@ -1754,4 +1905,5 @@ SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "decisions": DecisionsFile,
     "metrics": MetricsFile,
     "completeness": CompletenessFile,
+    "calc-result": CalcResult,
 }

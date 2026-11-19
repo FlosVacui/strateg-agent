@@ -1,6 +1,30 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$defs": {
+    "CalcRef": {
+      "additionalProperties": false,
+      "description": "Число утверждения получено расчётом `outputs/calc/<name>.py`; `key` — путь к значению в результате.",
+      "properties": {
+        "name": {
+          "maxLength": 64,
+          "pattern": "^[a-zа-яё0-9][a-zа-яё0-9_-]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "key": {
+          "maxLength": 120,
+          "pattern": "^[^\\s.][^\\s]*$",
+          "title": "Key",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "key"
+      ],
+      "title": "CalcRef",
+      "type": "object"
+    },
     "Claim": {
       "additionalProperties": false,
       "description": "Утверждение `У-n`.",
@@ -232,6 +256,18 @@
           ],
           "default": null,
           "description": "Подтверждает ли цитата утверждение по смыслу"
+        },
+        "calc": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CalcRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Число утверждения получено расчётом: имя расчёта и ключ значения (ADR-0005)"
         }
       },
       "required": [
@@ -282,10 +318,11 @@
           "type": "string"
         },
         "by": {
-          "description": "«классификатор» — роль со свежим контекстом, «агент» — запасной путь",
+          "description": "«критик» — роль со свежим контекстом, «агент» — запасной путь; «классификатор» — только в старых проектах",
           "enum": [
-            "классификатор",
-            "агент"
+            "критик",
+            "агент",
+            "классификатор"
           ],
           "title": "By",
           "type": "string"
@@ -298,11 +335,11 @@
         },
         "upgraded": {
           "default": false,
-          "description": "Повтор после повышения: пара была «не уверен» до повышения модели роли на этом шаге",
+          "description": "Только в старых проектах: повтор после повышения модели классификатора",
           "title": "Upgraded",
           "type": "boolean"
         },
-        "classifier_call": {
+        "critic_call": {
           "anyOf": [
             {
               "enum": [
@@ -316,8 +353,8 @@
             }
           ],
           "default": null,
-          "description": "Только при by: классификатор. «подтверждён» — в журнале есть событие «роль выполнена» для classifier на этом шаге после прошлой записи вердикта; «не подтверждён» — нет",
-          "title": "Classifier Call"
+          "description": "Только при by: критик. «подтверждён» — в журнале есть событие «роль выполнена» для критика на этом шаге после прошлой записи вердикта; «не подтверждён» — нет",
+          "title": "Critic Call"
         },
         "at": {
           "format": "date-time",
@@ -484,7 +521,8 @@
         "method": {
           "enum": [
             "точное вхождение",
-            "без пробелов и дефисов"
+            "без пробелов и дефисов",
+            "по изображению"
           ],
           "title": "Method",
           "type": "string"

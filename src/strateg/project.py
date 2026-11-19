@@ -24,6 +24,7 @@ import yaml
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from strateg import storage
+from strateg.calc import result_names as calc_result_names
 from strateg.models import (
     SCHEMA_VERSION,
     Budget,
@@ -373,6 +374,7 @@ class Project:
     def _hashes(self) -> dict[str, str]:
         rels = [SOURCES_FILE, CLAIMS_FILE, JOURNAL_FILE, COST_FILE, *TRACKED_OUTPUTS, METRICS_FILE]
         rels += [s.text_path for s in self.sources.sources if s.text_path]
+        rels += [f"outputs/calc/{n}.json" for n in calc_result_names(self.root)]
         history = self.root / HISTORY_DIR
         if history.is_dir():
             rels += [p.relative_to(self.root).as_posix() for p in history.rglob("*") if p.is_file()]
@@ -462,6 +464,7 @@ def _tracked_files(root: Path) -> list[Path]:
     sources = root / "sources"
     if sources.is_dir():
         files += [p for p in sorted(sources.iterdir()) if p.is_file()]
+    files += [root / "outputs" / "calc" / f"{n}.json" for n in calc_result_names(root)]
     history = root / HISTORY_DIR
     if history.is_dir():
         files += [p for p in sorted(history.rglob("*")) if p.is_file()]

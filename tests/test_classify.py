@@ -1,5 +1,5 @@
-"""Классификатор цитат: `claim pairs`, строгий разбор ответа, `claim verdict`, последствия в `check`
-и `status`, повышение при «не уверен» (ADR-0007, ADR-0008)."""
+"""Смысл цитат: `claim pairs`, строгий разбор ответа, `claim verdict --by критик`, последствия в `check`
+и `status` (ADR-0007). Роль-классификатор снята по замеру: вердикты выносит критик, старые читаются."""
 
 from __future__ import annotations
 
@@ -37,17 +37,17 @@ def pairs(cli, proj, *extra):
     return data
 
 
-def verdict(cli, proj, cid, value, *extra, model="haiku", by="классификатор", reason="так в цитате"):
+def verdict(cli, proj, cid, value, *extra, model="sonnet", by="критик", reason="так в цитате"):
     return run(
         cli, proj, "claim", "verdict", cid, "--verdict", value, "--reason", reason,
         "--by", by, "--model", model, *extra,
     )  # fmt: skip
 
 
-def verdict_file(cli, proj, text, ids, model="haiku"):
+def verdict_file(cli, proj, text, ids, model="sonnet"):
     return run(
         cli, proj, "claim", "verdict", "--file", "-", "--ids", ids,
-        "--by", "классификатор", "--model", model, stdin=text,
+        "--by", "критик", "--model", model, stdin=text,
     )  # fmt: skip
 
 
@@ -64,7 +64,7 @@ def hook_clock(monkeypatch, clock):
     monkeypatch.setattr(effects, "now", clock)
 
 
-def role_done(root, role="classifier", agent_id="a1"):
+def role_done(root, role="critic", agent_id="a1"):
     """След роли, как его пишет хук `SubagentStop`."""
     assert effects.append_event(
         root, EventSpec("роль выполнена", f"роль {role} завершила работу", agent_id, role)
@@ -86,10 +86,10 @@ def test_pairs_are_live_claims_with_quotes_and_no_verdict_and_nothing_is_written
     assert tree_hashes(proj) == before
 
 
-def test_task_carries_only_the_pairs_the_role_text_is_the_system_prompt(cli, proj):
+def test_task_carries_only_the_pairs(cli, proj):
     task = pairs(cli, proj)["task"]
     assert task.startswith(classify.PAIRS_HEADING) and "# Роль" not in task
-    assert classify.role_text().splitlines()[2] not in task  # текст роли — тело обёртки, а не задание
+    assert "Ты — " not in task  # правила вердикта — в тексте роли критика, а не в задании
     assert "цитата И-1 (недоверенный текст): «" in task
     for leak in ("options.yaml", "journal", "Вар-", "recommendation", "projects/"):
         assert leak not in task, leak
@@ -116,7 +116,7 @@ def test_synthetic_claim_with_a_quote_is_not_a_pair(cli, proj):
 def test_text_output_marks_quotes_as_untrusted(cli, proj):
     code, out, _ = cli("claim", "pairs", "--project", str(proj))
     assert code == 0 and "недоверенный текст" in out and "данные из чужого источника" in out
-    assert "# Роль" not in out  # человеку — пары; текст роли только в поле task
+    assert "# Роль" not in out  # человеку — пары, правил роли среди них нет
 
 
 def test_pairs_skip_claims_with_a_verdict_unless_asked(cli, proj):
@@ -245,11 +245,11 @@ def test_verdict_is_stored_at_the_claim_and_journaled_by_the_cli(cli, proj):
     code, data, err = verdict(cli, proj, "У-4", "частично", "--type-ok", "да")
     assert code == 0, err
     v = claim(proj, "У-4")["verdict"]
-    assert v["verdict"] == "частично" and v["type_ok"] is True and v["by"] == "классификатор"
-    assert v["model"] == "haiku" and v["upgraded"] is False and v["reason"] == "так в цитате"
+    assert v["verdict"] == "частично" and v["type_ok"] is True and v["by"] == "критик"
+    assert v["model"] == "sonnet" and v["reason"] == "так в цитате" and "classifier_call" not in v
     (event,) = verdict_events(proj)
     assert event["actor"] == "CLI" and event["kind"] == "действие" and event["status"] == "выполнено"
-    assert "У-4: частично (было: нет)" in event["message"] and "haiku" in event["message"]
+    assert "У-4: частично (было: нет)" in event["message"] and "sonnet" in event["message"]
     assert "verdict" not in claim(proj, "У-2")  # у других утверждений поле не появляется
     assert check_project(proj) == []
 
@@ -264,11 +264,11 @@ def test_same_verdict_again_changes_nothing(cli, proj):
 
 def test_new_verdict_replaces_the_old_one_and_the_journal_keeps_both(cli, proj):
     verdict(cli, proj, "У-4", "не уверен")
-    verdict(cli, proj, "У-4", "подтверждает", model="sonnet", reason="диапазон тот же")
+    verdict(cli, proj, "У-4", "подтверждает", model="opus", reason="диапазон тот же")
     assert claim(proj, "У-4")["verdict"]["verdict"] == "подтверждает"
     first, second = verdict_events(proj)
     assert "У-4: не уверен (было: нет)" in first["message"]
-    assert "У-4: подтверждает (было: не уверен)" in second["message"] and "sonnet" in second["message"]
+    assert "У-4: подтверждает (было: не уверен)" in second["message"] and "opus" in second["message"]
     assert check_project(proj) == []
 
 
@@ -288,6 +288,16 @@ def test_verdict_input_errors_write_nothing(cli, proj, argv, words):
     assert code == 2
     for w in words:
         assert w in data["error"]
+    assert tree_hashes(proj) == before
+
+
+def test_the_classifier_is_not_a_value_of_by_any_more(cli, proj):
+    before = tree_hashes(proj)
+    code, _, err = cli(
+        "claim", "verdict", "У-4", "--verdict", "частично", "--reason", "x", "--by", "классификатор",
+        "--model", "haiku", "--project", str(proj),
+    )  # fmt: skip
+    assert code == 2 and "классификатор" in err and "критик" in err
     assert tree_hashes(proj) == before
 
 
@@ -315,9 +325,9 @@ def test_answer_file_reports_ids_not_in_the_task(cli, proj):
 
 
 def test_model_other_than_route_is_warned(cli, proj):
-    assert cli("route", "classifier", "--project", str(proj))[0] == 0
+    assert cli("route", "critic", "--project", str(proj))[0] == 0
     code, data, _ = verdict(cli, proj, "У-4", "частично", model="opus")
-    assert code == 0 and any("haiku" in w for w in data["warnings"])
+    assert code == 0 and any("sonnet" in w and "route critic" in w for w in data["warnings"])
 
 
 # --- последствия в check и status ----------------------------------------------------------------------
@@ -375,7 +385,7 @@ def test_project_without_verdicts_is_clean_and_status_names_bases_without_one(cl
     assert v["checked"] == 0 and v["unchecked"] == 2 and v["unchecked_bases"] == ["У-2", "У-4"]
     code, out, _ = cli("status", "--project", str(proj))
     assert "Внимание: без проверки смысла цитаты: У-2, У-4 — основание рекомендации" in out
-    assert "`strateg claim pairs --json --ids У-2,У-4` и классификатор" in out
+    assert "`strateg claim pairs --json --ids У-2,У-4` и критик (шаг 6)" in out
     assert "смысл" not in run(cli, proj, "status", "--line")[1]["line"]
     verdict(cli, proj, "У-2", "подтверждает")
     assert run(cli, proj, "status")[1]["claims"]["verdicts"]["unchecked_bases"] == ["У-4"]
@@ -413,156 +423,118 @@ def test_status_warns_about_each_kind_of_verdict(cli, proj):
     assert "смысл цитат проверен: 2, без вердикта: 0" in out
     assert "Внимание: цитата подтверждает частично: У-2" in out
     assert "Внимание: тип утверждения под сомнением: У-2" in out
-    assert "Внимание: классификатор не уверен: У-4 — повтор на средней модели" in out
-    assert "`strateg claim pairs --json --ids У-4`" in out
+    assert "Внимание: смысл цитаты не понят («не уверен»): У-4" in out
+    assert "--upgrade" not in out
     assert "проверка не независимая: У-2" in out
     verdict(cli, proj, "У-4", "не подтверждает")
     code, out, _ = cli("status", "--project", str(proj))
     assert "Внимание: цитата не подтверждает утверждение: У-4 — замените или отзовите" in out
 
 
-# --- повышение при «не уверен» -------------------------------------------------------------------------
+# --- «не уверен»: пометка, а не повышение модели -------------------------------------------------------
 
 
-def test_unsure_upgrade_retry_on_the_middle_model_is_traced(cli, proj):
-    code, data, _ = run(cli, proj, "route", "classifier", "--reason", "смысл цитат")
-    assert data["model"] == "haiku"
-    task = pairs(cli, proj)
-    verdict_file(
-        cli,
-        proj,
-        "У-2 | подтверждает | тип: да | та же цена\nУ-4 | не уверен | тип: да | обрезана",
-        ",".join(task["ids"]),
-    )
-    code, data, err = run(cli, proj, "route", "classifier", "--upgrade", "--reason", "не уверен: У-4")
-    assert code == 0 and data["model"] == "sonnet", err
-    retry = pairs(cli, proj, "--ids", "У-4")
-    assert retry["ids"] == ["У-4"]
-    verdict_file(cli, proj, "У-4 | частично | тип: да | нет базы", "У-4", model="sonnet")
-    v = claim(proj, "У-4")["verdict"]
-    assert v["verdict"] == "частично" and v["upgraded"] is True and v["model"] == "sonnet"
-    assert claim(proj, "У-2")["verdict"]["upgraded"] is False
-    # журнал: выбор, вердикты дешёвой модели, повышение, вердикт средней
-    names = [(e["kind"], e.get("name")) for e in journal_of(proj)[-5:]]
-    assert names == [
-        ("выбор модели", "выбор"),
-        ("действие", "strateg claim verdict"),
-        ("действие", "strateg claim verdict"),
-        ("выбор модели", "повышение"),
-        ("действие", "strateg claim verdict"),
-    ]
-    assert "после повышения" in verdict_events(proj)[-1]["message"]
-    report = run(cli, proj, "cost", "report")[1]
-    (up,) = report["model_upgrades"]
-    assert up["role"] == "classifier" and up["model"] == "sonnet"
-    assert up["outcome"] == "повторено 1 из 1 «не уверен»: частично 1"
-    code, out, _ = cli("cost", "report", "--project", str(proj))
-    assert "classifier -> sonnet" in out and "итог: повторено 1 из 1 «не уверен»: частично 1" in out
-    # повтор один: второго повышения нет, «не уверен» после повышения — предупреждение
-    verdict(cli, proj, "У-4", "не уверен", model="sonnet")
-    code, _, err = cli("route", "classifier", "--upgrade", "--project", str(proj))
-    assert code == 1
-    code, out, _ = cli("status", "--project", str(proj))
-    assert "классификатор не уверен и после повышения: У-4" in out
-    assert check_project(proj) == []
-
-
-def unsure_then_upgrade(cli, proj):
-    """У-2 подтверждено, У-4 «не уверен» на дешёвой модели, затем повышение до средней."""
-    verdict_file(
-        cli,
-        proj,
-        "У-2 | подтверждает | тип: да | та же цена\nУ-4 | не уверен | тип: да | обрезана",
-        "У-2,У-4",
-    )
-    code, data, err = run(cli, proj, "route", "classifier", "--upgrade", "--reason", "не уверен: У-4")
-    assert code == 0 and data["model"] == "sonnet", err
-
-
-def test_after_the_upgrade_only_the_unsure_pairs_on_the_upgraded_model_are_a_retry(cli, proj):
-    unsure_then_upgrade(cli, proj)
-    # вердикт средней модели по паре, которая «не уверен» не была, — не повтор после повышения
-    code, data, _ = verdict(cli, proj, "У-2", "частично", model="sonnet")
-    assert data["verdicts"][0]["upgraded"] is False and claim(proj, "У-2")["verdict"]["upgraded"] is False
-    # вердикт базовой модели по паре «не уверен» после повышения — тоже не повтор
-    code, data, _ = verdict(cli, proj, "У-4", "частично", model="haiku")
-    assert data["verdicts"][0]["upgraded"] is False and claim(proj, "У-4")["verdict"]["upgraded"] is False
-    assert "после повышения" not in verdict_events(proj)[-1]["message"]
-    report = run(cli, proj, "cost", "report")[1]
-    assert report["model_upgrades"][0]["outcome"] == "повторено 0 из 1 «не уверен»"
-    # повтор той же пары повышенной моделью — повтор
-    code, data, _ = verdict(cli, proj, "У-4", "подтверждает", model="sonnet")
-    assert data["verdicts"][0]["upgraded"] is True and data["upgraded"] is True
-    report = run(cli, proj, "cost", "report")[1]
-    assert report["model_upgrades"][0]["outcome"] == "повторено 1 из 1 «не уверен»: подтверждает 1"
-
-
-def test_unsure_when_the_upgrade_limit_is_spent_says_so_instead_of_advising_it(cli, proj):
-    unsure_then_upgrade(cli, proj)
-    code, data, _ = verdict(cli, proj, "У-2", "не уверен", model="haiku")  # новая пара «не уверен»
-    assert data["upgrade_exhausted"] is True and data["verdicts"][0]["upgraded"] is False
+def test_unsure_is_a_note_in_the_output_and_in_status_not_an_upgrade(cli, proj):
     code, out, _ = cli(
-        "claim", "verdict", "У-2", "--verdict", "не уверен", "--reason", "снова", "--by", "классификатор",
-        "--model", "haiku", "--project", str(proj),
-    )  # fmt: skip
-    assert "предел повышений классификатора на этом шаге исчерпан" in out and "--upgrade" not in out
-    code, out, _ = cli("status", "--project", str(proj))
-    assert "классификатор не уверен: У-2, У-4 — предел повышений на этом шаге исчерпан" in out
-    assert "route classifier --upgrade" not in out
-    assert cli("route", "classifier", "--upgrade", "--project", str(proj))[0] == 1
-
-
-def test_unsure_hint_names_the_retry_of_only_these_pairs(cli, proj):
-    code, out, _ = cli(
-        "claim", "verdict", "--file", "-", "--ids", "У-2,У-4", "--by", "классификатор", "--model", "haiku",
+        "claim", "verdict", "--file", "-", "--ids", "У-2,У-4", "--by", "критик", "--model", "sonnet",
         "--project", str(proj), stdin="У-2 | не уверен | тип: да | обрезана\nУ-4 | не уверен | тип: да | x",
     )  # fmt: skip
     assert code == 0
-    assert "`strateg route classifier --upgrade --reason 'не уверен: У-2, У-4'`" in out
-    assert "Затем повтор только этих пар: `strateg claim pairs --json --ids У-2,У-4`" in out
-
-
-UNCONFIRMED = "Вызов классификатора не подтверждён"
-
-
-def test_classifier_verdict_without_a_trace_of_the_role_is_said_everywhere(cli, proj, hook_clock):
-    code, data, err = verdict(cli, proj, "У-4", "частично")
-    assert code == 0, err
-    assert data["classifier_call"] == "не подтверждён" and data["independent"] is False
-    assert any(w.startswith(UNCONFIRMED) for w in data["warnings"])
-    assert claim(proj, "У-4")["verdict"]["classifier_call"] == "не подтверждён"
-    assert "вызов классификатора не подтверждён" in verdict_events(proj)[-1]["message"]
+    assert "Не уверен: У-2, У-4 — смысл по цитате не понять" in out and "--upgrade" not in out
+    assert "route classifier" not in out
     code, out, _ = cli("status", "--project", str(proj))
-    assert "Внимание: вызов классификатора не подтверждён: У-4" in out
-    # вердикт агента — не вызов роли: поля нет, в status — «проверка не независимая»
-    verdict(cli, proj, "У-2", "подтверждает", by="агент")
-    assert "classifier_call" not in claim(proj, "У-2")["verdict"]
+    assert "смысл цитаты не понят («не уверен»): У-2, У-4" in out and "--upgrade" not in out
+    assert cli("route", "classifier", "--project", str(proj))[0] == 2  # роли нет
     assert check_project(proj) == []
 
 
-def test_classifier_verdict_after_the_role_ran_is_confirmed_once(cli, proj, hook_clock):
+def test_old_project_with_the_classifier_verdicts_stays_clean(cli, proj):
+    """Вердикты `by: классификатор` с `classifier_call` и `upgraded` читаются; `check` и `status` чисты."""
+
+    def old(d):
+        for c in d["claims"]:
+            if c["id"] == "У-2":
+                c["verdict"] = {
+                    "verdict": "подтверждает", "type_ok": True, "reason": "та же цена", "by": "классификатор",
+                    "model": "haiku", "upgraded": True, "classifier_call": "подтверждён",
+                    "at": "2026-11-10T10:00:00+03:00",
+                }  # fmt: skip
+            if c["id"] == "У-4":
+                c["verdict"] = {
+                    "verdict": "не уверен", "reason": "цитата обрезана", "by": "классификатор",
+                    "model": "haiku", "classifier_call": "не подтверждён", "at": "2026-11-10T10:00:00+03:00",
+                }  # fmt: skip
+
+    edit_yaml(proj, "claims.yaml", old)
+    rehash(proj)
+    assert check_project(proj) == []
+    assert cli("check", "--project", str(proj))[0] == 0
+    code, data, _ = run(cli, proj, "status")
+    v = data["claims"]["verdicts"]
+    assert code == 0 and v["checked"] == 2 and v["unchecked_bases"] == [] and v["unsure"] == ["У-4"]
+    p = projlib.Project.load(proj)
+    assert p.claims.claims[1].verdict.by == "классификатор"
+    assert p.claims.claims[1].verdict.critic_call == "подтверждён"  # старое поле читается под новым именем
+    # «не подтверждает» от старого классификатора остаётся ошибкой check, как от критика
+    edit_yaml(
+        proj, "claims.yaml",
+        lambda d: next(c for c in d["claims"] if c["id"] == "У-2")["verdict"].update(
+            verdict="не подтверждает"
+        ),
+    )  # fmt: skip
+    rehash(proj)
+    assert any(UNSUPPORTED_NOTE in e for e in check_project(proj))
+
+
+def test_not_supported_is_an_error_whoever_gave_the_verdict(cli, proj):
+    for by in ("критик", "агент"):
+        verdict(cli, proj, "У-2", "не подтверждает", by=by)
+        assert any(UNSUPPORTED_NOTE in e for e in check_project(proj)), by
+        verdict(cli, proj, "У-2", "подтверждает", by=by)
+        assert check_project(proj) == [], by
+
+
+UNCONFIRMED = "Вызов критика не подтверждён"
+
+
+def test_critic_verdict_without_a_trace_of_the_role_is_said_everywhere(cli, proj, hook_clock):
+    code, data, err = verdict(cli, proj, "У-4", "частично")
+    assert code == 0, err
+    assert data["critic_call"] == "не подтверждён" and data["independent"] is False
+    assert any(w.startswith(UNCONFIRMED) for w in data["warnings"])
+    assert claim(proj, "У-4")["verdict"]["critic_call"] == "не подтверждён"
+    assert "вызов критика не подтверждён" in verdict_events(proj)[-1]["message"]
+    code, out, _ = cli("status", "--project", str(proj))
+    assert "Внимание: вызов критика не подтверждён: У-4" in out
+    # вердикт агента — не вызов роли: поля нет, в status — «проверка не независимая»
+    verdict(cli, proj, "У-2", "подтверждает", by="агент")
+    assert "critic_call" not in claim(proj, "У-2")["verdict"]
+    assert check_project(proj) == []
+
+
+def test_critic_verdict_after_the_role_ran_is_confirmed_once(cli, proj, hook_clock):
     role_done(proj)
     code, data, _ = verdict_file(
         cli, proj, "У-2 | подтверждает | тип: да | та же цена\nУ-4 | частично | тип: да | нет базы", "У-2,У-4"
     )
-    assert data["classifier_call"] == "подтверждён" and data["warnings"] == []
-    assert claim(proj, "У-4")["verdict"]["classifier_call"] == "подтверждён"
+    assert data["critic_call"] == "подтверждён" and data["warnings"] == []
+    assert claim(proj, "У-4")["verdict"]["critic_call"] == "подтверждён"
     code, out, _ = cli("status", "--project", str(proj))
     assert "не подтверждён" not in out
     # следующий вердикт без нового вызова роли не подтверждён: граница — прошлая запись вердикта
     code, data, _ = verdict(cli, proj, "У-4", "не уверен")
-    assert data["classifier_call"] == "не подтверждён"
+    assert data["critic_call"] == "не подтверждён"
     # тот же вердикт после нового вызова роли записывается: вызов теперь подтверждён
     role_done(proj, agent_id="a2")
     code, data, _ = verdict(cli, proj, "У-4", "не уверен")
     assert (
         data["verdicts"][0]["changed"] is True
-        and claim(proj, "У-4")["verdict"]["classifier_call"] == "подтверждён"
+        and claim(proj, "У-4")["verdict"]["critic_call"] == "подтверждён"
     )
-    # критик — не классификатор
-    role_done(proj, role="critic", agent_id="a3")
+    # исследователь — не критик
+    role_done(proj, role="researcher", agent_id="a3")
     code, data, _ = verdict(cli, proj, "У-4", "частично")
-    assert data["classifier_call"] == "не подтверждён"
+    assert data["critic_call"] == "не подтверждён"
 
 
 def test_verdict_checks_the_project_once_per_transaction(cli, proj, monkeypatch):

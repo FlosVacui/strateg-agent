@@ -5,6 +5,10 @@
 действует только по времени. На выпуск с пометкой о неполноте оставлен резерв: в нём `budget check`
 не отказывает.
 
+`strateg budget check --next` оценивает цену следующего шага: медиана по завершённым шагам проекта (деньги —
+из `cost.jsonl`, минуты — из журнала); истории нет — таблица `step_estimate` в `config/defaults.yaml`, и вывод
+называет её оценкой. Остаток меньше оценки — код 1.
+
 `config/defaults.yaml` — бюджет по умолчанию; `config/prices.yaml` — цены Anthropic с датой обращения
 к странице цен (по ним оценивается стоимость, когда среда не отдаёт доллары).
 """
@@ -12,6 +16,7 @@
 from __future__ import annotations
 
 import os
+import statistics
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated
@@ -28,6 +33,7 @@ from pydantic import (
 )
 
 from strateg import project as proj
+from strateg.models import JournalEvent
 from strateg.project import CliError, Project
 
 CONFIG_ENV = "STRATEG_CONFIG_DIR"  # где лежат defaults.yaml и prices.yaml (по умолчанию config/ репозитория)
@@ -85,8 +91,36 @@ class FollowUpDefaults(_Config):
     )
 
 
+STEPS = ("1", "2а", "2б", "3", "4", "5", "6", "7", "8")
+# Оценка шага без истории (доллары и минуты); те же числа — в `config/defaults.yaml`, раздел `step_estimate`.
+DEFAULT_STEP_ESTIMATE = {
+    "1": (0.5, 2.0),
+    "2а": (0.4, 2.0),
+    "2б": (1.6, 8.0),
+    "3": (0.4, 3.0),
+    "4": (0.9, 4.0),
+    "5": (0.7, 3.0),
+    "6": (0.3, 2.0),
+    "7": (0.6, 3.0),
+    "8": (0.8, 3.0),
+}
+
+
+class StepEstimate(_Config):
+    usd: Positive
+    minutes: Positive
+
+
+def _default_step_estimate() -> dict[str, StepEstimate]:
+    return {k: StepEstimate(usd=u, minutes=m) for k, (u, m) in DEFAULT_STEP_ESTIMATE.items()}
+
+
 class Defaults(_Config):
     budget: BudgetDefaults
+    step_estimate: dict[str, StepEstimate] = Field(
+        default_factory=_default_step_estimate,
+        description="Цена одного шага без истории проекта (`budget check --next`); раздела нет — числа кода",
+    )
     follow_up: FollowUpDefaults = Field(
         default_factory=FollowUpDefaults,
         description="Сопровождение решений; раздела нет — значения по умолчанию",
@@ -265,6 +299,78 @@ def warning_text(m: Measure, warn_share: float) -> str | None:
         what = "деньги" if (m.share_usd or 0.0) >= m.share_minutes else "время"
         return f"израсходовано {round(m.share * 100)} % бюджета ({what})"
     return None
+
+
+TABLE_SOURCE = "оценка по таблице config/defaults.yaml, истории проекта нет"
+
+
+@dataclass(frozen=True)
+class NextStep:
+    """Оценка шага: деньги и минуты и откуда они взяты."""
+
+    step: str
+    usd: float
+    minutes: float
+    usd_source: str
+    minutes_source: str
+
+    @property
+    def source(self) -> str:
+        if self.usd_source == self.minutes_source:
+            return self.usd_source
+        return f"деньги: {self.usd_source}; время: {self.minutes_source}"
+
+    @property
+    def estimated(self) -> bool:
+        """Хоть одно число — по таблице, а не по истории проекта."""
+        return TABLE_SOURCE in (self.usd_source, self.minutes_source)
+
+
+def next_step_of(p: Project) -> str:
+    """Следующий шаг по `status`: после выполненного — следующий; начатый или прерванный — он сам."""
+    step = p.state.step
+    name = proj.step_action_name(step)
+    last = next((e.status for e in reversed(p.journal) if proj.is_step_action(e) and e.name == name), None)
+    if last != "выполнено":
+        return step
+    i = STEPS.index(step) if step in STEPS else len(STEPS) - 1
+    return STEPS[min(i + 1, len(STEPS) - 1)]  # после шага 8 пересмотр повторяется
+
+
+def _step_of(e: JournalEvent) -> str:
+    return (e.name or "").removeprefix("шаг ")
+
+
+def _history(p: Project) -> tuple[dict[str, float], dict[str, float]]:
+    """Деньги и минуты каждого завершённого шага проекта: сообщения из `cost.jsonl` и записи журнала."""
+    from strateg.costreport import breakdown_records  # импорт здесь: costreport импортирует этот модуль
+
+    steps = [e for e in proj.own_events(p.journal) if proj.is_step_action(e)]
+    done = {_step_of(e) for e in steps if e.status == "выполнено"}
+    usd: dict[str, float] = {}
+    for r in breakdown_records(p.costs):
+        if r.entry == "по сообщению" and r.step in done and r.cost_usd is not None:
+            usd[r.step] = usd.get(r.step, 0.0) + r.cost_usd
+    minutes: dict[str, float] = {}
+    for e in steps:
+        if e.status in ("выполнено", "прервано") and _step_of(e) in done:
+            minutes[_step_of(e)] = minutes.get(_step_of(e), 0.0) + (e.duration_s or 0.0) / 60
+    return usd, minutes
+
+
+def _median(values: dict[str, float]) -> tuple[float, str]:
+    return statistics.median(
+        values.values()
+    ), f"медиана {len(values)} завершённых шагов проекта: {', '.join(values)}"
+
+
+def estimate_step(p: Project, step: str, table: dict[str, StepEstimate]) -> NextStep:
+    """Цена шага: медиана по завершённым шагам проекта; истории нет — таблица `step_estimate`."""
+    usd_hist, min_hist = _history(p)
+    row = table.get(step) or _default_step_estimate()[step]
+    usd, usd_source = _median(usd_hist) if usd_hist else (row.usd, TABLE_SOURCE)
+    minutes, minutes_source = _median(min_hist) if min_hist else (row.minutes, TABLE_SOURCE)
+    return NextStep(step, usd, minutes, usd_source, minutes_source)
 
 
 def _usd(x: float) -> str:

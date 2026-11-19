@@ -20,8 +20,9 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from strateg import __version__, materials, outputs, project_copy, safety
+from strateg import __version__, imagequote, materials, outputs, project_copy, safety
 from strateg import budget as budgetlib
+from strateg import calc as calclib
 from strateg import fetch as fetchlib
 from strateg import pack as packlib
 from strateg import project as proj
@@ -29,8 +30,10 @@ from strateg import quote as quotelib
 from strateg import release as releaselib
 from strateg.hooks import flags as hookflags
 from strateg.models import (
+    IMAGE_CHECK,
     LOCATOR_KINDS,
     SCHEMA_VERSION,
+    CalcRef,
     Claim,
     ClaimId,
     ClaimType,
@@ -1275,6 +1278,7 @@ class ClaimIn(_In):
     plan_question: Text | None = None
     step: Step | None = None
     dispute: DisputeIn | None = None
+    calc: CalcRef | None = None
 
 
 def _format(prefix: str, exc: ValidationError) -> list[str]:
@@ -1353,6 +1357,7 @@ def _extras(c: ClaimIn | Claim) -> dict[str, Any]:
         "check_method": norm(c.check_method or ""),
         "taken_from": norm(c.taken_from or ""),
         "plan_question": norm(c.plan_question or ""),
+        "calc": (c.calc.name, c.calc.key) if c.calc else None,
     }
     for i, q in enumerate(sorted(c.quotes, key=lambda q: (q.source, quotelib.norm_text(q.text))), start=1):
         out[f"publisher (цитата {i})"] = norm(q.publisher or "")
@@ -1463,6 +1468,32 @@ def _line_locator(src: SourceModel, q: QuoteIn, text: str, where: str, errors: l
     return f"строка {wanted}"
 
 
+def _image_quote(
+    p: Project, c: ClaimIn, q: QuoteIn, src: SourceModel, where: str, errors: list[str]
+) -> Quote | None:
+    """Цитата с изображения: текста в снимке нет, проверяются условия записи (модуль `imagequote`)."""
+    sha_cache: dict[str, str | None] = {}
+    problem = (
+        imagequote.source_problem(src, p.root, sha_cache)
+        or imagequote.locator_problem(q.locator)
+        or imagequote.claim_problem(c.type, c.text, q.text, q.locator)
+    )
+    if problem:
+        errors.append(f"{where}: {problem}")
+        return None
+    sha = imagequote.image_sha(p.root, src, sha_cache)
+    assert sha is not None
+    return Quote(
+        source=q.source,
+        text=q.text,
+        locator=q.locator,
+        publisher=q.publisher,
+        publisher_kind=q.publisher_kind,
+        self_reported=q.self_reported,
+        check=QuoteCheck(method=IMAGE_CHECK, similarity=100.0, snapshot_sha256=sha, checked_at=proj.now()),
+    )
+
+
 def _build_quotes(p: Project, c: ClaimIn, label: str, errors: list[str]) -> list[Quote]:
     by_id = {s.id: s for s in p.sources.sources}
     out: list[Quote] = []
@@ -1485,7 +1516,7 @@ def _build_quotes(p: Project, c: ClaimIn, label: str, errors: list[str]) -> list
                 f"(`strateg add --confirm {src.id}`)"
             )
             continue
-        if src.text_path is None or src.text_sha256 is None:
+        if src.kind != "изображение" and (src.text_path is None or src.text_sha256 is None):
             errors.append(f"{where}: у источника {src.id} нет снимка текста (доступ: «{src.access}»)")
             continue
         if c.type == "факт" and src.kind == "синтетика":
@@ -1515,6 +1546,12 @@ def _build_quotes(p: Project, c: ClaimIn, label: str, errors: list[str]) -> list
                 f"и {MIN_FACT_QUOTE_CHARS} знаков, иначе одно слово «подтвердит» любое утверждение"
             )
             continue
+        if src.kind == "изображение":
+            image = _image_quote(p, c, q, src, where, errors)
+            if image is not None:
+                out.append(image)
+            continue
+        assert src.text_path is not None and src.text_sha256 is not None
         path = p.root / src.text_path
         if not path.is_file() or proj.sha256_bytes(path.read_bytes()) != src.text_sha256:
             errors.append(f"{where}: снимок {src.text_path} изменён или не найден; загрузите источник заново")
@@ -1574,6 +1611,17 @@ def _build_quotes(p: Project, c: ClaimIn, label: str, errors: list[str]) -> list
         for q in c.quotes:
             in_quotes |= set(quotelib.numbers(quotelib.norm_text(q.text)))
         missing = sorted(in_claim - in_quotes)
+        if c.calc is not None:  # число из расчёта в цитате не стоит: его сверяет ссылка на расчёт
+            found, value = calclib.calc_value(p.root, c.calc)
+            if found and calclib.is_number(value) and calclib.calc_has_inputs(p.root, c.calc):
+                from_calc = {m.lstrip("+-") for m in calclib.matching_numbers(c.text, value)}
+                missing = [m for m in missing if m.lstrip("+-") not in from_calc]
+            elif found and calclib.is_number(value):
+                errors.append(
+                    f"{label}: факт по расчёту {c.calc.name} без входов: расчёт ничего не прочитал из "
+                    "источников через strateg_calc; запишите утверждение как допущение или прогноз"
+                )
+                return []
         if missing:
             errors.append(
                 f"{label}: числа из текста утверждения нет ни в одной цитате: {', '.join(missing)}; "
@@ -1636,6 +1684,7 @@ def _make_claim(
             dispute=Dispute(claim=c.dispute.claim, reason=c.dispute.reason) if c.dispute else None,
             step=c.step or p.state.step,
             attempt=attempt,
+            calc=c.calc.model_copy() if c.calc else None,
         )
     except ValidationError as exc:
         errors.extend(_format(label, exc))
@@ -2365,32 +2414,96 @@ def cmd_budget_set(args: argparse.Namespace) -> int:
     )
 
 
+def _next_step_arg(p: Project, raw: str | None) -> str | None:
+    """`--next` без значения — следующий шаг по `status`; со значением — этот шаг; нет флага — `None`."""
+    if raw is None:
+        return None
+    return _norm_step(raw) if raw.strip() else budgetlib.next_step_of(p)
+
+
+def _next_verdict(
+    p: Project, step: str, m: budgetlib.Measure, reserve: budgetlib.Reserve | None
+) -> tuple[budgetlib.NextStep, list[str]]:
+    """Оценка шага и то, чего на него не хватит: «деньги», «время». Нет лимита или цены — только время."""
+    est = budgetlib.estimate_step(p, step, budgetlib.load_defaults().step_estimate)
+    lacking = []
+    left_usd = m.left_usd
+    if left_usd is not None and reserve is not None:
+        left_usd += reserve.usd
+    if left_usd is not None and round(left_usd, 4) < round(est.usd, 4):
+        lacking.append("деньги")
+    if round(m.left_minutes + (reserve.minutes if reserve else 0.0), 4) < round(est.minutes, 4):
+        lacking.append("время")
+    return est, lacking
+
+
+def _next_text(m: budgetlib.Measure, est: budgetlib.NextStep, lacking: list[str]) -> str:
+    """«осталось $0,35 и 12,0 мин; оценка шага 5: $0,70 и 3,0 мин (откуда)»; пометка «оценка» — по таблице."""
+    left = "" if m.left_usd is None else f"{_usd(m.left_usd)} и "
+    mark = " (оценка)" if est.estimated else ""
+    return (
+        f"осталось {left}{_num(m.left_minutes)} мин; оценка шага {est.step}{mark}: {_usd(est.usd)} и "
+        f"{_num(est.minutes)} мин, {est.source}"
+    )
+
+
 def cmd_budget_check(args: argparse.Namespace) -> int:
-    """Код 0 — действие можно, код 1 — бюджет исчерпан (деньги или время); отказ — событие «бюджет»."""
+    """Код 0 — действие можно, код 1 — бюджет исчерпан (деньги или время) или на шаг `--next` не хватит."""
     p = _open(args)
     action = (args.action or "").strip() or None
+    step = _next_step_arg(p, getattr(args, "next_step", None))
     release = budgetlib.is_release(action)
     defaults = budgetlib.load_defaults().budget if release else None
     m = budgetlib.measure(p)
-    reasons = budgetlib.exhausted_reasons(m, reserve=defaults.release_reserve if defaults else None)
+    reserve = defaults.release_reserve if defaults else None
+    reasons = budgetlib.exhausted_reasons(m, reserve=reserve)
     view = budgetlib.as_dict(m, _warn_share())
     what = f"«{action}»" if action else "действие"
-    if not reasons:
+    est: budgetlib.NextStep | None = None
+    lacking: list[str] = []
+    if step is not None and not reasons:
+        est, lacking = _next_verdict(p, step, m, reserve)
+    estimate = (
+        None
+        if est is None
+        else {
+            "step": est.step,
+            "usd": round(est.usd, 4),
+            "minutes": round(est.minutes, 2),
+            "source": est.source,
+            "estimated": est.estimated,
+        }
+    )
+    if not reasons and not lacking:
         data = {"allowed": True, "action": action, "reserve": release, "budget": view}
         lines = [f"Бюджет позволяет {what}: " + view["text"] + "."]
+        if est is not None:
+            data["estimate"] = estimate
+            lines = [f"Бюджет позволяет шаг {est.step}: " + _next_text(m, est, lacking) + "."]
         if view["warning"]:
             lines.append("Внимание: " + view["warning"] + ".")
         return emit(args, data, lines)
 
-    reason = " и ".join(reasons)
     spent_usd = "неизвестно" if m.spent_usd is None else _usd(m.spent_usd)
     limit_usd = "без лимита" if m.limit_usd is None else _usd(m.limit_usd)
     summary = (
         f"деньги: потрачено {spent_usd} из {limit_usd}; "
         f"время: {_num(m.spent_minutes)} из {m.limit_minutes:g} мин"
     )
-    head = f"бюджет исчерпан ({reason}), отказ в действии {what}:"
-    message = f"{head} {summary}"
+    if reasons:
+        reason = " и ".join(reasons)
+        head = f"бюджет исчерпан ({reason}), отказ в действии {what}:"
+        error = f"бюджет исчерпан ({reason}): действие {what} не выполнять"
+        details = [summary]
+        body = summary
+    else:
+        assert est is not None
+        reason = f"на шаг {est.step} не хватит: " + " и ".join(lacking)
+        head = f"бюджета не хватит на шаг {est.step} ({' и '.join(lacking)}):"
+        error = f"бюджета не хватит на шаг {est.step} ({' и '.join(lacking)}): шаг не начинать"
+        body = _next_text(m, est, lacking)
+        details = [body, summary]
+    message = f"{head} {body}"
     # Один отказ по одной причине, пока лимит не менялся: числа в тексте растут и не сравниваются,
     # а событие «бюджет изменён» (и любое другое событие вида «бюджет») начинает счёт заново.
     with proj.transaction(p):
@@ -2411,11 +2524,11 @@ def cmd_budget_check(args: argparse.Namespace) -> int:
             "budget": view,
             "error": message,
         }
+        if estimate is not None:
+            data["estimate"] = estimate
         print(json.dumps(data, ensure_ascii=False))
         return 1
-    return fail(
-        args, CliError(f"бюджет исчерпан ({reason}): действие {what} не выполнять", [summary, options])
-    )
+    return fail(args, CliError(error, [*details, options]))
 
 
 # ---------------------------------------------------------------------------
@@ -2584,6 +2697,7 @@ def _status_data(p: Project) -> dict[str, Any]:
             "by_type": by_type,
             "without_quote": without_quote,
             "verdicts": classify.summary(p),
+            "from_image": [c.id for c in active if imagequote.only_image(c)],
         },
         "failures": sum(
             1
@@ -2824,6 +2938,12 @@ def cmd_status(args: argparse.Namespace) -> int:
             f"; смысл цитат проверен: {d['claims']['verdicts']['checked']}, "
             f"без вердикта: {d['claims']['verdicts']['unchecked']}"
             if d["claims"]["verdicts"]["checked"]
+            else ""
+        )
+        + (
+            f"; со снимка экрана: {len(d['claims']['from_image'])}, смысл по снимку код не проверяет "
+            f"({', '.join(d['claims']['from_image'])}): сверяет человек"
+            if d["claims"]["from_image"]
             else ""
         ),
         f"Время работы: {_num(d['work_minutes'])} из {d['limit_minutes']:g} мин{running} · "

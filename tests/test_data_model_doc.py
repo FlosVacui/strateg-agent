@@ -12,7 +12,8 @@ DOC = (Path(__file__).resolve().parent.parent / "docs" / "data-model.md").read_t
 
 def test_doc_fits_two_screens():
     assert len(DOC.splitlines()) <= 100
-    assert len(DOC.encode("utf-8")) <= 16500
+    # Предел поднят с 16 500 до 17 000 байт с анализом таблиц и изображений; поля — в схемах.
+    assert len(DOC.encode("utf-8")) <= 17000
 
 
 def test_doc_says_what_is_left_for_the_next_package():
@@ -74,6 +75,14 @@ def test_doc_keeps_the_rules_that_the_size_limit_once_cut():
         "не короче 10 знаков, с буквами",
         "метка `[О-n]` в `outputs/comms-strategy.md` ведёт на обещание",
         "циклов нет ни в заменах, ни в основаниях",
+        "история статусов не стирается",
+        "у действия ключ, статус, длительность",
+        '`"2026-11-06"`',
+        "индекс поиска (пересобирается)",
+        "(`role` — `agent_type`)",
+        "с изображения — «по изображению»",
+        "изображение — подтверждение, файл, место",
+        "`decisions.basis`, `metric_coverage`",
     ):
         assert rule in DOC, rule
 

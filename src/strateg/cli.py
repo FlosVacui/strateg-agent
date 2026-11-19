@@ -1,6 +1,6 @@
 """Точка входа CLI `strateg`: `doctor` и команды проекта (`new`, `use`, `status`, `step`, `gate`, `fetch`,
 `add`, `claim`, `write`, `event`, `check`, `cost`, `budget`, `pack`, `rubric`, `route`, `due`, `impact`,
-`metric`, `diff`, `search`, `guide`, `synth`). Сами команды
+`metric`, `diff`, `search`, `guide`, `synth`, `data`, `calc`). Сами команды
 проекта — в `strateg.commands`, проверка полноты — в `strateg.rubric`, маршрут роли — в `strateg.routing`.
 
 Коды возврата: 0 — успех, 1 — ошибка данных или правил, 2 — ошибка использования.
@@ -21,9 +21,11 @@ from typing import NoReturn
 
 from strateg import (
     __version__,
+    calc,
     classify,
     commands,
     costreport,
+    datacheck,
     followup,
     guide,
     routing,
@@ -306,6 +308,32 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=commands.run, handler=guide.cmd_guide_check)
     p.add_argument("file", help="файл гайда (Markdown по шаблону knowledge/templates/interview-guide.md)")
 
+    d = add("data", datacheck.cmd_data_check, "проверка таблиц")
+    data_sub = d.add_subparsers(dest="data_command", required=True, parser_class=_Parser)
+    p = data_sub.add_parser(
+        "check", parents=[common], help="профиль таблицы: типы, пропуски, единицы, периоды, дубликаты"
+    )
+    p.set_defaults(func=commands.run, handler=datacheck.cmd_data_check)
+    p.add_argument("target", help="источник-таблица (И-n) или её файл в inputs/ после `add`")
+
+    cl = add("calc", calc.cmd_calc_run, "воспроизводимые расчёты")
+    calc_sub = cl.add_subparsers(dest="calc_command", required=True, parser_class=_Parser)
+    p = calc_sub.add_parser(
+        "run", parents=[common], help="выполнить расчёт outputs/calc/<имя>.py и записать <имя>.json"
+    )
+    p.set_defaults(func=commands.run, handler=calc.cmd_calc_run)
+    p.add_argument("script", help="скрипт расчёта в outputs/calc/")
+    p.add_argument(
+        "--timeout", type=int, help=f"предел времени, секунд (по умолчанию {calc.DEFAULT_TIMEOUT})"
+    )
+    p = calc_sub.add_parser(
+        "check", parents=[common], help="пересчитать все расчёты проекта и сравнить с сохранёнными"
+    )
+    p.set_defaults(func=commands.run, handler=calc.cmd_calc_check)
+    p.add_argument(
+        "--timeout", type=int, help=f"предел времени на расчёт, секунд (по умолчанию {calc.DEFAULT_TIMEOUT})"
+    )
+
     sy = add("synth", synth.cmd_synth_add, "синтетические респонденты")
     synth_sub = sy.add_subparsers(dest="synth_command", required=True, parser_class=_Parser)
     p = synth_sub.add_parser(
@@ -332,6 +360,13 @@ def build_parser() -> argparse.ArgumentParser:
     p = budget_sub.add_parser("check", parents=[common], help="можно ли платное действие (0 — да, 1 — нет)")
     p.set_defaults(func=commands.run, handler=commands.cmd_budget_check)
     p.add_argument("--action", help="что собираются делать; «выпуск» берёт резерв бюджета")
+    p.add_argument(
+        "--next",
+        dest="next_step",
+        nargs="?",
+        const="",
+        help="цена следующего шага: остаток меньше оценки — код 1; без значения — следующий по `status`",
+    )
 
     p = add("pack", commands.cmd_pack, "упаковать проект в архив .zip без секретов и исходников с ПДн")
     p.add_argument("--out", help="куда положить архив (по умолчанию — рядом с проектами, <id>.zip)")
@@ -362,7 +397,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = claim_sub.add_parser(
         "pairs",
         parents=[common],
-        help="пары «утверждение — цитата» и задание классификатору; ничего не пишет",
+        help="пары «утверждение — цитата» и задание критику; ничего не пишет",
     )
     p.set_defaults(func=commands.run, handler=classify.cmd_claim_pairs)
     p.add_argument("--ids", help="только эти утверждения: У-1,У-2 (по умолчанию — ещё без вердикта)")
@@ -370,22 +405,22 @@ def build_parser() -> argparse.ArgumentParser:
     p = claim_sub.add_parser(
         "verdict",
         parents=[common],
-        help="записать вердикт о цитате: один (--verdict) или весь ответ классификатора (--file и --ids)",
+        help="записать вердикт о цитате: один (--verdict) или весь ответ критика (--file и --ids)",
     )
     p.set_defaults(func=commands.run, handler=classify.cmd_claim_verdict)
     p.add_argument("id", nargs="?", help="утверждение, например У-3; с --file не нужно")
     p.add_argument("--verdict", choices=list(classify.VERDICTS), help="подтверждает ли цитата утверждение")
     p.add_argument("--type-ok", choices=["да", "нет"], help="верен ли тип утверждения")
     p.add_argument("--reason", help="одна строка причины")
-    p.add_argument("--file", help="ответ классификатора целиком; «-» — стандартный ввод")
+    p.add_argument("--file", help="ответ критика целиком (строки У-n | вердикт | …); «-» — стандартный ввод")
     p.add_argument("--ids", help="с --file: номера пар из задания, У-1,У-2; пара без строки — «не уверен»")
     p.add_argument(
         "--by",
         choices=list(classify.BY_VALUES),
-        help="кто вынес вердикт, обязательно: «классификатор» — роль со свежим контекстом, «агент» — "
+        help="кто вынес вердикт, обязательно: «критик» — роль со свежим контекстом, «агент» — "
         "запасной путь, проверка не независимая",
     )
-    p.add_argument("--model", help="модель, которая вынесла вердикт (из `strateg route classifier`)")
+    p.add_argument("--model", help="модель, которая вынесла вердикт (из `strateg route critic`)")
 
     p = add("write", commands.cmd_write, "записать файлы выхода (рамка, план, пробелы, варианты …)")
     p.add_argument(

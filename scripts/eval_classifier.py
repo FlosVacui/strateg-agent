@@ -1,9 +1,12 @@
 """Замер классификатора (ADR-0007, ADR-0008): связка «дешёвая + повтор „не уверен“ на средней» против Sonnet.
 
+Роль снята по этому замеру (ADR-0007, «Результат замера»): скрипт и выборки остались как след и чтобы замер
+можно было повторить. Текст роли на момент замера — `evals/classifier/role.md`, модели — Haiku и Sonnet.
+
 Выборки: основная `evals/classifier/pairs.yaml` и контрольная `evals/classifier/holdout.yaml` (её составляли
 без знакомства с текстом роли). Задание собирает тот же код, что и `strateg claim pairs`
 (`strateg.classify.render_task`: только пары); текст роли — системный промпт вызова (`--system-prompt-file`,
-тот же текст, что тело обёртки `.claude/agents/classifier.md`); ответ разбирает тот же строгий разбор, что и
+`evals/classifier/role.md`); ответ разбирает тот же строгий разбор, что и
 `strateg claim verdict --file`: неразобранная пара — «не уверен». Все пары выборки по умолчанию идут одним
 заданием, как в продукте.
 
@@ -45,6 +48,8 @@ ROOT = Path(__file__).resolve().parent.parent
 PAIRS = ROOT / "evals" / "classifier" / "pairs.yaml"
 HOLDOUT = ROOT / "evals" / "classifier" / "holdout.yaml"
 DRY = ROOT / "evals" / "classifier" / "dry-run.yaml"
+ROLE_TEXT = ROOT / "evals" / "classifier" / "role.md"  # роль на момент замера; в продукте её больше нет
+DEFAULT_MODELS = ("haiku", "sonnet", "low")  # дешёвая, средняя (повтор «не уверен»), effort роли
 VERDICT_ROWS = ("подтверждает", "частично", "не подтверждает")
 GROUPS = ("подтверждает", "не подтверждает", "частично", "неверный тип")
 MIN_ACCURACY = (9, 10)  # ADR-0007: не ниже 90 %; сравнение в целых числах — ровно 90 % проходит
@@ -417,13 +422,8 @@ def dry_answers(path: Path = DRY) -> tuple[int | None, dict[str, dict[str, list[
 
 
 def default_models() -> tuple[str, str, str]:
-    """Дешёвая модель, средняя (повтор «не уверен») и effort роли — из `config/routing.yaml`."""
-    from strateg.routing import effective, load_routing
-
-    table = load_routing()
-    base = effective(table, classify.ROLE, "обычный")
-    up = base.upgrade.to if base.upgrade is not None else base.level
-    return base.model, table.levels[up], base.effort  # type: ignore[index]
+    """Дешёвая модель, средняя (повтор «не уверен») и effort роли, как они стояли в `config/routing.yaml`."""
+    return DEFAULT_MODELS
 
 
 def _shown(path: Path) -> str:
@@ -492,7 +492,7 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 2
-        role = classify.role_text()
+        role = ROLE_TEXT.read_bytes().decode("utf-8-sig").strip()
         if not holdout.is_file():
             notes.append(f"Контрольной выборки нет ({_shown(holdout)}): решения не будет.")
 

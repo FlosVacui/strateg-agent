@@ -11,15 +11,13 @@
 
 Критик (`critic`): чтение в папке проекта и `knowledge/`; остальное закрыто.
 
-Классификатор (`classifier`): закрыт любой инструмент — пары «утверждение — цитата» он получает в задании.
-
 Респондент (`respondent`): закрыт любой инструмент — персона и вопросы в задании, ответ — текст в сообщении.
 
 Хук вызывается только для инструментов из `matcher` двух записей `PreToolUse` в `.claude/settings.json`.
 Первая — файлы, оболочка, субагенты, веб и Playwright: их права разбирает этот модуль. Вторая — остальные MCP,
 `Skill`, `SendMessage`, ресурсы MCP и `CronCreate`: основной агент и чужая среда проходят их без решения и без
-записи (`passes_unchecked`), исследователь и критик получают отказ, классификатор — отказ. Инструменты вне
-обеих записей (например, `ToolSearch`, `TodoWrite`) хук не видит: у классификатора их закрывает `tools: []`.
+записи (`passes_unchecked`), исследователь и критик получают отказ. Инструменты вне
+обеих записей (например, `ToolSearch`, `TodoWrite`) хук не видит: у респондента их закрывает `tools: []`.
 
 Всем ролям закрыты: `WebFetch`; `.env`, `~/.strateg/`, `.tmp/pending/`, `evals/`; правка `AGENTS.md`,
 `CLAUDE.md`, `.claude/` (охрану правил снимает `STRATEG_DEV=1`).
@@ -37,7 +35,7 @@ from typing import Any
 
 from strateg.hooks import flags, paths, shell
 
-RESEARCHER, CRITIC, CLASSIFIER, RESPONDENT = "researcher", "critic", "classifier", "respondent"
+RESEARCHER, CRITIC, RESPONDENT = "researcher", "critic", "respondent"
 MAIN, OTHER = "main", "other"
 
 READ_TOOLS = frozenset({"Read", "Grep", "Glob"})
@@ -48,6 +46,11 @@ WEB_TOOLS = frozenset({"WebSearch", "WebFetch"})
 BUILTIN_AGENTS = ("general-purpose", "Explore", "Plan", "claude", "statusline-setup", "claude-code-guide")
 MODEL_ALIASES = frozenset({"sonnet", "opus", "haiku", "fable"})  # модель вызова субагента — только псевдоним
 PLAYWRIGHT_ALLOWED = frozenset({"browser_navigate", "browser_take_screenshot"})
+# Файлы, которые `Read` показывает модели как изображение (ADR-0011): виды `materials.IMAGES` (сверяется
+# тестом) и те, которые `add` не принимает, но `Read` показал бы.
+IMAGE_SUFFIXES = frozenset(
+    {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".avif", ".ico", ".jfif"}
+)
 
 # Файлы проекта, которые пишет только CLI (ADR-0002): сверяется тестом с `project_check`.
 CLI_STATE_FILES = (
@@ -160,6 +163,8 @@ class Services:
     routing: Callable[[], RoutingView]
     agents: Callable[[], frozenset[str]]  # роли, у которых есть обёртка в `.claude/agents/`
     active: Callable[[], str | None] = lambda: None  # номер активного проекта; None — активного нет
+    # путь изображения внутри папки проекта -> источник с этим путём подтверждён человеком (`add --confirm`)
+    image_confirmed: Callable[[tuple[str, ...]], bool] = lambda rel: False
 
 
 @dataclass(frozen=True)
@@ -191,10 +196,10 @@ def is_claude_code(event: Mapping[str, Any]) -> bool:
 
 
 def role_kind(event: Mapping[str, Any]) -> str:
-    """`main` (нет `agent_type`), роль проекта (четыре) или `other` (права основного)."""
+    """`main` (нет `agent_type`), роль проекта (три) или `other` (права основного)."""
     at = event.get("agent_type")
     if isinstance(at, str) and at.strip():
-        return at if at in (RESEARCHER, CRITIC, CLASSIFIER, RESPONDENT) else OTHER
+        return at if at in (RESEARCHER, CRITIC, RESPONDENT) else OTHER
     if event.get("agent_id"):
         return OTHER
     return MAIN
@@ -502,6 +507,10 @@ def _check_file_tool(
                     f"Состояние проекта пишет только CLI, а не {tool}: {owned} — через `strateg`. "
                     f"Подсказка: {_cli_hint(owned)}."
                 )
+    if tool == "Read":
+        problem = _unconfirmed_image(raw, places, svc)
+        if problem:
+            return problem
     if kind == RESEARCHER:
         return _check_researcher(tool, implicit, places, svc)
     if kind == CRITIC:
@@ -518,6 +527,26 @@ def _check_file_tool(
         active = svc.active()
         if not all(_write_zone(pl, active) for pl in places):
             return f"{tool}: запись только в `outputs/` и `.tmp/` активного проекта — {WRITE_ZONE_HINT}."
+    return None
+
+
+def _unconfirmed_image(raw: str, places: list[paths.Place], svc: Services) -> str | None:
+    """`Read` показывает изображение модели. В папке проекта (кроме `outputs/`) его читают, только если у
+    источника с этим путём в `sources.yaml` активного проекта есть подтверждение человека (ADR-0011)."""
+    name = raw.replace("\\", "/").rsplit("/", 1)[-1]
+    if "." not in name or "." + name.rsplit(".", 1)[-1].lower() not in IMAGE_SUFFIXES:
+        return None
+    active = svc.active()
+    for pl in places:
+        if pl.project_id is None or pl.project_rel is None or pl.project_rel[:1] == (OUTPUTS,):
+            continue
+        if pl.project_id == active and svc.image_confirmed(pl.project_rel):
+            continue
+        return (
+            f"Изображение `{name}` в папке проекта читать нельзя, пока человек не подтвердил, что на нём нет "
+            "людей и контактов: `uv run strateg add` (если файла нет в источниках), затем человек выполняет "
+            "`strateg add --confirm И-n` сам. Подтверждение ищется в `sources.yaml` активного проекта."
+        )
     return None
 
 
@@ -802,13 +831,6 @@ def decide_pre_tool_use(event: Mapping[str, Any], ctx: Ctx, services: Services) 
     kind = role_kind(event)
     cwd = event.get("cwd") if isinstance(event.get("cwd"), str) and event.get("cwd") else ctx.penv.cwd
 
-    if kind == CLASSIFIER:
-        return _deny(
-            f"Классификатору закрыт любой инструмент ({tool or 'без имени'}): пары «утверждение — цитата» "
-            "уже в задании, ответ — текст в сообщении.",
-            tool,
-            event,
-        )
     if kind == RESPONDENT:
         return _deny_respondent(tool, event)
     if tool == "WebFetch":

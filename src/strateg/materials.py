@@ -36,7 +36,9 @@ from strateg.project import CliError, Project, UsageError
 
 AUDIO_VIDEO = frozenset(
     {".mp3", ".wav", ".m4a", ".ogg", ".oga", ".opus", ".flac", ".aac", ".wma", ".aiff", ".amr"}
+    | {".aif", ".caf", ".mka", ".weba"}
     | {".mp4", ".mov", ".mkv", ".avi", ".webm", ".wmv", ".m4v", ".flv", ".mpg", ".mpeg", ".3gp"}
+    | {".3g2", ".mts", ".m2ts", ".ogv", ".qt", ".mxf", ".vob", ".asf"}
 )
 IMAGES = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".heic"})
 KIND_BY_EXT = {
@@ -352,8 +354,9 @@ def pick_kind(ext: str, forced: str | None) -> str:
 def refuse_audio_video(ext: str) -> None:
     if ext in AUDIO_VIDEO:
         raise CliError(
-            f"аудио и видео не разбираются: дайте расшифровку текстом (.txt, .md или .docx) "
-            f"и добавьте её как обычный документ; формат «{ext}»"
+            f"аудио и видео не разбираются (формат «{ext}»): дайте расшифровку текстом. "
+            "Интервью — `strateg add <файл.txt> --kind интервью --consent '<как получено, дата>'`; "
+            "иное — тот же файл `.txt` или `.md` как заметка, либо короткая заметка пользователя"
         )
 
 
@@ -772,8 +775,9 @@ def _warnings(outcome: Outcome) -> None:
         )
     if s.kind == "изображение":
         w.append(
-            "изображение модель увидит напрямую: если на нём нет людей и контактов, подтвердите это: "
-            f"`strateg add --confirm {s.id}`"
+            "изображение модель увидит напрямую: если на нём нет людей, имён, почты и телефонов, подтвердите "
+            f"это: `strateg add --confirm {s.id}`. До подтверждения агенту запрещено открывать файл (правило "
+            "хука прав в Claude Code); в других средах такого запрета нет, и файл не стоит давать"
         )
     if s.closed_markers:
         w.append(

@@ -128,15 +128,15 @@ def test_allowed_call_prints_nothing(product):
 
 
 @pytest.mark.parametrize("tool", ["mcp__terminal__run_in_terminal", "Skill", "SendMessage"])
-def test_other_tools_pass_the_main_agent_and_are_closed_to_the_classifier(product, tool):
-    """Вторая запись `PreToolUse`: основной агент проходит молча и без записи, классификатор — отказ."""
+def test_other_tools_pass_the_main_agent_and_are_closed_to_the_respondent(product, tool):
+    """Вторая запись `PreToolUse`: основной агент проходит молча и без записи, респондент — отказ."""
     proc = run_hook(product, "pre_tool_use.py", pre_event(tool, {"command": "dir"}, cwd=str(product)))
     assert proc.returncode == 0 and proc.stdout == b"" and proc.stderr == b""
-    classifier = pre_event(tool, {"command": "dir"}, cwd=str(product), agent_type="classifier", agent_id="c")
-    out = body(run_hook(product, "pre_tool_use.py", classifier))
+    respondent = pre_event(tool, {"command": "dir"}, cwd=str(product), agent_type="respondent", agent_id="c")
+    out = body(run_hook(product, "pre_tool_use.py", respondent))
     assert (
         out["permissionDecision"] == "deny"
-        and "Классификатору закрыт любой инструмент" in out["permissionDecisionReason"]
+        and "Респонденту закрыт любой инструмент" in out["permissionDecisionReason"]
     )
 
 
@@ -378,7 +378,7 @@ def test_permission_hook_blocks_on_failure_others_do_not():
     # права на чтение, запись, Bash, Agent и сеть: упавший хук закрывает вызов
     assert all(h["onFailure"] == "block" for h in groups[0]["hooks"])
     # остальные MCP и Skill: основной агент их проходит без хука, поэтому упавший хук его не закрывает;
-    # у классификатора эти инструменты держит ещё и `tools: []` в обёртке
+    # у респондента эти инструменты держит ещё и `tools: []` в обёртке
     assert groups[1]["matcher"].startswith("^mcp__")
     assert all(h["onFailure"] == "continue" for h in groups[1]["hooks"])
     for event in ("SessionStart", "Stop", "SubagentStop", "PostToolUseFailure", "UserPromptSubmit"):
@@ -420,7 +420,7 @@ OTHER_TOOLS = (
 
 
 @pytest.mark.parametrize("tool", OTHER_TOOLS)
-def test_second_matcher_covers_the_other_tools_the_classifier_could_reach(tool):
+def test_second_matcher_covers_the_other_tools_a_toolless_role_could_reach(tool):
     assert re.search(SETTINGS["hooks"]["PreToolUse"][1]["matcher"], tool), tool
     assert not rules.known_tool(tool)
 
@@ -440,7 +440,7 @@ def test_the_two_matchers_never_both_run_the_hook(tool):
 
 @pytest.mark.parametrize("tool", ["TodoWrite", "ToolSearch", "TaskCreate"])
 def test_tools_outside_both_matchers_do_not_run_the_hook(tool):
-    """Их хук не видит: у классификатора их закрывает `tools: []` обёртки (README, ADR-0007)."""
+    """Их хук не видит: у респондента их закрывает `tools: []` обёртки (README, ADR-0007)."""
     assert not any(re.search(g["matcher"], tool) for g in SETTINGS["hooks"]["PreToolUse"]), tool
 
 
