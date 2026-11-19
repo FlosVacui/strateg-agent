@@ -737,6 +737,16 @@ class ForecastRange(_Model):
     unit: Text
 
 
+CalcName = Annotated[str, Field(pattern=r"^[a-zа-яё0-9][a-zа-яё0-9_-]*$", max_length=64)]
+
+
+class CalcRef(_Model):
+    """Число утверждения получено расчётом `outputs/calc/<name>.py`; `key` — путь к значению в результате."""
+
+    name: CalcName
+    key: Annotated[str, Field(pattern=r"^[^\s.][^\s]*$", max_length=120)]
+
+
 class ClaimVerdict(_Model):
     """Вердикт о смысле цитаты: текущий; прежние — в журнале (`strateg claim verdict`)."""
 
@@ -809,11 +819,16 @@ class Claim(_Model):
         description="Номер попытки шага: при повторе прерванного шага растёт, записанное не дублируется"
     )
     verdict: ClaimVerdict | None = Field(None, description="Подтверждает ли цитата утверждение по смыслу")
+    calc: CalcRef | None = Field(
+        None, description="Число утверждения получено расчётом: имя расчёта и ключ значения (ADR-0005)"
+    )
 
     @model_validator(mode="after")
     def _rules(self) -> Self:
         p: list[str] = []
         t = self.type
+        if self.calc is not None and t not in ("факт", "прогноз", "допущение"):
+            p.append(f"расчёт (calc) бывает у факта, прогноза и допущения, а не у «{t}»")
         if (t == "синтетика") != (self.origin == "синтетика"):
             p.append("тип и происхождение «синтетика» идут вместе: синтетика не становится другим типом")
         if t == "факт":
@@ -880,6 +895,39 @@ class Claim(_Model):
             p.append("утверждение заменяет само себя")
         if self.verdict is not None and not self.quotes:
             p.append("вердикт о цитате у утверждения без цитат")
+        _raise(p)
+        return self
+
+
+class CalcInput(_Model):
+    source: SourceId
+    path: RelPath = Field(description="Снимок текста источника, который читал расчёт")
+    sha256: Sha256
+
+
+class CalcScript(_Model):
+    path: RelPath
+    sha256: Sha256
+
+
+class CalcResult(_Model):
+    """Файл `outputs/calc/<имя>.json`: результат расчёта, пишет только `strateg calc run`."""
+
+    schema_version: SchemaVersion
+    name: CalcName
+    script: CalcScript
+    inputs: list[CalcInput] = Field(description="Источники, которые расчёт прочитал, с хешами текстов")
+    values: dict[str, Any] = Field(description="Результат: то, что скрипт напечатал в JSON")
+    run_at: Time
+    python: Text = Field(description="Версия Python, которым считали")
+
+    @model_validator(mode="after")
+    def _rules(self) -> Self:
+        p: list[str] = []
+        if self.script.path != f"outputs/calc/{self.name}.py":
+            p.append(f"скрипт должен лежать в outputs/calc/{self.name}.py")
+        if len({i.source for i in self.inputs}) != len(self.inputs):
+            p.append("источник назван во входах дважды")
         _raise(p)
         return self
 
@@ -1857,4 +1905,5 @@ SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "decisions": DecisionsFile,
     "metrics": MetricsFile,
     "completeness": CompletenessFile,
+    "calc-result": CalcResult,
 }

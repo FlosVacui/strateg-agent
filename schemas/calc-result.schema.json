@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "CalcInput": {
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "pattern": "^И-[1-9][0-9]*$",
+          "title": "Source",
+          "type": "string"
+        },
+        "path": {
+          "description": "Снимок текста источника, который читал расчёт",
+          "minLength": 1,
+          "pattern": "^(?![A-Za-z]:)(?:[^/\\\\\\s\\x00.]|[^/\\\\\\s\\x00][^/\\\\\\x00]*[^/\\\\\\s\\x00.])(?:/(?:[^/\\\\\\s\\x00.]|[^/\\\\\\s\\x00][^/\\\\\\x00]*[^/\\\\\\s\\x00.]))*$",
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "path",
+        "sha256"
+      ],
+      "title": "CalcInput",
+      "type": "object"
+    },
+    "CalcScript": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "minLength": 1,
+          "pattern": "^(?![A-Za-z]:)(?:[^/\\\\\\s\\x00.]|[^/\\\\\\s\\x00][^/\\\\\\x00]*[^/\\\\\\s\\x00.])(?:/(?:[^/\\\\\\s\\x00.]|[^/\\\\\\s\\x00][^/\\\\\\x00]*[^/\\\\\\s\\x00.]))*$",
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "title": "CalcScript",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Файл `outputs/calc/<имя>.json`: результат расчёта, пишет только `strateg calc run`.",
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "name": {
+      "maxLength": 64,
+      "pattern": "^[a-zа-яё0-9][a-zа-яё0-9_-]*$",
+      "title": "Name",
+      "type": "string"
+    },
+    "script": {
+      "$ref": "#/$defs/CalcScript"
+    },
+    "inputs": {
+      "description": "Источники, которые расчёт прочитал, с хешами текстов",
+      "items": {
+        "$ref": "#/$defs/CalcInput"
+      },
+      "title": "Inputs",
+      "type": "array"
+    },
+    "values": {
+      "additionalProperties": true,
+      "description": "Результат: то, что скрипт напечатал в JSON",
+      "title": "Values",
+      "type": "object"
+    },
+    "run_at": {
+      "format": "date-time",
+      "title": "Run At",
+      "type": "string"
+    },
+    "python": {
+      "description": "Версия Python, которым считали",
+      "minLength": 1,
+      "title": "Python",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "name",
+    "script",
+    "inputs",
+    "values",
+    "run_at",
+    "python"
+  ],
+  "title": "CalcResult",
+  "type": "object"
+}

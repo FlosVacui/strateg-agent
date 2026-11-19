@@ -33,6 +33,7 @@ def test_one_schema_per_file_of_the_project():
         "decisions.schema.json",
         "metrics.schema.json",
         "completeness.schema.json",
+        "calc-result.schema.json",
     }
 
 
