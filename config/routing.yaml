@@ -11,7 +11,6 @@ roles:
   # depth — число источников на вопрос плана.
   researcher: {level: средняя, effort: medium, depth: 3}
   critic: {level: средняя, effort: high, upgrade: {when: "проверка полноты не пройдена после доработки", to: сильная, times: 1}}
-  classifier: {level: дешёвая, effort: low, upgrade: {when: "ответ «не уверен»", to: средняя, times: 1}}
   respondent: {level: средняя, effort: medium}
 
 # Профиль меняет выбор только там, где написано; «обычный» — таблица выше без изменений.

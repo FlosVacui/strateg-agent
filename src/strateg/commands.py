@@ -2398,32 +2398,96 @@ def cmd_budget_set(args: argparse.Namespace) -> int:
     )
 
 
+def _next_step_arg(p: Project, raw: str | None) -> str | None:
+    """`--next` без значения — следующий шаг по `status`; со значением — этот шаг; нет флага — `None`."""
+    if raw is None:
+        return None
+    return _norm_step(raw) if raw.strip() else budgetlib.next_step_of(p)
+
+
+def _next_verdict(
+    p: Project, step: str, m: budgetlib.Measure, reserve: budgetlib.Reserve | None
+) -> tuple[budgetlib.NextStep, list[str]]:
+    """Оценка шага и то, чего на него не хватит: «деньги», «время». Нет лимита или цены — только время."""
+    est = budgetlib.estimate_step(p, step, budgetlib.load_defaults().step_estimate)
+    lacking = []
+    left_usd = m.left_usd
+    if left_usd is not None and reserve is not None:
+        left_usd += reserve.usd
+    if left_usd is not None and round(left_usd, 4) < round(est.usd, 4):
+        lacking.append("деньги")
+    if round(m.left_minutes + (reserve.minutes if reserve else 0.0), 4) < round(est.minutes, 4):
+        lacking.append("время")
+    return est, lacking
+
+
+def _next_text(m: budgetlib.Measure, est: budgetlib.NextStep, lacking: list[str]) -> str:
+    """«осталось $0,35 и 12,0 мин; оценка шага 5: $0,70 и 3,0 мин (откуда)»; пометка «оценка» — по таблице."""
+    left = "" if m.left_usd is None else f"{_usd(m.left_usd)} и "
+    mark = " (оценка)" if est.estimated else ""
+    return (
+        f"осталось {left}{_num(m.left_minutes)} мин; оценка шага {est.step}{mark}: {_usd(est.usd)} и "
+        f"{_num(est.minutes)} мин, {est.source}"
+    )
+
+
 def cmd_budget_check(args: argparse.Namespace) -> int:
-    """Код 0 — действие можно, код 1 — бюджет исчерпан (деньги или время); отказ — событие «бюджет»."""
+    """Код 0 — действие можно, код 1 — бюджет исчерпан (деньги или время) или на шаг `--next` не хватит."""
     p = _open(args)
     action = (args.action or "").strip() or None
+    step = _next_step_arg(p, getattr(args, "next_step", None))
     release = budgetlib.is_release(action)
     defaults = budgetlib.load_defaults().budget if release else None
     m = budgetlib.measure(p)
-    reasons = budgetlib.exhausted_reasons(m, reserve=defaults.release_reserve if defaults else None)
+    reserve = defaults.release_reserve if defaults else None
+    reasons = budgetlib.exhausted_reasons(m, reserve=reserve)
     view = budgetlib.as_dict(m, _warn_share())
     what = f"«{action}»" if action else "действие"
-    if not reasons:
+    est: budgetlib.NextStep | None = None
+    lacking: list[str] = []
+    if step is not None and not reasons:
+        est, lacking = _next_verdict(p, step, m, reserve)
+    estimate = (
+        None
+        if est is None
+        else {
+            "step": est.step,
+            "usd": round(est.usd, 4),
+            "minutes": round(est.minutes, 2),
+            "source": est.source,
+            "estimated": est.estimated,
+        }
+    )
+    if not reasons and not lacking:
         data = {"allowed": True, "action": action, "reserve": release, "budget": view}
         lines = [f"Бюджет позволяет {what}: " + view["text"] + "."]
+        if est is not None:
+            data["estimate"] = estimate
+            lines = [f"Бюджет позволяет шаг {est.step}: " + _next_text(m, est, lacking) + "."]
         if view["warning"]:
             lines.append("Внимание: " + view["warning"] + ".")
         return emit(args, data, lines)
 
-    reason = " и ".join(reasons)
     spent_usd = "неизвестно" if m.spent_usd is None else _usd(m.spent_usd)
     limit_usd = "без лимита" if m.limit_usd is None else _usd(m.limit_usd)
     summary = (
         f"деньги: потрачено {spent_usd} из {limit_usd}; "
         f"время: {_num(m.spent_minutes)} из {m.limit_minutes:g} мин"
     )
-    head = f"бюджет исчерпан ({reason}), отказ в действии {what}:"
-    message = f"{head} {summary}"
+    if reasons:
+        reason = " и ".join(reasons)
+        head = f"бюджет исчерпан ({reason}), отказ в действии {what}:"
+        error = f"бюджет исчерпан ({reason}): действие {what} не выполнять"
+        details = [summary]
+        body = summary
+    else:
+        assert est is not None
+        reason = f"на шаг {est.step} не хватит: " + " и ".join(lacking)
+        head = f"бюджета не хватит на шаг {est.step} ({' и '.join(lacking)}):"
+        error = f"бюджета не хватит на шаг {est.step} ({' и '.join(lacking)}): шаг не начинать"
+        body = _next_text(m, est, lacking)
+        details = [body, summary]
+    message = f"{head} {body}"
     # Один отказ по одной причине, пока лимит не менялся: числа в тексте растут и не сравниваются,
     # а событие «бюджет изменён» (и любое другое событие вида «бюджет») начинает счёт заново.
     with proj.transaction(p):
@@ -2444,11 +2508,11 @@ def cmd_budget_check(args: argparse.Namespace) -> int:
             "budget": view,
             "error": message,
         }
+        if estimate is not None:
+            data["estimate"] = estimate
         print(json.dumps(data, ensure_ascii=False))
         return 1
-    return fail(
-        args, CliError(f"бюджет исчерпан ({reason}): действие {what} не выполнять", [summary, options])
-    )
+    return fail(args, CliError(error, [*details, options]))
 
 
 # ---------------------------------------------------------------------------

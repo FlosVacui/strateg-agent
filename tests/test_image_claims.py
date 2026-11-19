@@ -316,7 +316,7 @@ def test_check_flags_an_image_source_without_the_registered_hash_and_a_missing_f
     assert any("не найден" in e for e in check_project(demo))
 
 
-# --- смысл по снимку не сверяет и классификатор -----------------------------------------------------------
+# --- смысл по снимку не сверяет и критик -------------------------------------------------------------------
 
 
 def claims_file(demo: Path) -> ClaimsFile:
@@ -335,8 +335,8 @@ def test_pairs_do_not_include_claims_from_a_screenshot(demo, cli):
     code, _, err = cli("claim", "pairs", "--ids", c.id)
     assert code == 1 and "цитат со снимков экрана" in err
     code, _, err = cli(
-        "claim", "verdict", c.id, "--verdict", "подтверждает", "--reason", "ок", "--by", "классификатор",
-        "--model", "haiku",
+        "claim", "verdict", c.id, "--verdict", "подтверждает", "--reason", "ок", "--by", "критик",
+        "--model", "sonnet",
     )  # fmt: skip
     assert code == 1 and "цитат со снимков экрана" in err
     assert claims_of(demo)[0].get("verdict") is None
@@ -350,7 +350,7 @@ def test_status_says_that_the_meaning_of_a_screenshot_claim_is_not_checked(demo,
     assert "смысл цитат проверен" not in out
 
 
-def test_a_claim_with_a_text_quote_and_a_screenshot_quote_goes_to_the_classifier_with_the_text_one(project):
+def test_a_claim_with_a_text_quote_and_a_screenshot_quote_goes_to_the_check_with_the_text_one(project):
     def add_text_quote(d):
         c = claim(d, "У-9")
         c["quotes"].append(json.loads(json.dumps(claim(d, "У-2")["quotes"][0])))
@@ -607,7 +607,7 @@ def test_docs_describe_images_and_the_limits():
     assert "правило `ask`" in adr11 and "хук прав не даёт `Read` изображения" in adr11
     assert "Снимок, вставленный в чат" in adr11 and "в среде без хука" in adr11  # ограничение сказано прямо
     assert "модель его не видит" not in adr11
-    assert "второй слой (классификатор) к ней не применяется" in adr5
+    assert "второй слой (проверка смысла критиком) к ней не применяется" in adr5
     assert "Агенту запрещено открывать его до `add --confirm`" in readme and "не давайте" in readme
     adr13 = (ROOT / "docs" / "adr" / "0013-mcp.md").read_text(encoding="utf-8")
     assert "разбор по снимкам экрана от человека сделан" in adr13

@@ -40,6 +40,18 @@ HEADER = (
 )
 _TURN = re.compile(r"^(Вопрос|Ответ)(?:\s+(\d+))?\s*:\s*(.*)$")
 _LABELLED = re.compile(rf"^{LABEL}:\s*(.*)$")  # метка ровно «СИНТЕТИКА:» в начале ответа
+# Отказ назвать или ответить: «точных цифр называть не буду», «не буду называть», «не скажу». Это не обещание
+# будущего: слово «буду» в нём ничего не обещает. Выражения рубрики гайда ловят «буду» в любом виде.
+_SAY = (
+    r"(?:назыв\w*|говор\w*|отвеч\w*|обсужд\w*|раскрыв\w*|сообщ\w*|уточн\w*|коммент\w*|привод\w*|"
+    r"разглаш\w*|вдаваться)"
+)
+_NOT_WILL = r"не\s+(?:буду|будем|стану|станем)"
+_REFUSAL = re.compile(
+    rf"\b{_SAY}\s+{_NOT_WILL}\b"
+    rf"|\b{_NOT_WILL}\s+{_SAY}"
+    r"|\bне\s+(?:скажу|скажем|назову|назовем|отвечу|раскрою|сообщу|уточню|приведу|разглашу)\b"
+)
 _FLATTERY = re.compile(
     r"отличн\w+\s+иде|было\s+бы\s+(?:здорово|отлично|круто|замечательно)|с\s+удовольствием|"
     r"обязательно\s+(?:куплю|буду|воспользуюсь|попробую)|звучит\s+(?:здорово|отлично|круто)",
@@ -138,7 +150,7 @@ def _answer_warnings(pairs: list[tuple[str, str]]) -> list[str]:
     future = guide.load_rubric().rules["future"].patterns
     out: list[str] = []
     for n, (_, answer) in enumerate(pairs, start=1):
-        low = guide.fold(answer)
+        low = _REFUSAL.sub(" ", guide.fold(answer))  # отказ ответить («называть не буду») — не обещание
         hit = guide.first_hit(future, low)
         if hit:
             out.append(
@@ -275,7 +287,7 @@ def cmd_synth_add(args: argparse.Namespace) -> int:
         "kind": source.kind,
         "duplicate": duplicate,
         "text_path": source.text_path,
-        "snapshot_path": f"projects/{p.id}/{source.text_path}",
+        "snapshot_path": commands._snapshot_path(p, source),
         "sha256": source.text_sha256,
         "persona": source.persona,
         "answers": len(pairs),

@@ -11,15 +11,13 @@
 
 Критик (`critic`): чтение в папке проекта и `knowledge/`; остальное закрыто.
 
-Классификатор (`classifier`): закрыт любой инструмент — пары «утверждение — цитата» он получает в задании.
-
 Респондент (`respondent`): закрыт любой инструмент — персона и вопросы в задании, ответ — текст в сообщении.
 
 Хук вызывается только для инструментов из `matcher` двух записей `PreToolUse` в `.claude/settings.json`.
 Первая — файлы, оболочка, субагенты, веб и Playwright: их права разбирает этот модуль. Вторая — остальные MCP,
 `Skill`, `SendMessage`, ресурсы MCP и `CronCreate`: основной агент и чужая среда проходят их без решения и без
-записи (`passes_unchecked`), исследователь и критик получают отказ, классификатор — отказ. Инструменты вне
-обеих записей (например, `ToolSearch`, `TodoWrite`) хук не видит: у классификатора их закрывает `tools: []`.
+записи (`passes_unchecked`), исследователь и критик получают отказ. Инструменты вне
+обеих записей (например, `ToolSearch`, `TodoWrite`) хук не видит: у респондента их закрывает `tools: []`.
 
 Всем ролям закрыты: `WebFetch`; `.env`, `~/.strateg/`, `.tmp/pending/`, `evals/`; правка `AGENTS.md`,
 `CLAUDE.md`, `.claude/` (охрану правил снимает `STRATEG_DEV=1`).
@@ -37,7 +35,7 @@ from typing import Any
 
 from strateg.hooks import flags, paths, shell
 
-RESEARCHER, CRITIC, CLASSIFIER, RESPONDENT = "researcher", "critic", "classifier", "respondent"
+RESEARCHER, CRITIC, RESPONDENT = "researcher", "critic", "respondent"
 MAIN, OTHER = "main", "other"
 
 READ_TOOLS = frozenset({"Read", "Grep", "Glob"})
@@ -198,10 +196,10 @@ def is_claude_code(event: Mapping[str, Any]) -> bool:
 
 
 def role_kind(event: Mapping[str, Any]) -> str:
-    """`main` (нет `agent_type`), роль проекта (четыре) или `other` (права основного)."""
+    """`main` (нет `agent_type`), роль проекта (три) или `other` (права основного)."""
     at = event.get("agent_type")
     if isinstance(at, str) and at.strip():
-        return at if at in (RESEARCHER, CRITIC, CLASSIFIER, RESPONDENT) else OTHER
+        return at if at in (RESEARCHER, CRITIC, RESPONDENT) else OTHER
     if event.get("agent_id"):
         return OTHER
     return MAIN
@@ -833,13 +831,6 @@ def decide_pre_tool_use(event: Mapping[str, Any], ctx: Ctx, services: Services) 
     kind = role_kind(event)
     cwd = event.get("cwd") if isinstance(event.get("cwd"), str) and event.get("cwd") else ctx.penv.cwd
 
-    if kind == CLASSIFIER:
-        return _deny(
-            f"Классификатору закрыт любой инструмент ({tool or 'без имени'}): пары «утверждение — цитата» "
-            "уже в задании, ответ — текст в сообщении.",
-            tool,
-            event,
-        )
     if kind == RESPONDENT:
         return _deny_respondent(tool, event)
     if tool == "WebFetch":
