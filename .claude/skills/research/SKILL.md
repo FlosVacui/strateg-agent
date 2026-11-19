@@ -81,7 +81,7 @@ plan:
 10. Источники спорят — запиши пару с `dispute` сразу.
 11. Рекомендация не опирается на утверждение только из подозрительного источника.
 12. Способ закрыть пробел сначала открытый (он первым в `how_to_close`), с ценой и временем. Просьба к человеку — только когда открытого пути нет. Сохранить страницу в `inputs/` предложи только при запрете `robots.txt`. Файл из `inputs/`: `uv run strateg add <файл>`. Число из него — допущение с `origin: пользователь`; факт — по подсекции «Таблицы и расчёты».
-13. `uv run strateg step done 2б --next 'шаг 3: картина ситуации'`. На границе шагов — `uv run strateg budget check`: код 1 — внеплановая остановка (`AGENTS.md`).
+13. `uv run strateg step done 2б --next 'шаг 3: картина ситуации'`. На границе шагов — `uv run strateg budget check --next`: код 1 — внеплановая остановка (`AGENTS.md`).
 
 ### Таблицы и расчёты
 1. До выводов: `uv run strateg data check И-<n>`. Пропуски, смешение единиц, дыры в периодах — в картину (`gaps`, `situation.md`) как ограничение.
@@ -180,8 +180,7 @@ gaps:
 ### Документ `outputs/situation.md`
 Номера пиши русскими буквами: `У-12`, `П-3`, `ВП-2`. Числа бери из утверждений, новых сведений в документ не добавляй.
 
-### Смысл цитат: классификатор
-До В3: `uv run strateg route classifier --reason 'смысл цитат'`, `uv run strateg claim pairs --json`. Задание классификатору — поле `task` целиком. Ответ — Write в `projects/<id>/.tmp/classifier.txt`, затем `uv run strateg claim verdict --file <этот файл> --ids <ids> --by классификатор --model <модель из route>`. «Не подтверждает» — до В3 `claim replace` или `claim revoke`. «Не уверен» — `uv run strateg route classifier --upgrade --reason 'не уверен: У-n, …'` и повтор только этих пар: `uv run strateg claim pairs --json --ids У-n,…`. Роли нет — сам по `knowledge/roles/classifier.md`, `--by агент`.
+Смысл цитат проверяет критик на шаге 6 (`.claude/skills/strategy/completeness.md`).
 
 ### Ворота В3
 - Пилот: `gate open В3 --questions <N>`, жди, `gate answer В3 --answer '…'`.

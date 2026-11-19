@@ -21,7 +21,6 @@ ROUTING = RoutingView(
     roles={
         "researcher": Choice("средняя", "sonnet", "medium"),
         "critic": Choice("средняя", "sonnet", "high"),
-        "classifier": Choice("дешёвая", "haiku", "low"),
         "respondent": Choice("средняя", "sonnet", "medium"),
     }
 )
@@ -697,9 +696,8 @@ def test_unknown_role_is_refused_with_clear_reason():
 
 
 def test_role_without_wrapper_is_refused_clearly():
-    d = refused(launch("classifier"), "нет обёртки", "запасному пути")
+    d = refused(launch("respondent"), "нет обёртки", "запасному пути")
     assert "AGENTS.md" in d.reason
-    refused(launch("respondent"), "нет обёртки")
 
 
 def test_role_without_routing_key_is_refused_clearly():
@@ -939,37 +937,16 @@ def test_cli_state_files_match_project_check():
     assert set(rules.CLI_STATE_FILES) == expected
 
 
-# --- классификатор: закрыт любой инструмент -----------------------------------------------------------
+# --- классификатор снят по замеру: имя больше не роль -------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "tool, tin",
-    [
-        ("Read", {"file_path": "knowledge/roles/classifier.md"}),
-        ("Read", {"file_path": "projects/demo/sources/i-1.txt"}),
-        ("Grep", {"pattern": "x", "path": "knowledge"}),
-        ("Glob", {"pattern": "*.yaml"}),
-        ("Write", {"file_path": "projects/demo/outputs/x.md", "content": "x"}),
-        ("Bash", {"command": "uv run strateg claim verdict У-1 --verdict подтверждает"}),
-        ("WebSearch", {"query": "x"}),
-        ("WebFetch", {"url": "https://example.com"}),
-        ("Agent", {"subagent_type": "researcher", "prompt": "найди"}),
-        ("mcp__playwright__browser_navigate", {"url": "https://example.com"}),
-        ("TodoWrite", {"todos": []}),
-        ("", {}),
-    ],
-)
-def test_classifier_may_use_no_tool(tool, tin):
-    d = refused(decide(tool, tin, "classifier"), "Классификатору закрыт любой инструмент")
-    e = [x for x in d.events if x.kind == "отказ хука"][0]
-    assert e.role == "classifier"
-
-
-def test_classifier_is_a_role_of_its_own_and_the_main_agent_may_launch_it():
-    assert rules.role_kind({"agent_type": "classifier", "agent_id": "a"}) == "classifier"
-    wrappers = WRAPPERS | {"classifier"}
-    d = allowed(launch("classifier", wrappers=wrappers))
-    assert d.updated_input["model"] == "haiku"
+def test_classifier_is_no_longer_a_role_it_cannot_be_launched_and_has_the_rights_of_any_other_name():
+    """Роли нет в таблице и среди обёрток: запуск отказан, а `agent_type` — как любое чужое имя."""
+    assert rules.role_kind({"agent_type": "classifier", "agent_id": "a"}) == rules.OTHER
+    assert not hasattr(rules, "CLASSIFIER")
+    refused(launch("classifier"), "Неизвестная роль", "researcher")
+    refused(launch("classifier", wrappers=WRAPPERS | {"classifier"}), "нет в `config/routing.yaml`")
+    allowed(decide("Read", {"file_path": "README.md"}, "classifier"))
 
 
 OTHER = (
@@ -985,7 +962,7 @@ OTHER = (
 def test_other_tools_pass_the_main_agent_unchecked_and_are_closed_to_the_roles(tool):
     assert rules.passes_unchecked(event(tool)) and rules.passes_unchecked(event(tool, agent="other-role"))
     assert rules.passes_unchecked({"tool_name": tool, "conversation_id": "c-1"})  # чужая среда — как без хука
-    for role in ("classifier", "researcher", "critic"):
+    for role in ("respondent", "researcher", "critic"):
         assert not rules.passes_unchecked(event(tool, agent=role)), role
         refused(decide(tool, {"command": "dir"}, role))
 
@@ -1029,10 +1006,3 @@ def test_respondent_is_a_role_of_its_own_and_the_main_agent_may_launch_it():
     assert not rules.passes_unchecked(event("Skill", agent="respondent"))
     d = allowed(launch("respondent", wrappers=WRAPPERS | {"respondent"}))
     assert d.updated_input["model"] == "sonnet"
-
-
-def test_respondent_gets_the_same_refusal_as_the_classifier_for_every_tool():
-    for tool in ("Read", "Bash", "Agent", "WebSearch", "Skill", "mcp__x__y"):
-        a = decide(tool, {"command": "dir"}, "classifier")
-        b = decide(tool, {"command": "dir"}, "respondent")
-        assert a.action == b.action == "deny", tool

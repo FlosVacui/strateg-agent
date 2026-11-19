@@ -327,9 +327,10 @@ PublisherKind = Literal[
     "материал пользователя",
 ]
 CheckMethod = Literal["точное вхождение", "без пробелов и дефисов"]
-# Вердикт классификатора о паре «утверждение — цитата» (ADR-0007): подтверждает ли цитата смысл.
+# Вердикт о паре «утверждение — цитата» (ADR-0007): подтверждает ли цитата смысл. «классификатор» — только
+# в старых проектах: роль снята по замеру, новых вердиктов с ним не пишут, а старые читаются.
 VerdictValue = Literal["подтверждает", "частично", "не подтверждает", "не уверен"]
-VerdictBy = Literal["классификатор", "агент"]
+VerdictBy = Literal["критик", "агент", "классификатор"]
 VerdictCall = Literal["подтверждён", "не подтверждён"]  # след вызова роли в журнале
 
 EventKind = Literal[
@@ -665,25 +666,40 @@ class ClaimVerdict(_Model):
     verdict: VerdictValue
     type_ok: Flag | None = Field(None, description="Верен ли тип утверждения; нет — не оценивали")
     reason: Text = Field(description="Одна строка причины")
-    by: VerdictBy = Field(description="«классификатор» — роль со свежим контекстом, «агент» — запасной путь")
+    by: VerdictBy = Field(
+        description=(
+            "«критик» — роль со свежим контекстом, «агент» — запасной путь; "
+            "«классификатор» — только в старых проектах"
+        )
+    )
     model: Text = Field(description="Модель, которая вынесла вердикт")
     upgraded: Flag = Field(
         False,
-        description="Повтор после повышения: пара была «не уверен» до повышения модели роли на этом шаге",
+        description="Только в старых проектах: повтор после повышения модели классификатора",
     )
-    classifier_call: VerdictCall | None = Field(
+    critic_call: VerdictCall | None = Field(
         None,
         description=(
-            "Только при by: классификатор. «подтверждён» — в журнале есть событие «роль выполнена» для "
-            "classifier на этом шаге после прошлой записи вердикта; «не подтверждён» — нет"
+            "Только при by: критик. «подтверждён» — в журнале есть событие «роль выполнена» для критика "
+            "на этом шаге после прошлой записи вердикта; «не подтверждён» — нет"
         ),
     )
     at: Time
 
+    @model_validator(mode="before")
+    @classmethod
+    def _old_field(cls, data: Any) -> Any:
+        """Старый проект: вердикт классификатора хранил след вызова в `classifier_call`."""
+        if isinstance(data, dict) and "classifier_call" in data:
+            data = dict(data)
+            old = data.pop("classifier_call")
+            data.setdefault("critic_call", old)
+        return data
+
     @model_validator(mode="after")
     def _rules(self) -> Self:
-        if self.classifier_call is not None and self.by != "классификатор":
-            _raise(["classifier_call бывает только у вердикта by: классификатор"])
+        if self.critic_call is not None and self.by == "агент":
+            _raise(["critic_call бывает только у вердикта by: критик"])
         return self
 
 
