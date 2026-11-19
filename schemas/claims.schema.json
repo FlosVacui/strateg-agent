@@ -1,6 +1,30 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$defs": {
+    "CalcRef": {
+      "additionalProperties": false,
+      "description": "Число утверждения получено расчётом `outputs/calc/<name>.py`; `key` — путь к значению в результате.",
+      "properties": {
+        "name": {
+          "maxLength": 64,
+          "pattern": "^[a-zа-яё0-9][a-zа-яё0-9_-]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "key": {
+          "maxLength": 120,
+          "pattern": "^[^\\s.][^\\s]*$",
+          "title": "Key",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "key"
+      ],
+      "title": "CalcRef",
+      "type": "object"
+    },
     "Claim": {
       "additionalProperties": false,
       "description": "Утверждение `У-n`.",
@@ -232,6 +256,18 @@
           ],
           "default": null,
           "description": "Подтверждает ли цитата утверждение по смыслу"
+        },
+        "calc": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CalcRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Число утверждения получено расчётом: имя расчёта и ключ значения (ADR-0005)"
         }
       },
       "required": [
