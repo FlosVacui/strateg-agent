@@ -454,12 +454,17 @@ def _snapshot_text(root: Path, src: Source, cache: dict[str, str | None]) -> str
     return cache[src.id]
 
 
-def _check_image_quote(root: Path, src: Source, c: Claim, q: Any, where: str, err: Any) -> None:
-    """Цитата с изображения: те же условия, что при записи, и запись проверки по файлу изображения."""
+def _check_image_quote(
+    root: Path, src: Source, c: Claim, q: Any, where: str, err: Any, shas: dict[str, str | None]
+) -> None:
+    """Цитата с изображения: те же условия, что при записи, и запись проверки по файлу изображения.
+
+    `shas` — хеши файлов изображений, посчитанные в этом прогоне: файл читается один раз на источник.
+    """
     problem = (
-        imagequote.source_problem(src, root)
+        imagequote.source_problem(src, root, shas)
         or imagequote.locator_problem(q.locator)
-        or imagequote.behaviour_problem(c.type, c.text)
+        or imagequote.claim_problem(c.type, c.text, q.text, q.locator)
     )
     if problem:
         err(f"{where}: {problem}")
@@ -467,7 +472,7 @@ def _check_image_quote(root: Path, src: Source, c: Claim, q: Any, where: str, er
         err(f"{where}: у цитаты с изображения нет записи проверки")
     elif q.check.method != IMAGE_CHECK:
         err(f"{where}: у цитаты с изображения способ проверки «{q.check.method}», а нужен «{IMAGE_CHECK}»")
-    elif q.check.snapshot_sha256 != imagequote.image_sha(root, src):
+    elif q.check.snapshot_sha256 != imagequote.image_sha(root, src, shas):
         err(f"{where}: цитата записана по другому файлу изображения, чем сейчас у {src.id}; запишите заново")
 
 
@@ -567,12 +572,27 @@ def _synthetic_note(ref: str, kind: str, note: str) -> str:
     return f"{ref} опирается только на синтетику (basis или цитата из сессии): {note}"
 
 
+def _replaced_images(sources: SourcesFile) -> dict[str, str]:
+    """Изображение, которое позже записано под тем же путём: номер прежнего источника -> номер последнего."""
+    last: dict[str, str] = {}
+    for s in sources.sources:
+        if s.kind == "изображение" and s.path is not None:
+            last[s.path.casefold()] = s.id
+    return {
+        s.id: last[s.path.casefold()]
+        for s in sources.sources
+        if s.kind == "изображение" and s.path is not None and last[s.path.casefold()] != s.id
+    }
+
+
 def _check_claims(root: Path, sources: SourcesFile, claims: ClaimsFile, errors: list[str]) -> None:
     snapshots: dict[str, str | None] = {}
+    image_shas: dict[str, str | None] = {}
     synth_ids = synthetic_ids(sources)
     taint = synthetic_claims(claims.claims, sources)
     by_src = {s.id: s for s in sources.sources}
     by_id = {c.id: c for c in claims.claims}
+    replaced_images = _replaced_images(sources)
     for dup in sorted(_duplicates([c.id for c in claims.claims])):
         errors.append(f"{CLAIMS_FILE}: номер {dup} встречается больше одного раза")
 
@@ -623,7 +643,14 @@ def _check_claims(root: Path, sources: SourcesFile, claims: ClaimsFile, errors: 
                 continue
             quote_sources.append(src)
             if src.kind == "изображение":
-                _check_image_quote(root, src, c, q, where, err)
+                later = replaced_images.get(src.id)
+                if later is not None:
+                    err(
+                        f"{where}: файл {src.path} записан ещё раз как {later}: прежний снимок не хранится, "
+                        f"сверить цитату по {src.id} нельзя; запишите утверждение заново на {later}"
+                    )
+                    continue
+                _check_image_quote(root, src, c, q, where, err, image_shas)
                 continue
             if q.check is not None and q.check.method == IMAGE_CHECK:
                 err(
@@ -859,24 +886,54 @@ class _Claims:
         self.synthetic = synthetic_claims(claims.claims, sources) if claims else {}
         self.synthetic_sources = synthetic_ids(sources)
         self.image_sources = {s.id for s in sources.sources if s.kind == "изображение"} if sources else set()
+        self.plan_hypotheses: frozenset[str] = frozenset()  # гипотезы, которые стоят в плане проверки
 
     def type_of(self, ref: str) -> str | None:
         c = self.by_id.get(ref) if self.by_id is not None else None
         return c.type if c else None
 
+    def image_only(self, ref: str) -> bool:
+        """Факт, который стоит только на цитатах с изображений."""
+        c = self.by_id.get(ref) if self.by_id is not None else None
+        return (
+            c is not None
+            and c.type == "факт"
+            and bool(c.quotes)
+            and all(q.source in self.image_sources for q in c.quotes)
+        )
+
+    def _reaches(self, hypothesis: str, fact: str) -> bool:
+        """Гипотеза опирается на факт прямо или по цепочке `basis`."""
+        assert self.by_id is not None
+        seen: set[str] = set()
+        todo = [hypothesis]
+        while todo:
+            c = self.by_id.get(todo.pop())
+            if c is None:
+                continue
+            for b in c.basis:
+                if b == fact:
+                    return True
+                if b not in seen:
+                    seen.add(b)
+                    todo.append(b)
+        return False
+
     def only_image_facts(self, refs: list[str]) -> list[str] | None:
-        """Факты среди `refs`, если все они стоят только на изображениях, а гипотезы среди `refs` нет;
-        иначе None. Снимок экрана показывает интерфейс, а не поведение людей: рекомендация «пользователи
-        хотят или не могут» нуждается в гипотезе с проверкой (ADR-0005)."""
+        """Факты среди `refs`, если все они стоят только на изображениях и не сняты; иначе None.
+
+        Снимок экрана показывает интерфейс, а не поведение людей: рекомендацию «пользователи хотят или не
+        могут» снимает только гипотеза из `refs`, которая опирается (`basis`) на этот факт и стоит в плане
+        проверки (`verification.yaml`, `rows[].hypothesis`); ADR-0005.
+        """
         if self.by_id is None or not self.image_sources:
             return None
-        claims = [self.by_id[r] for r in refs if r in self.by_id]
-        facts = [c for c in claims if c.type == "факт"]
-        if not facts or any(c.type == "гипотеза" for c in claims):
+        facts = [r for r in refs if r in self.by_id and self.by_id[r].type == "факт"]
+        if not facts or not all(self.image_only(f) for f in facts):
             return None
-        if all(q.source in self.image_sources for c in facts for q in c.quotes):
-            return [c.id for c in facts]
-        return None
+        hypotheses = [r for r in refs if r in self.plan_hypotheses and self.type_of(r) == "гипотеза"]
+        open_facts = [f for f in facts if not any(self._reaches(h, f) for h in hypotheses)]
+        return open_facts or None
 
     def only_self_reported(self, refs: list[str]) -> list[str] | None:
         """Факты среди `refs`, если они все — заявления издателя о себе; иначе (есть независимый или
@@ -1006,6 +1063,7 @@ def _check_outputs(
         _frame_sources(errors, FRAME_FILE, "", frame, source_ids)
     if plan is not None:
         _check_plan(plan, gap_reg, errors)
+    cl.plan_hypotheses = frozenset(r.hypothesis for r in ver.rows if r.hypothesis) if ver else frozenset()
     if gaps is not None:
         _check_gaps(gaps, cl, opt_reg, errors)
     if opts is not None:
@@ -1147,6 +1205,9 @@ def _check_plan(plan: PlanFile, gap_reg: _Registry, errors: list[str]) -> None:
             gap_reg.check(errors, f"{PLAN_FILE}, запись {q.id} (№{n})", "gap", q.gap)
 
 
+_IMAGE_ONLY_NOTE = (
+    "стоит только на цитате со снимка экрана, а снимок показывает интерфейс, не поведение людей"
+)
 _SYNTHETIC_PROOF = "ответ модельного респондента ничего не доказывает, опорой он быть не может"
 
 
@@ -1168,6 +1229,10 @@ def _check_gaps(gaps: GapsFile, cl: _Claims, opt_reg: _Registry, errors: list[st
         where = f"{GAPS_FILE}, metric_coverage, запись №{n}"
         for ref in m.claims or []:
             cl.ref(where, "claims", ref, type_=("факт", "прогноз"), synthetic_note=_SYNTHETIC_PROOF)
+            if cl.image_only(ref):
+                errors.append(
+                    f"{where}, поле claims: {ref} {_IMAGE_ONLY_NOTE}: показатель на снимке не измерен"
+                )
         if m.gap:
             own.check(errors, where, "gap", m.gap)
             if kinds.get(m.gap) not in (None, m.kind):
@@ -1221,9 +1286,10 @@ def _check_options(opts: OptionsFile, cl: _Claims, errors: list[str]) -> None:
     only_image = cl.only_image_facts(rec.claims)
     if only_image:
         errors.append(
-            f"{where}, поле claims: рекомендация держится только на фактах с изображений "
-            f"({', '.join(only_image)}): снимок экрана показывает интерфейс, а не поведение людей; "
-            "добавьте гипотезу о поведении (она требует способа проверки) или факт из другого источника"
+            f"{where}, поле claims: рекомендация держится на фактах только со снимков экрана "
+            f"({', '.join(only_image)}): снимок показывает интерфейс, а не поведение людей. Нужна гипотеза "
+            "о поведении, которая в basis опирается на этот факт, стоит в claims рекомендации и есть в плане "
+            f"проверки ({VERIFICATION_FILE}, rows[].hypothesis); либо факт из другого источника"
         )
     if opts.chosen:
         own.check(errors, OPTIONS_FILE, "chosen", opts.chosen)
@@ -1319,6 +1385,11 @@ def _check_decisions(
             cl.ref(where, "basis", ref, synthetic_note=_SYNTHETIC_PROOF)
             if d.status == "действует":
                 cl.supported(where, "basis", ref, "решение")
+                if cl.image_only(ref):
+                    errors.append(
+                        f"{where}, поле basis: {ref} {_IMAGE_ONLY_NOTE}: "
+                        "основание решения — гипотеза с проверкой"
+                    )
         for ref in d.assumptions:
             cl.ref(where, "assumptions", ref, type_=("допущение", "гипотеза"))
         rows = {r.id: r for r in ver.rows} if ver else {}

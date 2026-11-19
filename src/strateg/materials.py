@@ -36,7 +36,9 @@ from strateg.project import CliError, Project, UsageError
 
 AUDIO_VIDEO = frozenset(
     {".mp3", ".wav", ".m4a", ".ogg", ".oga", ".opus", ".flac", ".aac", ".wma", ".aiff", ".amr"}
+    | {".aif", ".caf", ".mka", ".weba"}
     | {".mp4", ".mov", ".mkv", ".avi", ".webm", ".wmv", ".m4v", ".flv", ".mpg", ".mpeg", ".3gp"}
+    | {".3g2", ".mts", ".m2ts", ".ogv", ".qt", ".mxf", ".vob", ".asf"}
 )
 IMAGES = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".heic"})
 KIND_BY_EXT = {
@@ -773,8 +775,9 @@ def _warnings(outcome: Outcome) -> None:
         )
     if s.kind == "изображение":
         w.append(
-            "изображение модель увидит напрямую и только после вашего подтверждения: если на нём нет людей "
-            f"и контактов, подтвердите это: `strateg add --confirm {s.id}`; до тех пор файл не открывается"
+            "изображение модель увидит напрямую: если на нём нет людей, имён, почты и телефонов, подтвердите "
+            f"это: `strateg add --confirm {s.id}`. До подтверждения агенту запрещено открывать файл (правило "
+            "хука прав в Claude Code); в других средах такого запрета нет, и файл не стоит давать"
         )
     if s.closed_markers:
         w.append(

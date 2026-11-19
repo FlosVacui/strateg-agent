@@ -48,6 +48,11 @@ WEB_TOOLS = frozenset({"WebSearch", "WebFetch"})
 BUILTIN_AGENTS = ("general-purpose", "Explore", "Plan", "claude", "statusline-setup", "claude-code-guide")
 MODEL_ALIASES = frozenset({"sonnet", "opus", "haiku", "fable"})  # модель вызова субагента — только псевдоним
 PLAYWRIGHT_ALLOWED = frozenset({"browser_navigate", "browser_take_screenshot"})
+# Файлы, которые `Read` показывает модели как изображение (ADR-0011): виды `materials.IMAGES` (сверяется
+# тестом) и те, которые `add` не принимает, но `Read` показал бы.
+IMAGE_SUFFIXES = frozenset(
+    {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".avif", ".ico", ".jfif"}
+)
 
 # Файлы проекта, которые пишет только CLI (ADR-0002): сверяется тестом с `project_check`.
 CLI_STATE_FILES = (
@@ -160,6 +165,8 @@ class Services:
     routing: Callable[[], RoutingView]
     agents: Callable[[], frozenset[str]]  # роли, у которых есть обёртка в `.claude/agents/`
     active: Callable[[], str | None] = lambda: None  # номер активного проекта; None — активного нет
+    # путь изображения внутри папки проекта -> источник с этим путём подтверждён человеком (`add --confirm`)
+    image_confirmed: Callable[[tuple[str, ...]], bool] = lambda rel: False
 
 
 @dataclass(frozen=True)
@@ -502,6 +509,10 @@ def _check_file_tool(
                     f"Состояние проекта пишет только CLI, а не {tool}: {owned} — через `strateg`. "
                     f"Подсказка: {_cli_hint(owned)}."
                 )
+    if tool == "Read":
+        problem = _unconfirmed_image(raw, places, svc)
+        if problem:
+            return problem
     if kind == RESEARCHER:
         return _check_researcher(tool, implicit, places, svc)
     if kind == CRITIC:
@@ -518,6 +529,26 @@ def _check_file_tool(
         active = svc.active()
         if not all(_write_zone(pl, active) for pl in places):
             return f"{tool}: запись только в `outputs/` и `.tmp/` активного проекта — {WRITE_ZONE_HINT}."
+    return None
+
+
+def _unconfirmed_image(raw: str, places: list[paths.Place], svc: Services) -> str | None:
+    """`Read` показывает изображение модели. В папке проекта (кроме `outputs/`) его читают, только если у
+    источника с этим путём в `sources.yaml` активного проекта есть подтверждение человека (ADR-0011)."""
+    name = raw.replace("\\", "/").rsplit("/", 1)[-1]
+    if "." not in name or "." + name.rsplit(".", 1)[-1].lower() not in IMAGE_SUFFIXES:
+        return None
+    active = svc.active()
+    for pl in places:
+        if pl.project_id is None or pl.project_rel is None or pl.project_rel[:1] == (OUTPUTS,):
+            continue
+        if pl.project_id == active and svc.image_confirmed(pl.project_rel):
+            continue
+        return (
+            f"Изображение `{name}` в папке проекта читать нельзя, пока человек не подтвердил, что на нём нет "
+            "людей и контактов: `uv run strateg add` (если файла нет в источниках), затем человек выполняет "
+            "`strateg add --confirm И-n` сам. Подтверждение ищется в `sources.yaml` активного проекта."
+        )
     return None
 
 

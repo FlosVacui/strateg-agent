@@ -1468,15 +1468,16 @@ def _image_quote(
     p: Project, c: ClaimIn, q: QuoteIn, src: SourceModel, where: str, errors: list[str]
 ) -> Quote | None:
     """Цитата с изображения: текста в снимке нет, проверяются условия записи (модуль `imagequote`)."""
+    sha_cache: dict[str, str | None] = {}
     problem = (
-        imagequote.source_problem(src, p.root)
+        imagequote.source_problem(src, p.root, sha_cache)
         or imagequote.locator_problem(q.locator)
-        or imagequote.behaviour_problem(c.type, c.text)
+        or imagequote.claim_problem(c.type, c.text, q.text, q.locator)
     )
     if problem:
         errors.append(f"{where}: {problem}")
         return None
-    sha = imagequote.image_sha(p.root, src)
+    sha = imagequote.image_sha(p.root, src, sha_cache)
     assert sha is not None
     return Quote(
         source=q.source,
@@ -2616,6 +2617,7 @@ def _status_data(p: Project) -> dict[str, Any]:
             "by_type": by_type,
             "without_quote": without_quote,
             "verdicts": classify.summary(p),
+            "from_image": [c.id for c in active if imagequote.only_image(c)],
         },
         "failures": sum(
             1
@@ -2856,6 +2858,12 @@ def cmd_status(args: argparse.Namespace) -> int:
             f"; смысл цитат проверен: {d['claims']['verdicts']['checked']}, "
             f"без вердикта: {d['claims']['verdicts']['unchecked']}"
             if d["claims"]["verdicts"]["checked"]
+            else ""
+        )
+        + (
+            f"; со снимка экрана: {len(d['claims']['from_image'])}, смысл по снимку код не проверяет "
+            f"({', '.join(d['claims']['from_image'])}): сверяет человек"
+            if d["claims"]["from_image"]
             else ""
         ),
         f"Время работы: {_num(d['work_minutes'])} из {d['limit_minutes']:g} мин{running} · "

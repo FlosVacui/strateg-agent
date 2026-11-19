@@ -22,6 +22,7 @@ from typing import Any
 
 from strateg import project as proj
 from strateg.commands import _claim_ref, _find_claim, _load_output, _open, claim_usages, emit
+from strateg.imagequote import from_image
 from strateg.models import Claim, ClaimVerdict
 from strateg.project import CliError, Project, UsageError
 from strateg.project_check import _TEXT_REF, UNSUPPORTED_NOTE
@@ -110,13 +111,19 @@ def cut(text: str, limit: int = QUOTE_LIMIT) -> tuple[str, bool]:
 
 
 def checkable(c: Claim) -> bool:
-    """Утверждение, которое классификатор проверяет: действует, есть цитаты, не синтетика."""
-    return c.status == "действует" and bool(c.quotes) and c.type != "синтетика"
+    """Утверждение, которое классификатор проверяет: действует, есть цитата с текстом источника, не синтетика.
+
+    Цитата со снимка — описание, которое записал сам агент: классификатор сверил бы его с самим собой.
+    Смысл по снимку сверяет человек, такие утверждения пар не дают.
+    """
+    return c.status == "действует" and any(not from_image(q) for q in c.quotes) and c.type != "синтетика"
 
 
 def make_pair(c: Claim, suspicious: frozenset[str] = frozenset()) -> Pair:
     quotes = []
     for q in c.quotes:
+        if from_image(q):
+            continue
         text, truncated = cut(q.text)
         quotes.append(PairQuote(q.source, text, truncated, q.source in suspicious))
     return Pair(c.id, c.type, one_line(c.text), c.period, c.region, tuple(quotes))
@@ -129,8 +136,9 @@ def select(p: Project, ids: list[str] | None, everything: bool) -> list[Claim]:
             c = _find_claim(p, cid)
             if not checkable(c):
                 raise CliError(
-                    f"{cid}: пары нет — классификатор проверяет действующие утверждения с цитатой, "
-                    f"кроме синтетики (у {cid}: {c.type}, {c.status}, цитат {len(c.quotes)})"
+                    f"{cid}: пары нет — классификатор проверяет действующие утверждения с цитатой из текста, "
+                    f"кроме синтетики и цитат со снимков экрана (у {cid}: {c.type}, {c.status}, "
+                    f"цитат {len(c.quotes)}, со снимков {sum(from_image(q) for q in c.quotes)})"
                 )
             if c not in chosen:
                 chosen.append(c)
@@ -417,8 +425,9 @@ def cmd_claim_verdict(args: argparse.Namespace) -> int:
         for cid, c in claims.items():
             if not checkable(c):
                 raise CliError(
-                    f"{cid}: вердикт не записан — классификатор проверяет действующие утверждения с цитатой, "
-                    f"кроме синтетики (у {cid}: {c.type}, {c.status}, цитат {len(c.quotes)})"
+                    f"{cid}: вердикт не записан — классификатор проверяет действующие утверждения с цитатой "
+                    f"из текста, кроме синтетики и цитат со снимков экрана (у {cid}: {c.type}, {c.status}, "
+                    f"цитат {len(c.quotes)}, со снимков {sum(from_image(q) for q in c.quotes)})"
                 )
         unknown: list[str] = []
         if text is not None:

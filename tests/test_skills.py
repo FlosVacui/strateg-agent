@@ -1743,6 +1743,12 @@ def test_research_skill_has_the_image_subsection_with_its_key_phrases():
         "расшифровку текстом",
         "Живой интерфейс не открывай",
         "ограничение",
+        "`outputs/ux-review.md`",
+        "в картину ситуации",
+        "нет лиц, имён, почты и телефонов, даже в профиле",
+        "add --confirm` сам не выполняй",
+        "положить файл в `inputs/`",
+        "не короче трёх слов",
     ):
         assert phrase in section, phrase
     assert len(section.encode("utf-8")) <= 1500
@@ -1758,8 +1764,17 @@ def test_ux_review_card_and_template_keep_their_key_parts():
         "блокирует",
         "интервью с показом экрана",
         "аналитика",
+        "(у «мешает» и «блокирует»)",
+        "Evaluate Interface Learnability with Cognitive Walkthroughs",
+        "сомнительное — гипотеза",
+        "со снимка экрана, И-n",
+        "стоит в плане проверки",
     ):
         assert phrase in card, phrase
+    rule4 = next(line for line in card.splitlines() if line.startswith("4. Эвристики Нильсена"))
+    names = rule4.split("состояние системы видно", 1)[1].rstrip(".").split(";")
+    assert len(names) == 10 and names[-1].strip() == "помощь", names  # десять эвристик, как у Нильсена
     template = (TEMPLATES / "ux-review.md").read_text(encoding="utf-8")
     for col in ("Экран", "Элемент", "Что видно", "Эвристика", "Тяжесть", "Гипотеза", "Как проверить"):
         assert col in template, col
+    assert "у «косметики» — «—»" in template
