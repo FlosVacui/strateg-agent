@@ -30,6 +30,7 @@ def table_source(p: Project, raw: str) -> Source:
         if found is None:
             raise CliError(f"источника {raw} нет в проекте")
     else:
+        file: Path | None = None
         try:
             file = materials.resolve_material(p, raw)
             rel = materials.inputs_relpath(p, file)
@@ -38,6 +39,16 @@ def table_source(p: Project, raw: str) -> Source:
         found = next((s for s in p.sources.sources if s.path == rel), None)
         if found is None:
             raise CliError(f"файл {raw} не зарегистрирован: сначала `strateg add {Path(raw).name}`")
+        if (
+            file is not None
+            and found.material_sha256
+            and not found.anonymized
+            and proj.sha256_bytes(file.read_bytes()) != found.material_sha256
+        ):
+            raise CliError(
+                f"файл {raw} не тот, что записан как {found.id}: содержимое отличается; "
+                f"`strateg data check {found.id}` читает записанный текст"
+            )
     if found.kind != "таблица":
         raise CliError(f"{found.id}: это {found.kind}, а не таблица (.csv или .xlsx)")
     if (found.anonymized and not found.anonymization_confirmed) or (
@@ -59,6 +70,11 @@ def load_text(p: Project, src: Source) -> str:
     return path.read_bytes().decode("utf-8")
 
 
+def _missing_note(c: tables.Column, n: int) -> str:
+    words = f" (в том числе записано словом или прочерком: {c.stubs})" if c.stubs else ""
+    return f"пропусков: {c.missing} из {n}{words}"
+
+
 def profile(text: str) -> list[dict[str, Any]]:
     out = []
     for t in tables.tables_of(text):
@@ -72,15 +88,16 @@ def profile(text: str) -> list[dict[str, Any]]:
                     "type": c.kind,
                     "missing": c.missing,
                     "missing_share": round(c.missing / n, 4) if n else 0.0,
+                    "missing_as_text": c.stubs,
                     "unit": c.unit,
                     "units_mixed": c.unit_mixed,
                     "period": c.period,
                     "warnings": list(c.warnings)
-                    + ([f"пропусков: {c.missing} из {n}"] if c.missing and c.kind != "пусто" else [])
+                    + ([_missing_note(c, n)] if c.missing and c.kind != "пусто" else [])
                     + (["столбец пуст"] if c.kind == "пусто" else []),
                 }
             )
-        warnings = [f"{c['name']}: {w}" for c in cols for w in c["warnings"]]
+        warnings = list(t.notes) + [f"{c['name']}: {w}" for c in cols for w in c["warnings"]]
         if t.empty_rows:
             warnings.append(f"пустых строк внутри таблицы: {len(t.empty_rows)}")
         if t.duplicates:
@@ -93,6 +110,8 @@ def profile(text: str) -> list[dict[str, Any]]:
             {
                 "sheet": t.sheet,
                 "header": t.has_header,
+                "header_row": t.header_row or None,
+                "title_rows": t.title_rows,
                 "rows": n,
                 "columns": cols,
                 "empty_rows": len(t.empty_rows),
@@ -106,7 +125,12 @@ def profile(text: str) -> list[dict[str, Any]]:
 def _lines(sid: str, sheets: list[dict[str, Any]]) -> list[str]:
     lines = []
     for s in sheets:
-        head = "заголовок в первой строке" if s["header"] else "заголовка нет, столбцы по буквам"
+        if not s["header"]:
+            head = "заголовка нет, столбцы по буквам"
+        elif s["title_rows"]:
+            head = f"заголовок в строке {s['header_row']}, над ним названий: {len(s['title_rows'])}"
+        else:
+            head = "заголовок в первой строке"
         lines.append(
             f"{sid}, лист «{s['sheet']}»: строк данных {s['rows']}, столбцов {len(s['columns'])}; {head}."
         )

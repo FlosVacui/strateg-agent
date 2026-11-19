@@ -1580,9 +1580,15 @@ def _build_quotes(p: Project, c: ClaimIn, label: str, errors: list[str]) -> list
         missing = sorted(in_claim - in_quotes)
         if c.calc is not None:  # число из расчёта в цитате не стоит: его сверяет ссылка на расчёт
             found, value = calclib.calc_value(p.root, c.calc)
-            if found and calclib.is_number(value):
+            if found and calclib.is_number(value) and calclib.calc_has_inputs(p.root, c.calc):
                 from_calc = {m.lstrip("+-") for m in calclib.matching_numbers(c.text, value)}
                 missing = [m for m in missing if m.lstrip("+-") not in from_calc]
+            elif found and calclib.is_number(value):
+                errors.append(
+                    f"{label}: факт по расчёту {c.calc.name} без входов: расчёт ничего не прочитал из "
+                    "источников через strateg_calc; запишите утверждение как допущение или прогноз"
+                )
+                return []
         if missing:
             errors.append(
                 f"{label}: числа из текста утверждения нет ни в одной цитате: {', '.join(missing)}; "

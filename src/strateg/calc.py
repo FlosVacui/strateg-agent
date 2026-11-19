@@ -23,7 +23,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from strateg import calcrun
+from strateg import calcrun, units
 from strateg.models import SCHEMA_VERSION, CalcResult, Claim, Source, SourcesFile
 
 CALC_DIR = "outputs/calc"
@@ -86,10 +86,46 @@ def stale_problems(root: Path, sources: SourcesFile | None) -> list[str]:
     return errors
 
 
+def integrity_problems(root: Path, files: dict[str, str] | None, events: list[Any]) -> list[str]:
+    """Ошибки `check`: `outputs/calc/<имя>.json` правили не командой `calc run`.
+
+    Хеш файла сверяется с `state.yaml` (`files`); правку, которую уже «приняла» другая команда (событие
+    «изменено вне агента» после последнего `calc run`), журнал помнит.
+    """
+    if files is None:
+        return []
+    errors: list[str] = []
+    for name in result_names(root):
+        rel = f"{CALC_DIR}/{name}.json"
+        again = f"пересчитайте: `strateg calc run {CALC_DIR}/{name}.py`"
+        recorded = files.get(rel)
+        if recorded is None:
+            errors.append(f"расчёт {name}: {rel} нет в учёте CLI: записан не командой calc run; {again}")
+        elif _sha((root / rel).read_bytes()) != recorded:
+            errors.append(f"расчёт {name}: файл {rel} изменён вне CLI (хеш не совпал с state.yaml); {again}")
+        else:
+            run_at = outside_at = -1
+            for n, e in enumerate(events):
+                if e.kind == "изменено вне агента" and e.path == rel:
+                    outside_at = n
+                elif e.name == "strateg calc run" and (e.message or "").startswith(f"{name}: "):
+                    run_at = n
+            if outside_at > run_at:
+                errors.append(f"расчёт {name}: файл {rel} правили вне CLI после последнего calc run; {again}")
+    return errors
+
+
 # --- число утверждения и значение расчёта ----------------------------------------------------------------
 
-_NUM = re.compile(r"(?<![\w.,])([-−+]?(?:\d{1,3}(?:[   ]\d{3})+|\d+)(?:[.,]\d+)?)(?!\w)")
-_SCALES = ((r"^\s*млрд", 9), (r"^\s*млн", 6), (r"^\s*тыс", 3))
+_NUM = re.compile(
+    r"(?<![\w.,])([-−+]?(?:\d{1,3}(?:,\d{3})+\.\d+|\d{1,3}(?:,\d{3}){2,}"
+    r"|(?:\d{1,3}(?:[    ]\d{3})+|\d+)(?:[.,]\d+)?))(?!\w)"
+)
+_DECLINE = re.compile(r"сниж\w*|паден\w*|пад\w*|упал\w*|сокращ\w*|уменьш\w*|спад\w*|минус", re.I)
+_GROWTH = re.compile(r"рост\w*|прирост\w*|увеличен\w*|вырос\w*|выросл\w*|повышен\w*|плюс", re.I)
+_CLAUSE_END = re.compile(r"[;:!?" + chr(10) + r"]|\.\s")
+_YEAR_CONTEXT = re.compile(r"^\s*(?:г\.|г(?!\w)|год\w*)|^\s*(?:-?й\s*)?(?:кв\.?|квартал|месяц|мес\.)", re.I)
+_PERCENT_SCALE_FLOOR = Decimal(1)  # меньше единицы по модулю — доля («0,153»), а не проценты
 
 
 def value_at(values: Any, key: str) -> tuple[bool, Any]:
@@ -125,36 +161,71 @@ def is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
+def _sign_hint(raw: str, before: str) -> int | None:
+    """Знак числа в тексте: явный «−», «+» или слово («снижение», «рост») в той же фразе; иначе None."""
+    if raw[0] in "-−":
+        return -1
+    if raw[0] == "+":
+        return 1
+    clause = _CLAUSE_END.split(before[-40:])[-1]
+    last = max(
+        ((m.start(), -1) for m in _DECLINE.finditer(clause)),
+        default=(-1, 0),
+    )
+    grow = max(((m.start(), 1) for m in _GROWTH.finditer(clause)), default=(-1, 0))
+    best = max(last, grow)
+    return best[1] or None
+
+
 def matching_numbers(text: str, value: float) -> list[str]:
     """Числа текста (без пробелов-разрядов, с точкой), равные значению с точностью до показанных знаков.
 
-    Принимаются «15,3 %» при значении 0,153, «12,4 млн» при 12 400 000 и знак минус словом («снижение на 5»).
+    Единица после числа задаёт согласованное значение, запасного «как есть» нет: «12,4 млн» — 12 400 000,
+    «15,3 %» — 0,153 (или 15,3 при |значение| ≥ 1), «5 тыс.» не равно 5. Знак: явный «−»/«+» или слово
+    («снижение», «рост») должен совпасть со знаком значения; без знака сверяется модуль. Год («2024 г.»),
+    номер квартала и месяца не считаются. Показанные знаки округляются, но ненулевое значение не
+    округляется до нуля.
     """
     try:
         exact = Decimal(repr(float(value)))
-    except InvalidOperation:
+    except (InvalidOperation, ValueError, OverflowError):
         return []
     found = []
     for m in _NUM.finditer(text):
         raw = m.group(1).replace("−", "-")
-        for ch in "   ":
-            raw = raw.replace(ch, "")
-        raw = raw.replace(",", ".")
+        tail = text[m.end() : m.end() + 16]
+        if _YEAR_CONTEXT.match(tail):
+            continue
+        hint = _sign_hint(raw, text[: m.start()])
+        if hint is not None and exact != 0 and (hint < 0) != (exact < 0):
+            continue
+        clean = raw.lstrip("+-")
+        for ch in "    ":
+            clean = clean.replace(ch, "")
+        if "," in clean and ("." in clean or clean.count(",") > 1):
+            clean = clean.replace(",", "")
+        clean = clean.replace(",", ".")
         try:
-            shown = Decimal(raw)
+            shown = Decimal(clean)
         except InvalidOperation:
             continue
-        digits = max(-shown.as_tuple().exponent, 0)  # type: ignore[operator]
-        tail = text[m.end() : m.end() + 14]
-        candidates = [exact]
-        if re.match(r"^\s*%", tail):
-            candidates.append(exact * 100)
-        for pattern, power in _SCALES:
-            if re.match(pattern, tail, re.IGNORECASE):
-                candidates.append(exact / Decimal(10) ** power)
-        step = Decimal(1).scaleb(-digits)
-        if any(c.copy_abs().quantize(step, ROUND_HALF_UP) == shown.copy_abs() for c in candidates):
-            found.append(raw)
+        power = units.scale_after(tail)
+        if power is not None:
+            candidates = [exact / Decimal(10) ** power]
+        elif units.percent_after(tail):
+            candidates = [exact * 100] + ([exact] if exact.copy_abs() >= _PERCENT_SCALE_FLOOR else [])
+        else:
+            candidates = [exact]
+        step = Decimal(1).scaleb(-max(-shown.as_tuple().exponent, 0))  # type: ignore[operator]
+        try:
+            hit = any(
+                (shown != 0 or c == 0) and c.copy_abs().quantize(step, ROUND_HALF_UP) == shown
+                for c in candidates
+            )
+        except InvalidOperation:
+            continue
+        if hit:
+            found.append(raw.replace(" ", "").replace(",", "."))
     return found
 
 
@@ -168,10 +239,18 @@ def calc_value(root: Path, ref: Any) -> tuple[bool, Any]:
     return (False, None) if res is None else value_at(res.values, ref.key)
 
 
+def calc_has_inputs(root: Path, ref: Any) -> bool:
+    res, _ = load_result(root, ref.name)
+    return bool(res and res.inputs)
+
+
 def claim_problems(root: Path, claim: Claim, sources: SourcesFile) -> list[str]:
-    """Ошибки утверждения со ссылкой на расчёт: нет расчёта или ключа, число не совпало, входы не те."""
+    """Ошибки действующего утверждения со ссылкой на расчёт: нет расчёта или ключа, число или входы не те.
+
+    Отозванные и заменённые утверждения — история: с расчётом они не сверяются.
+    """
     ref = claim.calc
-    if ref is None:
+    if ref is None or claim.status != "действует":
         return []
     where = f"поле calc ({ref.name}, {ref.key})"
     res, err = load_result(root, ref.name)
@@ -188,10 +267,16 @@ def claim_problems(root: Path, claim: Claim, sources: SourcesFile) -> list[str]:
     if not number_matches(claim.text, value):
         problems.append(
             f"{where}: в тексте нет числа, равного значению расчёта ({value}); число утверждения должно "
-            "совпадать с расчётом с точностью до показанных знаков"
+            "совпадать с расчётом с точностью до показанных знаков и знаком; «тыс.», «млн», «млрд» — это "
+            "единицы (12,4 млн — 12400000), «%» — доля (15,3 % — 0.153)"
         )
     by_id = {s.id: s for s in sources.sources}
     cited = {q.source for q in claim.quotes if q.check is not None}
+    if claim.type == "факт" and not res.inputs:
+        problems.append(
+            f"{where}: факт по расчёту без входов: расчёт ничего не прочитал из источников через "
+            "strateg_calc.table или strateg_calc.text; запишите утверждение как допущение или прогноз"
+        )
     for inp in res.inputs:
         src = by_id.get(inp.source)
         if src is not None and src.kind == "синтетика":
@@ -236,25 +321,51 @@ def script_name(root: Path, raw: str) -> str:
     raise CliError(f"скрипт {raw} не найден: положите его в {CALC_DIR}/<имя>.py проекта")
 
 
-def _usable(root: Path, s: Source) -> bool:
-    if not s.text_path or not s.text_sha256 or s.kind in ("изображение", "синтетика"):
-        return False
+def _unusable(root: Path, s: Source) -> str | None:
+    """Почему расчёт не может читать источник; None — может."""
+    if s.kind == "синтетика":
+        return "синтетика: расчёт на ней ничего не доказывает"
+    if s.kind == "изображение":
+        return "изображение: у него нет текста таблицы"
+    if not s.text_path or not s.text_sha256:
+        return "у источника нет текста"
     if (s.anonymized and not s.anonymization_confirmed) or (s.closed_markers and not s.closed_confirmed):
-        return False
+        return f"человек не подтвердил замены или открытость материала (`strateg add --confirm {s.id}`)"
     path = root / s.text_path
-    return path.is_file() and _sha(path.read_bytes()) == s.text_sha256
+    if not path.is_file() or _sha(path.read_bytes()) != s.text_sha256:
+        return "текст источника не совпадает с записанным хешем"
+    return None
 
 
-def execute(root: Path, sources: SourcesFile, name: str, timeout: int) -> Run:
-    """Запускает расчёт отдельным процессом; отказ — `CliError` с причиной."""
+def execute(root: Path, sources: SourcesFile, name: str, timeout: int, *, guard: bool = True) -> Run:
+    """Запускает расчёт отдельным процессом; отказ — `CliError` с причиной.
+
+    `guard=False` снимает разбор скрипта (только тесты хука аудита; из командной строки это недоступно).
+    """
     from strateg.project import CliError
 
+    script = root / CALC_DIR / f"{name}.py"
+    if guard:
+        try:
+            problems = calcrun.check_script(script.read_bytes())
+        except calcrun.ScriptSyntaxError as exc:
+            raise CliError(f"расчёт {name}: {exc}") from None
+        if problems:
+            raise CliError(
+                f"расчёт {name} отклонён до запуска: скрипт нарушает правила ({len(problems)}); "
+                "в расчёте разрешены math, statistics, decimal, fractions, datetime, json, itertools, "
+                "collections, re и strateg_calc",
+                problems[:6],
+            )
+    why = {s.id: _unusable(root, s) for s in sources.sources}
     spec = {
         "root": str(root),
         "script": f"{CALC_DIR}/{name}.py",
+        "guard": guard,
         "sources": {
-            s.id: {"path": s.text_path, "sha256": s.text_sha256} for s in sources.sources if _usable(root, s)
+            s.id: {"path": s.text_path, "sha256": s.text_sha256} for s in sources.sources if why[s.id] is None
         },
+        "refused": {sid: reason for sid, reason in why.items() if reason},
     }
     env = {
         "PYTHONHASHSEED": "0",
@@ -372,12 +483,31 @@ def cmd_calc_run(args: argparse.Namespace) -> int:
             )
         )
         p.save_state()
+    drifted = [
+        c.id
+        for c in p.claims.claims
+        if c.calc is not None
+        and c.calc.name == name
+        and c.status == "действует"
+        and any("в тексте нет числа" in x for x in claim_problems(p.root, c, p.sources))
+    ]
     lines = [f"Расчёт {name}: записан {CALC_DIR}/{name}.json."]
     lines += [f"  {k}: {json.dumps(v, ensure_ascii=False)}" for k, v in list(run.values.items())[:20]]
     lines.append("Входы: " + (", ".join(sorted(run.inputs)) or "нет"))
+    if drifted:
+        lines.append(
+            f"Внимание: утверждения {', '.join(drifted)} перестали совпадать с расчётом: `strateg check` "
+            "назовёт ошибку; замените утверждение (`claim replace`) или отзовите (`claim revoke`)."
+        )
     return emit(
         args,
-        {"name": name, "path": f"{CALC_DIR}/{name}.json", "values": run.values, "inputs": run.inputs},
+        {
+            "name": name,
+            "path": f"{CALC_DIR}/{name}.json",
+            "values": run.values,
+            "inputs": run.inputs,
+            "drifted_claims": drifted,
+        },
         lines,
     )
 

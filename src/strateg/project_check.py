@@ -1600,6 +1600,11 @@ def check_project(root: Path | str) -> list[str]:
                 state if isinstance(state, ProjectState) else None, known_sources, records, errors
             )
             _check_gate_frame(root, frame, frame_present, records, errors)
+            errors.extend(
+                calclib.integrity_problems(
+                    root, state.files if isinstance(state, ProjectState) else None, list(records)
+                )
+            )
         else:
             _check_costs(records, errors)
     return errors
