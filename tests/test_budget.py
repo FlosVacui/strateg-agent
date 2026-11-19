@@ -415,3 +415,169 @@ def test_status_line_warns_by_time_too(cli, home, clock):
     new(cli)
     work(cli, clock, 50)
     assert "израсходовано 83 % бюджета (время)" in cli("status", "--line")[1]
+
+
+# --- budget check --next: цена следующего шага (Д-5) -------------------------------------------------
+
+
+def add_cost(cli, usd: float) -> None:
+    code, _, err = cli("cost", "add", "--session", "s1", "--role", "r", "--model", "m", "--usd", str(usd))
+    assert code == 0, err
+
+
+def step_cost(cli, clock, step: str, usd: float, minutes: float = 1) -> None:
+    """Шаг с расходом: сообщения учитываются на шаге, который идёт, — так их видит оценка по истории."""
+    assert cli("step", "start", step)[0] == 0
+    add_cost(cli, usd)
+    clock.advance(minutes * 60)
+    assert cli("step", "done", step)[0] == 0
+
+
+def history(cli, clock, usd: dict[str, float], minutes: float = 1) -> None:
+    for step, value in usd.items():
+        step_cost(cli, clock, step, value, minutes)
+
+
+def next_estimate(cli, *argv: str) -> dict:
+    return json.loads(cli("budget", "check", "--next", *argv, "--json")[1])["estimate"]
+
+
+def test_step_estimate_table_is_in_the_defaults_file_and_matches_the_code():
+    d = budgetlib.load_defaults()
+    raw = yaml.safe_load((REPO / "config" / "defaults.yaml").read_text(encoding="utf-8"))["step_estimate"]
+    assert list(raw) == list(budgetlib.STEPS) == list(d.step_estimate)
+    assert {k: (v["usd"], v["minutes"]) for k, v in raw.items()} == budgetlib.DEFAULT_STEP_ESTIMATE
+    # шаги до выпуска вместе — порядка замера сквозного прогона ($5,23 и около 25 минут)
+    before_release = [v for k, v in budgetlib.DEFAULT_STEP_ESTIMATE.items() if k != "8"]
+    assert 4.5 <= sum(u for u, _ in before_release) <= 6.5 and 20 <= sum(m for _, m in before_release) <= 35
+
+
+def test_a_config_without_the_estimate_section_still_loads(tmp_path, monkeypatch):
+    folder = tmp_path / "old-config"
+    folder.mkdir()
+    old = "budget:\n  usd: 8\n  minutes: 60\n  warn_share: 0.8\n  release_reserve: {usd: 0.5, minutes: 5}\n"
+    (folder / "defaults.yaml").write_text(old, encoding="utf-8")
+    monkeypatch.setenv(budgetlib.CONFIG_ENV, str(folder))
+    assert budgetlib.load_defaults().step_estimate["2б"].usd == 1.6
+
+
+def test_next_without_history_uses_the_table_and_says_it_is_an_estimate(cli, home):
+    new(cli)
+    code, out, _ = cli("budget", "check", "--next")
+    assert code == 0 and "позволяет шаг 1" in out
+    assert (
+        "оценка шага 1 (оценка): $0,50 и 2,0 мин" in out and "оценка по таблице config/defaults.yaml" in out
+    )
+    est = next_estimate(cli, "2б")
+    assert (
+        est["step"] == "2б" and est["usd"] == 1.6 and est["estimated"] is True and "таблице" in est["source"]
+    )
+
+
+def test_next_refuses_when_the_rest_does_not_fit_the_next_step_while_plain_check_allows(cli, home, clock):
+    """После шага 4 остаток меньше цены шага 5: обычный `budget check` позволяет, `--next` называет цену."""
+    new(cli)
+    history(cli, clock, {"1": 0.75, "2а": 0.5, "2б": 2.0, "3": 0.4, "4": 0.9})  # потрачено $4,55 из $5
+    assert cli("budget", "check")[0] == 0
+    code, out, err = cli("budget", "check", "--next")
+    assert code == 1 and out == ""
+    assert "бюджета не хватит на шаг 5 (деньги)" in err and "шаг не начинать" in err
+    assert "осталось $0,45" in err and "оценка шага 5: $0,75" in err
+    assert "медиана 5 завершённых шагов проекта: 1, 2а, 2б, 3, 4" in err and "(оценка)" not in err
+    assert "budget set" in err
+    (event,) = budget_events(home / "demo")
+    assert "бюджета не хватит на шаг 5" in event["message"] and "$0,45" in event["message"]
+    data = json.loads(cli("budget", "check", "--next", "--json")[1])
+    assert data["ok"] is False and data["allowed"] is False and data["estimate"]["step"] == "5"
+
+
+def test_next_names_the_step_by_status_after_a_done_step_and_the_same_step_while_it_runs(cli, home, clock):
+    new(cli)
+    history(cli, clock, {"1": 0.1, "2а": 0.1})
+    assert next_estimate(cli)["step"] == "2б"
+    assert cli("step", "start", "2б")[0] == 0
+    assert next_estimate(cli)["step"] == "2б"
+    assert cli("step", "done", "2б")[0] == 0
+    assert next_estimate(cli)["step"] == "3"
+
+
+def test_next_after_the_last_step_prices_the_review_again(cli, home, clock):
+    new(cli)
+    for step in ("1", "2а", "2б", "3", "4", "5", "6", "7", "8"):
+        work(cli, clock, 0.1, step=step)
+    assert next_estimate(cli)["step"] == "8"
+
+
+def test_next_estimate_is_the_median_of_the_done_steps_and_a_big_step_does_not_skew_it(cli, home, clock):
+    new(cli)
+    history(cli, clock, {"1": 0.2, "2а": 0.3, "2б": 3.0})  # медиана $0,30, а не среднее $1,17
+    est = next_estimate(cli)
+    assert est["usd"] == 0.3 and est["estimated"] is False
+
+
+def test_next_allows_when_the_rest_equals_the_estimate_and_refuses_below_it(cli, home, clock):
+    new(cli)
+    history(cli, clock, {"1": 0.6, "2а": 0.6, "2б": 0.6})  # медиана $0,60
+    add_cost(cli, 2.6)  # потрачено $4,40, остаток $0,60
+    assert cli("budget", "check", "--next")[0] == 0
+    add_cost(cli, 0.01)
+    assert cli("budget", "check", "--next")[0] == 1
+
+
+def test_next_refuses_by_time_with_the_time_estimate_from_the_journal(cli, home, clock):
+    new(cli)
+    work(cli, clock, 25, step="1")
+    work(cli, clock, 25, step="2а")  # остаток 10 мин, шаг в среднем — 25
+    code, _, err = cli("budget", "check", "--next")
+    assert code == 1 and "бюджета не хватит на шаг 2б (время)" in err
+    assert "осталось 10,0 мин" in err and "оценка шага 2б" in err and "25,0 мин" in err
+
+
+def test_next_without_a_price_looks_at_the_time_only(cli, home, clock):
+    new(cli)
+    work(cli, clock, 1, step="1")  # стоимость неизвестна: деньги не считаются
+    code, out, _ = cli("budget", "check", "--next")
+    assert code == 0 and "позволяет шаг 2а" in out
+    assert json.loads(cli("budget", "check", "--next", "--json")[1])["budget"]["remaining_usd"] is None
+
+
+def test_release_reserve_counts_for_the_next_step_of_a_release(cli, home, clock):
+    new(cli)
+    history(cli, clock, {"1": 0.9, "2а": 0.9, "2б": 0.9, "3": 0.9, "4": 0.9})  # $4,50, остаток $0,50
+    assert cli("budget", "check", "--next", "7")[0] == 1  # шаг 7 — по медиане $0,90
+    code, out, _ = cli("budget", "check", "--next", "7", "--action", "выпуск")
+    assert code == 0 and "позволяет шаг 7" in out  # остаток с резервом $1,00
+
+
+def test_next_does_not_hide_an_exhausted_budget(cli, home):
+    new(cli)
+    cost(cli, 6)
+    code, _, err = cli("budget", "check", "--next")
+    assert code == 1 and "бюджет исчерпан (деньги)" in err and "не хватит" not in err
+
+
+def test_a_refusal_for_the_next_step_is_written_once_until_the_budget_changes(cli, home, clock):
+    new(cli)
+    history(cli, clock, {"1": 1.0, "2а": 1.0, "2б": 1.0, "3": 1.0})  # медиана $1,00
+    add_cost(cli, 0.2)  # остаток $0,80
+    for _ in range(3):
+        assert cli("budget", "check", "--next")[0] == 1
+    assert len(budget_events(home / "demo")) == 1
+    assert cli("budget", "set", "--usd", "6")[0] == 0
+    assert cli("budget", "check", "--next")[0] == 0
+
+
+@pytest.mark.parametrize("step", ["9", "шаг", "0"])
+def test_next_with_an_unknown_step_is_a_usage_error(cli, home, step):
+    new(cli)
+    code, _, err = cli("budget", "check", "--next", step)
+    assert code == 2 and "не бывает" in err
+    assert budget_events(home / "demo") == []
+
+
+def test_the_rules_of_the_agent_point_at_next():
+    agents = (REPO / "AGENTS.md").read_text(encoding="utf-8")
+    line = next(x for x in agents.splitlines() if x.startswith("- бюджет израсходован:"))
+    assert "budget check --next" in line and "на границе шагов" in line and "код 1" in line
+    completeness = (REPO / ".claude" / "skills" / "strategy" / "completeness.md").read_text(encoding="utf-8")
+    assert "budget check --next" in completeness

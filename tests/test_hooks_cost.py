@@ -875,14 +875,14 @@ def test_inside_the_window_a_budget_that_was_enough_is_not_read_again(small, tx,
     "tool", ["mcp__terminal__run_in_terminal", "Skill", "SendMessage", "ReadMcpResourceTool"]
 )
 def test_other_tools_of_the_main_agent_pass_as_without_the_hook_even_when_exhausted(small, tx, tool):
-    """Вторая запись `PreToolUse`: основному агенту ни отказа, ни бюджета, ни записи; классификатору отказ."""
+    """Вторая запись `PreToolUse`: основному агенту ни отказа, ни бюджета, ни записи; респонденту отказ."""
     main, _ = tx
     spend(main, 100_000)
     before = kinds(small)
     assert pre_tx(main, tool, {"command": "dir"}) is None
     assert kinds(small) == before and costs(small) == []  # расход не дочитывался: хук ничего не делал
-    body = pre_tx(main, tool, {"command": "dir"}, "classifier")
-    assert body["permissionDecision"] == "deny" and "Классификатору" in body["permissionDecisionReason"]
+    body = pre_tx(main, tool, {"command": "dir"}, "respondent")
+    assert body["permissionDecision"] == "deny" and "Респонденту" in body["permissionDecisionReason"]
 
 
 def test_a_refusal_by_budget_is_written_again_in_a_copy(small, tx, cli, home, tmp_path, clock):

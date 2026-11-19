@@ -332,6 +332,13 @@ def build_parser() -> argparse.ArgumentParser:
     p = budget_sub.add_parser("check", parents=[common], help="можно ли платное действие (0 — да, 1 — нет)")
     p.set_defaults(func=commands.run, handler=commands.cmd_budget_check)
     p.add_argument("--action", help="что собираются делать; «выпуск» берёт резерв бюджета")
+    p.add_argument(
+        "--next",
+        dest="next_step",
+        nargs="?",
+        const="",
+        help="цена следующего шага: остаток меньше оценки — код 1; без значения — следующий по `status`",
+    )
 
     p = add("pack", commands.cmd_pack, "упаковать проект в архив .zip без секретов и исходников с ПДн")
     p.add_argument("--out", help="куда положить архив (по умолчанию — рядом с проектами, <id>.zip)")
@@ -362,7 +369,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = claim_sub.add_parser(
         "pairs",
         parents=[common],
-        help="пары «утверждение — цитата» и задание классификатору; ничего не пишет",
+        help="пары «утверждение — цитата» и задание критику; ничего не пишет",
     )
     p.set_defaults(func=commands.run, handler=classify.cmd_claim_pairs)
     p.add_argument("--ids", help="только эти утверждения: У-1,У-2 (по умолчанию — ещё без вердикта)")
@@ -370,22 +377,22 @@ def build_parser() -> argparse.ArgumentParser:
     p = claim_sub.add_parser(
         "verdict",
         parents=[common],
-        help="записать вердикт о цитате: один (--verdict) или весь ответ классификатора (--file и --ids)",
+        help="записать вердикт о цитате: один (--verdict) или весь ответ критика (--file и --ids)",
     )
     p.set_defaults(func=commands.run, handler=classify.cmd_claim_verdict)
     p.add_argument("id", nargs="?", help="утверждение, например У-3; с --file не нужно")
     p.add_argument("--verdict", choices=list(classify.VERDICTS), help="подтверждает ли цитата утверждение")
     p.add_argument("--type-ok", choices=["да", "нет"], help="верен ли тип утверждения")
     p.add_argument("--reason", help="одна строка причины")
-    p.add_argument("--file", help="ответ классификатора целиком; «-» — стандартный ввод")
+    p.add_argument("--file", help="ответ критика целиком (строки У-n | вердикт | …); «-» — стандартный ввод")
     p.add_argument("--ids", help="с --file: номера пар из задания, У-1,У-2; пара без строки — «не уверен»")
     p.add_argument(
         "--by",
         choices=list(classify.BY_VALUES),
-        help="кто вынес вердикт, обязательно: «классификатор» — роль со свежим контекстом, «агент» — "
+        help="кто вынес вердикт, обязательно: «критик» — роль со свежим контекстом, «агент» — "
         "запасной путь, проверка не независимая",
     )
-    p.add_argument("--model", help="модель, которая вынесла вердикт (из `strateg route classifier`)")
+    p.add_argument("--model", help="модель, которая вынесла вердикт (из `strateg route critic`)")
 
     p = add("write", commands.cmd_write, "записать файлы выхода (рамка, план, пробелы, варианты …)")
     p.add_argument(
