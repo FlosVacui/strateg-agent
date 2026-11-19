@@ -16,6 +16,7 @@ from pptx.util import Inches
 
 from helpers import PUBLISHER, journal_of, load_yaml, tree_hashes, write_claims
 from pdf_builder import make_pdf
+from strateg.materials import AUDIO_VIDEO
 from strateg.project_check import check_project
 
 # Контрольные значения: ни одно из них не должно оказаться ни в одном файле проекта и в архиве.
@@ -349,13 +350,39 @@ def test_changed_file_is_a_new_source_with_its_own_text(demo, cli):
 # --- аудио, видео, изображения ----------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "name", ["звонок.mp3", "интервью.WAV", "запись.m4a", "демо.mp4", "созвон.mov", "x.webm"]
+# Расширения, которые обязаны отклоняться (список записан здесь отдельно: убрать одно из кода — значит упасть)
+AV_EXPECTED = frozenset(
+    {
+        ".mp3",
+        ".wav",
+        ".m4a",
+        ".ogg",
+        ".oga",
+        ".opus",
+        ".flac",
+        ".aac",
+        ".wma",
+        ".aiff",
+        ".amr",
+        ".aif",
+        ".caf",
+    }
+    | {".mka", ".weba", ".mp4", ".mov", ".mkv", ".avi", ".webm", ".wmv", ".m4v", ".flv", ".mpg", ".mpeg"}
+    | {".3gp", ".3g2", ".mts", ".m2ts", ".ogv", ".qt"}
 )
+AV_NAMES = sorted(f"запись{ext}" for ext in AV_EXPECTED | AUDIO_VIDEO) + ["интервью.WAV", "демо.MOV"]
+
+
+def test_audio_and_video_list_keeps_every_expected_extension():
+    assert AV_EXPECTED <= AUDIO_VIDEO
+
+
+@pytest.mark.parametrize("name", AV_NAMES)
 def test_audio_and_video_are_refused_with_a_hint(demo, cli, name):
     put(demo, name, b"\x00\x01\x02")
     code, _, err = cli("add", name)
     assert code == 1 and "не разбираются" in err and "расшифровку текстом" in err
+    assert "--kind интервью --consent" in err and "заметка" in err
     assert sources(demo) == [] and check_project(demo) == []
     assert (demo / "inputs" / name).is_file()  # файл человека не тронут
 

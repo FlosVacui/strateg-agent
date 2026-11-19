@@ -676,7 +676,7 @@ TEMPLATE_HEADINGS = {
         "Не сделано",
     ],
 }
-FORM_TEMPLATES = ("consent",)  # форма для человека: готовый текст с подстановками, а не описания разделов
+FORM_TEMPLATES = ("consent", "ux-review")  # форма: текст с подстановками или таблица, а не описания разделов
 CARDS = [
     "frame-and-questions",
     "sources-and-evidence",
@@ -688,6 +688,7 @@ CARDS = [
     "communication-strategy",
     "validation-plan",
     "interviews",
+    "ux-review",
 ]
 
 
@@ -695,7 +696,7 @@ def headings(path: Path) -> list[str]:
     return re.findall(r"^## (.+?)\s*$", path.read_text(encoding="utf-8"), re.M)
 
 
-def test_eleven_templates_and_one_form_exist():
+def test_eleven_templates_and_two_forms_exist():
     assert sorted(p.stem for p in TEMPLATES.glob("*.md")) == sorted([*TEMPLATE_HEADINGS, *FORM_TEMPLATES])
 
 
@@ -751,7 +752,7 @@ def test_method_card_is_short_and_has_sources(name):
         assert "http" in line or "карточку" in line, f"{rel(path)}: у источника нет адреса: {line[:60]}"
 
 
-def test_method_cards_are_exactly_the_planned_ten():
+def test_method_cards_are_exactly_the_planned_eleven():
     assert sorted(p.stem for p in METHODS.glob("*.md")) == sorted(CARDS)
 
 
@@ -1730,3 +1731,62 @@ def test_update_does_not_carry_done_promises_into_a_confirmed_decision():
     text = (SKILLS / "update" / "SKILL.md").read_text(encoding="utf-8")
     line = next(s for s in text.splitlines() if s.startswith("Из `follow-up`"))
     assert "выполненные обязательства не переноси" in line.lower()
+
+
+# --- изображения и снимки экрана ----------------------------------------------------------------------
+
+
+def _image_section() -> str:
+    text = (SKILLS / "research" / "SKILL.md").read_text(encoding="utf-8")
+    assert "### Изображения и снимки экрана" in text
+    return text.split("### Изображения и снимки экрана", 1)[1].split("\n## ", 1)[0]
+
+
+def test_research_skill_has_the_image_subsection_with_its_key_phrases():
+    section = _image_section()
+    for phrase in (
+        "ux-review.md",
+        "templates/ux-review.md",
+        "add --confirm",
+        "До подтверждения файл не открывай",
+        "экран <название>; элемент <что и где>",
+        "гипотеза с `check_method`",
+        "Аудио и видео",
+        "расшифровку текстом",
+        "Живой интерфейс не открывай",
+        "ограничение",
+        "`outputs/ux-review.md`",
+        "в картину ситуации",
+        "нет лиц, имён, почты и телефонов, даже в профиле",
+        "add --confirm` сам не выполняй",
+        "положить файл в `inputs/`",
+        "не короче трёх слов",
+    ):
+        assert phrase in section, phrase
+    assert len(section.encode("utf-8")) <= 1500
+
+
+def test_ux_review_card_and_template_keep_their_key_parts():
+    card = (METHODS / "ux-review.md").read_text(encoding="utf-8")
+    for phrase in (
+        "экран + элемент + что видно + почему мешает + гипотеза о поведении",
+        "экран <название>; элемент <что и где>",
+        "Поведения, частот и причин он не показывает",
+        "косметика",
+        "блокирует",
+        "интервью с показом экрана",
+        "аналитика",
+        "(у «мешает» и «блокирует»)",
+        "Evaluate Interface Learnability with Cognitive Walkthroughs",
+        "сомнительное — гипотеза",
+        "со снимка экрана, И-n",
+        "стоит в плане проверки",
+    ):
+        assert phrase in card, phrase
+    rule4 = next(line for line in card.splitlines() if line.startswith("4. Эвристики Нильсена"))
+    names = rule4.split("состояние системы видно", 1)[1].rstrip(".").split(";")
+    assert len(names) == 10 and names[-1].strip() == "помощь", names  # десять эвристик, как у Нильсена
+    template = (TEMPLATES / "ux-review.md").read_text(encoding="utf-8")
+    for col in ("Экран", "Элемент", "Что видно", "Эвристика", "Тяжесть", "Гипотеза", "Как проверить"):
+        assert col in template, col
+    assert "у «косметики» — «—»" in template

@@ -20,7 +20,7 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from strateg import __version__, materials, outputs, project_copy, safety
+from strateg import __version__, imagequote, materials, outputs, project_copy, safety
 from strateg import budget as budgetlib
 from strateg import calc as calclib
 from strateg import fetch as fetchlib
@@ -30,6 +30,7 @@ from strateg import quote as quotelib
 from strateg import release as releaselib
 from strateg.hooks import flags as hookflags
 from strateg.models import (
+    IMAGE_CHECK,
     LOCATOR_KINDS,
     SCHEMA_VERSION,
     CalcRef,
@@ -1467,6 +1468,32 @@ def _line_locator(src: SourceModel, q: QuoteIn, text: str, where: str, errors: l
     return f"строка {wanted}"
 
 
+def _image_quote(
+    p: Project, c: ClaimIn, q: QuoteIn, src: SourceModel, where: str, errors: list[str]
+) -> Quote | None:
+    """Цитата с изображения: текста в снимке нет, проверяются условия записи (модуль `imagequote`)."""
+    sha_cache: dict[str, str | None] = {}
+    problem = (
+        imagequote.source_problem(src, p.root, sha_cache)
+        or imagequote.locator_problem(q.locator)
+        or imagequote.claim_problem(c.type, c.text, q.text, q.locator)
+    )
+    if problem:
+        errors.append(f"{where}: {problem}")
+        return None
+    sha = imagequote.image_sha(p.root, src, sha_cache)
+    assert sha is not None
+    return Quote(
+        source=q.source,
+        text=q.text,
+        locator=q.locator,
+        publisher=q.publisher,
+        publisher_kind=q.publisher_kind,
+        self_reported=q.self_reported,
+        check=QuoteCheck(method=IMAGE_CHECK, similarity=100.0, snapshot_sha256=sha, checked_at=proj.now()),
+    )
+
+
 def _build_quotes(p: Project, c: ClaimIn, label: str, errors: list[str]) -> list[Quote]:
     by_id = {s.id: s for s in p.sources.sources}
     out: list[Quote] = []
@@ -1489,7 +1516,7 @@ def _build_quotes(p: Project, c: ClaimIn, label: str, errors: list[str]) -> list
                 f"(`strateg add --confirm {src.id}`)"
             )
             continue
-        if src.text_path is None or src.text_sha256 is None:
+        if src.kind != "изображение" and (src.text_path is None or src.text_sha256 is None):
             errors.append(f"{where}: у источника {src.id} нет снимка текста (доступ: «{src.access}»)")
             continue
         if c.type == "факт" and src.kind == "синтетика":
@@ -1519,6 +1546,12 @@ def _build_quotes(p: Project, c: ClaimIn, label: str, errors: list[str]) -> list
                 f"и {MIN_FACT_QUOTE_CHARS} знаков, иначе одно слово «подтвердит» любое утверждение"
             )
             continue
+        if src.kind == "изображение":
+            image = _image_quote(p, c, q, src, where, errors)
+            if image is not None:
+                out.append(image)
+            continue
+        assert src.text_path is not None and src.text_sha256 is not None
         path = p.root / src.text_path
         if not path.is_file() or proj.sha256_bytes(path.read_bytes()) != src.text_sha256:
             errors.append(f"{where}: снимок {src.text_path} изменён или не найден; загрузите источник заново")
@@ -2664,6 +2697,7 @@ def _status_data(p: Project) -> dict[str, Any]:
             "by_type": by_type,
             "without_quote": without_quote,
             "verdicts": classify.summary(p),
+            "from_image": [c.id for c in active if imagequote.only_image(c)],
         },
         "failures": sum(
             1
@@ -2904,6 +2938,12 @@ def cmd_status(args: argparse.Namespace) -> int:
             f"; смысл цитат проверен: {d['claims']['verdicts']['checked']}, "
             f"без вердикта: {d['claims']['verdicts']['unchecked']}"
             if d["claims"]["verdicts"]["checked"]
+            else ""
+        )
+        + (
+            f"; со снимка экрана: {len(d['claims']['from_image'])}, смысл по снимку код не проверяет "
+            f"({', '.join(d['claims']['from_image'])}): сверяет человек"
+            if d["claims"]["from_image"]
             else ""
         ),
         f"Время работы: {_num(d['work_minutes'])} из {d['limit_minutes']:g} мин{running} · "

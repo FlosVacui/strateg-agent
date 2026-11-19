@@ -4,6 +4,9 @@
     "PYTHONUTF8": "1"
   },
   "permissions": {
+    "ask": [
+      "Bash(uv run strateg add --confirm*)"
+    ],
     "deny": [
       "WebFetch",
       "Agent(general-purpose)",

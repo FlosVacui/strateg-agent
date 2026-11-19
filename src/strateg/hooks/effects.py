@@ -104,6 +104,37 @@ def _plan_ids(root: Path) -> frozenset[str]:
     return frozenset(i for i in ids if isinstance(i, str))
 
 
+def image_confirmed(root: Path, rel: tuple[str, ...]) -> bool:
+    """Подтверждено ли изображение: источник вида «изображение» с этим путём, `no_personal_data_confirmed:
+    true`, а если записан хеш файла — файл не менялся. Любая ошибка чтения — «не подтверждено»."""
+    import hashlib
+    import unicodedata
+
+    import yaml
+
+    def key(text: str) -> str:
+        return unicodedata.normalize("NFC", text.replace("\\", "/")).casefold()
+
+    try:
+        data = yaml.safe_load((root / "sources.yaml").read_bytes().decode("utf-8-sig"))
+        wanted = key("/".join(rel))
+        for src in data.get("sources", []) if isinstance(data, dict) else []:
+            if not isinstance(src, dict) or src.get("kind") != "изображение":
+                continue
+            path = src.get("path")
+            if not isinstance(path, str) or key(path) != wanted:
+                continue
+            if src.get("no_personal_data_confirmed") is not True:
+                continue
+            sha = src.get("material_sha256")
+            if isinstance(sha, str) and sha != hashlib.sha256(root.joinpath(*rel).read_bytes()).hexdigest():
+                continue
+            return True
+    except (OSError, UnicodeDecodeError, yaml.YAMLError, AttributeError):
+        return False
+    return False
+
+
 def agent_names(agents_dir: Path) -> frozenset[str]:
     """Имена ролей по обёрткам `.claude/agents/*.md` (поле `name` в начале файла)."""
     import yaml
@@ -179,8 +210,20 @@ class LiveServices:
         root = active_project_root(self.ctx)
         return root.name if root is not None else None
 
+    def image_confirmed(self, rel: tuple[str, ...]) -> bool:
+        """Изображение `rel` (путь внутри папки проекта) значится в `sources.yaml` активного проекта,
+        человек подтвердил, что на нём нет персональных данных, и файл тот же, что при регистрации."""
+        root = active_project_root(self.ctx)
+        return root is not None and image_confirmed(root, rel)
+
     def as_services(self) -> Services:
-        return Services(project=self.project, routing=self.routing, agents=self.agents, active=self.active)
+        return Services(
+            project=self.project,
+            routing=self.routing,
+            agents=self.agents,
+            active=self.active,
+            image_confirmed=self.image_confirmed,
+        )
 
 
 # --- Журнал ------------------------------------------------------------------------------------------------
