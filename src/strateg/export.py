@@ -602,7 +602,7 @@ def _no_browser_details(html_files: list[Path], browser: str | None, removed: li
     details = [
         named + "; PDF не создан",
         *[f"HTML собран: {p}" for p in html_files],
-        *[f"прежний PDF удалён, чтобы не путать его с новым HTML: {p}" for p in removed],
+        *[f"прежний PDF остался от прошлой печати и не совпадает с новым HTML: {p}" for p in removed],
         "Откройте HTML в браузере и напечатайте в PDF вручную: Ctrl+P, «Сохранить как PDF», "
         "колонтитулы выключите",
     ]
@@ -611,15 +611,10 @@ def _no_browser_details(html_files: list[Path], browser: str | None, removed: li
     return details
 
 
-def _drop_stale_pdf(pdf: Path) -> bool:
-    """Прежний PDF рядом с новым HTML выглядел бы свежим: при неудачной печати он удаляется."""
-    if not pdf.is_file():
-        return False
-    try:
-        pdf.unlink()
-    except OSError:
-        return False
-    return True
+def _stale_pdf(pdf: Path) -> bool:
+    """Прежний PDF рядом с новым HTML выглядел бы свежим: при неудачной печати о нём говорится в выводе.
+    Файл не удаляется: его мог напечатать сам человек, а папка `--out` может быть общей."""
+    return pdf.is_file()
 
 
 def _summary(
@@ -685,7 +680,7 @@ def cmd_export(args: argparse.Namespace) -> int:
     if fmt == "pdf":
         browser = find_browser(args.browser)
         if browser is None:
-            removed = [p for p in (out_dir / f"{r.name}.pdf" for r in rendered) if _drop_stale_pdf(p)]
+            removed = [p for p in (out_dir / f"{r.name}.pdf" for r in rendered) if _stale_pdf(p)]
             data, lines = _summary(root, fmt, rendered, out_dir, [])
             details = _no_browser_details(html_files, args.browser, removed)
             return _fail(args, "PDF не создан: нет браузера для печати", details, data, lines)
@@ -695,7 +690,7 @@ def cmd_export(args: argparse.Namespace) -> int:
                 print_pdf(browser, out_dir / f"{r.name}.html", pdf)
                 pdf_files.append(pdf)
             except PrintError as exc:
-                dropped = "; прежний PDF удалён" if _drop_stale_pdf(pdf) else ""
+                dropped = "; прежний PDF остался от прошлой печати" if _stale_pdf(pdf) else ""
                 pdf_errors.append(f"{r.name}: {exc}{dropped}")
 
     data, lines = _summary(root, fmt, rendered, out_dir, pdf_files)

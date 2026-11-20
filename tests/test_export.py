@@ -407,25 +407,26 @@ def test_no_browser_installed(work, cli, monkeypatch):
     assert all(d["pdf"] is None for d in data["documents"])
 
 
-def test_no_browser_removes_the_stale_pdf(work, cli, monkeypatch):
+def test_no_browser_keeps_the_stale_pdf_and_names_it(work, cli, monkeypatch):
     root = work()
     (root / "export").mkdir()
     stale = root / "export" / "one-pager.pdf"
     stale.write_bytes(b"%PDF-1.4 old")
     monkeypatch.setattr(export, "browser_candidates", lambda *a, **k: [])
     code, out, err = cli("export", "pdf", "one-pager", "--project", str(root))
-    assert code == 1 and not stale.exists() and "прежний PDF удалён" in err
+    assert code == 1 and stale.read_bytes() == b"%PDF-1.4 old"
+    assert "прежний PDF остался от прошлой печати" in err and str(stale) in err
 
 
-def test_failed_print_removes_the_stale_pdf_and_says_so(work, cli):
+def test_failed_print_keeps_the_stale_pdf_and_says_so(work, cli):
     root = work()
     (root / "export").mkdir()
     stale = root / "export" / "one-pager.pdf"
     stale.write_bytes(b"%PDF-1.4 old")
     # python не умеет печатать в PDF: завершается без файла
     code, out, err = cli("export", "pdf", "one-pager", "--project", str(root), "--browser", sys.executable)
-    assert code == 1 and not stale.exists()
-    assert "one-pager:" in err and "PDF не создан" in err and "прежний PDF удалён" in err
+    assert code == 1 and stale.read_bytes() == b"%PDF-1.4 old"
+    assert "one-pager:" in err and "PDF не создан" in err and "прежний PDF остался от прошлой печати" in err
     assert (root / "export" / "one-pager.html").is_file() and "Ссылок на основания: 2." in out
 
 
