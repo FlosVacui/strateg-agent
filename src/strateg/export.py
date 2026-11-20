@@ -30,9 +30,8 @@ from typing import Any
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
 
-from strateg import commands
+from strateg import commands, storage
 from strateg import project as proj
-from strateg import storage
 from strateg.models import Claim, ClaimsFile, Source, SourcesFile
 from strateg.project import CliError, UsageError
 
@@ -102,7 +101,8 @@ def make_parser() -> MarkdownIt:
 
 
 def claim_anchor(claim_id: str) -> str:
-    """Якорь утверждения: «У-12» -> «claim-12» (ASCII: кириллица в `id` ломает переходы в части просмотрщиков)."""
+    """Якорь утверждения: «У-12» -> «claim-12» (ASCII: кириллица в `id` ломает
+    переходы в части просмотрщиков)."""
     return f"{CLAIM_ANCHOR}-{claim_id.split('-', 1)[1]}"
 
 
@@ -267,7 +267,7 @@ def _claim_html(claim: Claim, sources: dict[str, Source]) -> str:
     body = f"<dl>{''.join(rows)}</dl>" if rows else ""
     return (
         f'<article class="ground{cls}" id="{claim_anchor(claim.id)}">'
-        f"<h3>{_esc(claim.id)} <span class=\"tag\">{_esc(claim.type)}</span> {status}</h3>"
+        f'<h3>{_esc(claim.id)} <span class="tag">{_esc(claim.type)}</span> {status}</h3>'
         f"<p>{_esc(claim.text)}</p>{body}</article>"
     )
 
@@ -290,9 +290,7 @@ def _source_html(src: Source) -> str:
     )
 
 
-def _used_claims(
-    cited: set[str], claims: dict[str, Claim]
-) -> list[Claim]:
+def _used_claims(cited: set[str], claims: dict[str, Claim]) -> list[Claim]:
     """Утверждения приложения: упомянутые в документе и, чтобы переход не обрывался, заменившие их."""
     chosen: set[str] = set()
     todo = sorted(cited)
@@ -354,7 +352,7 @@ def page(title: str, body: str) -> str:
     return (
         "<!doctype html>\n"
         '<html lang="ru">\n<head>\n<meta charset="utf-8">\n'
-        f'<meta http-equiv="Content-Security-Policy" content="{_esc(CSP)}">\n'
+        f'<meta http-equiv="Content-Security-Policy" content="{CSP}">\n'
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
         f"<title>{_esc(title)}</title>\n<style>{CSS}</style>\n</head>\n"
         f"<body>\n{body}\n</body>\n</html>\n"
@@ -364,7 +362,7 @@ def page(title: str, body: str) -> str:
 def render_document(
     name: str, text: str, claims: dict[str, Claim], sources: dict[str, Source], md: MarkdownIt | None = None
 ) -> Rendered:
-    """HTML одного документа. `claims` и `sources` — реестр проекта: что в нём есть, то и становится ссылкой."""
+    """HTML одного документа. `claims` и `sources` — реестр проекта: ссылкой становится то, что в нём есть."""
     md = md or make_parser()
     tokens = md.parse(text)
     refs = _Refs(set(claims), set(sources))
@@ -413,7 +411,9 @@ def browser_candidates(env: dict[str, str] | None = None, platform: str | None =
     return [Path(p) for p in found if p]
 
 
-def find_browser(explicit: str | None = None, candidates: Callable[[], list[Path]] | None = None) -> Path | None:
+def find_browser(
+    explicit: str | None = None, candidates: Callable[[], list[Path]] | None = None
+) -> Path | None:
     """Путь к браузеру: флаг `--browser`, затем известные места. Флаг на несуществующий файл — None, а не
     молчаливый переход к другому браузеру: человек назвал свой."""
     if explicit:
@@ -593,7 +593,9 @@ def cmd_export(args: argparse.Namespace) -> int:
         "links": sum(r.links for r in rendered),
         "unknown": unknown,
     }
-    lines = [f"Проект {root.name}: экспорт {'HTML и PDF' if fmt == 'pdf' else 'HTML'}, документов {len(rendered)}."]
+    lines = [
+        f"Проект {root.name}: экспорт {'HTML и PDF' if fmt == 'pdf' else 'HTML'}, документов {len(rendered)}."
+    ]
     for r in rendered:
         made = f"{r.name}.html" + (f", {r.name}.pdf" if out_dir / f"{r.name}.pdf" in pdf_files else "")
         lines.append(f"  {r.name}.md -> {made} (ссылок на основания: {r.links})")
@@ -625,7 +627,9 @@ def _fail_no_browser(args: argparse.Namespace, html_files: list[Path], browser: 
     details = _no_browser_details(html_files, browser)
     message = "PDF не создан: нет браузера для печати"
     if getattr(args, "json", False):
-        print(_json({"ok": False, "error": message, "details": details, "html": [str(p) for p in html_files]}))
+        print(
+            _json({"ok": False, "error": message, "details": details, "html": [str(p) for p in html_files]})
+        )
         return 1
     return commands.fail(args, CliError(message, details))
 
