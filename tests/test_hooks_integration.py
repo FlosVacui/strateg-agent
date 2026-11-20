@@ -330,6 +330,7 @@ def test_settings_cover_the_events_of_the_adr_table():
     assert set(SETTINGS["hooks"]) == {
         "SessionStart",
         "PreToolUse",
+        "PostToolUse",
         "Stop",
         "SubagentStop",
         "PostToolUseFailure",
@@ -342,6 +343,7 @@ def test_settings_commands_are_exec_form_with_utf8_and_existing_scripts():
     for event, script in (
         ("SessionStart", "session_start.py"),
         ("PreToolUse", "pre_tool_use.py"),
+        ("PostToolUse", "post_tool_use.py"),
         ("Stop", "stop.py"),
         ("SubagentStop", "subagent_stop.py"),
         ("PostToolUseFailure", "post_tool_use_failure.py"),
@@ -365,6 +367,7 @@ def test_hook_timeouts_are_short_so_that_a_hang_does_not_hold_the_session():
     for event in (
         "SessionStart",
         "PreToolUse",
+        "PostToolUse",
         "Stop",
         "SubagentStop",
         "PostToolUseFailure",
@@ -381,7 +384,14 @@ def test_permission_hook_blocks_on_failure_others_do_not():
     # у респондента эти инструменты держит ещё и `tools: []` в обёртке
     assert groups[1]["matcher"].startswith("^mcp__")
     assert all(h["onFailure"] == "continue" for h in groups[1]["hooks"])
-    for event in ("SessionStart", "Stop", "SubagentStop", "PostToolUseFailure", "UserPromptSubmit"):
+    for event in (
+        "SessionStart",
+        "PostToolUse",
+        "Stop",
+        "SubagentStop",
+        "PostToolUseFailure",
+        "UserPromptSubmit",
+    ):
         assert hook_entries(event)[0]["onFailure"] == "continue", event
 
 

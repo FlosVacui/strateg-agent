@@ -216,6 +216,20 @@ class LiveServices:
         root = active_project_root(self.ctx)
         return root is not None and image_confirmed(root, rel)
 
+    def ux_urls(self) -> tuple[str, ...]:
+        """Адреса списка разбора активного проекта; нет проекта или файл не читается — пусто."""
+        from strateg import ux_targets
+
+        root = active_project_root(self.ctx)
+        return ux_targets.read_urls(root) if root is not None else ()
+
+    def ux_nav(self) -> Any:
+        """Состояние последнего перехода в браузере (`ux_targets.NavState`); нет — None."""
+        from strateg import ux_targets
+
+        root = active_project_root(self.ctx)
+        return ux_targets.read_nav(root) if root is not None else None
+
     def as_services(self) -> Services:
         return Services(
             project=self.project,
@@ -223,7 +237,74 @@ class LiveServices:
             agents=self.agents,
             active=self.active,
             image_confirmed=self.image_confirmed,
+            ux_urls=self.ux_urls,
+            ux_nav=self.ux_nav,
         )
+
+
+# --- Переход в браузере (ADR-0013) -------------------------------------------------------------------------
+
+
+def mark_navigation_pending(event: Mapping[str, Any], ctx: Ctx) -> None:
+    """Разрешён переход исследователя: итог прошлого перехода сброшен, снимок закрыт, пока `PostToolUse` не
+    сверит домен. Не записалось — исключение, и вызов отклоняется (иначе снимок открыла бы прежняя сверка)."""
+    from strateg import ux_targets
+
+    root = active_project_root(ctx)
+    if root is None:
+        raise HookError("нет активного проекта: итог перехода записать некуда")
+    tin = event.get("tool_input")
+    url = tin.get("url") if isinstance(tin, dict) else None
+    prior = ux_targets.read_nav(root)  # прежний итоговый адрес нужен, если ответ на переход его не назовёт
+    known = prior.final if prior else None
+    ux_targets.write_nav(root, ux_targets.NavState(ux_targets.PENDING, ux_targets.normalize(str(url)), known))
+
+
+def record_navigation(event: Mapping[str, Any], ctx: Ctx) -> Any:
+    """После перехода: сверка итогового адреса с доменом запрошенного, итог — в `.tmp/ux-nav.json`.
+
+    Возвращает `NavState`, либо None, если сверять нечего (нет проекта).
+    """
+    from strateg import ux_targets
+
+    root = active_project_root(ctx)
+    tin = event.get("tool_input")
+    url = tin.get("url") if isinstance(tin, dict) else None
+    if root is None or not isinstance(url, str):
+        return None
+    prior = ux_targets.read_nav(root)
+    known = prior.final if prior else None
+    state = ux_targets.verify(ux_targets.normalize(url), event.get("tool_response"), known)
+    ux_targets.write_nav(root, state)
+    if state.status == ux_targets.FOREIGN:
+        message = (
+            f"переход на {state.requested} закончился на другом домене ({state.final}): "
+            "снимок экрана закрыт до нового перехода по списку"
+        )
+        append_event(root, EventSpec("отказ хука", message, name="browser_navigate", role="researcher"))
+    return state
+
+
+def record_screenshot(event: Mapping[str, Any], ctx: Ctx) -> Any:
+    """После снимка: блок «Page» в ответе обновляет итоговый адрес; чужой домен — снимок не годится."""
+    from strateg import ux_targets
+
+    root = active_project_root(ctx)
+    if root is None:
+        return None
+    state = ux_targets.verify_shot(ux_targets.read_nav(root), event.get("tool_response"))
+    if state is None:
+        return None
+    ux_targets.write_nav(root, state)
+    if state.status == ux_targets.FOREIGN:
+        message = (
+            f"страница на снимке оказалась на другом домене ({state.final}) после перехода на "
+            f"{state.requested}: снимок не годится, снимки закрыты до нового перехода по списку"
+        )
+        append_event(
+            root, EventSpec("отказ хука", message, name="browser_take_screenshot", role="researcher")
+        )
+    return state
 
 
 # --- Журнал ------------------------------------------------------------------------------------------------

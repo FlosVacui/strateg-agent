@@ -7,7 +7,8 @@
 Нельзя: веб, Playwright, `strateg fetch`, сетевые программы.
 
 Исследователь (`researcher`): `WebSearch`; чтение только в `projects/<id>/sources/` и `knowledge/`; Bash —
-одна команда `uv run strateg fetch '<адрес>'`; Playwright — `browser_navigate` и `browser_take_screenshot`.
+одна команда `uv run strateg fetch '<адрес>'`; Playwright — `browser_navigate` по адресу из списка разбора
+проекта (`ux-targets.yaml`) и `browser_take_screenshot` после подтверждённого перехода (ADR-0013).
 
 Критик (`critic`): чтение в папке проекта и `knowledge/`; остальное закрыто.
 
@@ -33,6 +34,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from strateg import ux_targets
 from strateg.hooks import flags, paths, shell
 
 RESEARCHER, CRITIC, RESPONDENT = "researcher", "critic", "respondent"
@@ -165,6 +167,10 @@ class Services:
     active: Callable[[], str | None] = lambda: None  # номер активного проекта; None — активного нет
     # путь изображения внутри папки проекта -> источник с этим путём подтверждён человеком (`add --confirm`)
     image_confirmed: Callable[[tuple[str, ...]], bool] = lambda rel: False
+    # адреса списка разбора активного проекта (нормализованные); нет списка или проекта — пусто
+    ux_urls: Callable[[], tuple[str, ...]] = lambda: ()
+    # состояние последнего перехода исследователя в браузере; None — перехода не было
+    ux_nav: Callable[[], ux_targets.NavState | None] = lambda: None
 
 
 @dataclass(frozen=True)
@@ -288,12 +294,16 @@ def _cli_owned(rel: tuple[str, ...]) -> str | None:
         )
     if head == TMP and rel[1] == COST_NAME:
         return COST_OWNED  # учёт стоимости: смещения разбора транскриптов и сведение «бюджета хватает»
+    if head == TMP and rel[1] == ux_targets.NAV_NAME:
+        return UX_NAV_OWNED  # итог перехода в браузере: им открывается снимок экрана
     return None
 
 
 def _cli_hint(name: str) -> str:
     if name == LOCK_OWNED:
         return "это файл блокировки папки проекта; `.tmp/` целиком не трогай, лишние файлы убирай по одному"
+    if name == UX_NAV_OWNED:
+        return "это итог перехода в браузере, его пишет хук; адреса разбора — `uv run strateg ux add`"
     if name == COST_OWNED:
         return (
             "это учёт стоимости, его пишут хуки и CLI; расход — `uv run strateg cost report`, "
@@ -318,6 +328,7 @@ PATTERN_SEPARATORS = re.compile(r"[/\\{},]")
 OUTPUTS, TMP = "outputs", ".tmp"
 LOCK_NAME, LOCK_OWNED = "lock", ".tmp/lock"
 COST_NAME, COST_OWNED = "cost", ".tmp/cost/"  # = `strateg.offsets.SERVICE_DIR`: модуль не грузим ради имени
+UX_NAV_OWNED = ".tmp/ux-nav.json"  # = ux_targets.NAV_DIR + NAV_NAME
 CRITIC_CLOSED_DIRS = {
     "inputs": "там материалы человека",
     TMP: "там рабочие файлы агента",
@@ -589,6 +600,9 @@ def _decide_shell(
         )
     if not isinstance(command, str) or not command.strip():
         return f"{tool}: в вызове нет команды."
+    ux_reason = _ux_add_reason(command)
+    if ux_reason:
+        return ux_reason
     found = shell.network_reason(command)
     if found:
         return (
@@ -599,6 +613,20 @@ def _decide_shell(
     if mention:
         return f"Доступ к {mention} закрыт всем ролям: {SENSITIVE_WHY[mention]}."
     return _bash_write_reason(command, cwd, ctx, svc)
+
+
+UX_ADD_WORDS = tuple(re.compile(rf"\b{w}\b", re.IGNORECASE) for w in ("strateg", "ux", "add"))
+UX_ADD_EXACT = re.compile(r"^uv run strateg ux add (?:'[^'\n]+'|\"[^\"\n;|&`$]+\"|[^\s'\";|&`$()<>\\]+)$")
+
+
+def _ux_add_reason(command: str) -> str | None:
+    """Адрес разбора вносит человек: среда спрашивает его только про точное написание команды (правило `ask`),
+    поэтому для основного агента любая другая команда с `strateg`, `ux` и `add` закрыта (ADR-0013)."""
+    if not all(w.search(command) for w in UX_ADD_WORDS):
+        return None
+    if UX_ADD_EXACT.match(command.strip()):
+        return None
+    return "Вызови ровно `uv run strateg ux add '<адрес>'`: среда спросит человека. Другие написания закрыты."
 
 
 def _bash_write_reason(command: str, cwd: str, ctx: Ctx, svc: Services) -> str | None:
@@ -638,7 +666,7 @@ def _bash_write_reason(command: str, cwd: str, ctx: Ctx, svc: Services) -> str |
     return None
 
 
-def _decide_playwright(tool: str, kind: str, tin: Mapping[str, Any]) -> str | None:
+def _decide_playwright(tool: str, kind: str, tin: Mapping[str, Any], svc: Services) -> str | None:
     short = playwright_tool(tool) or ""
     if kind != RESEARCHER:
         return (
@@ -649,14 +677,59 @@ def _decide_playwright(tool: str, kind: str, tin: Mapping[str, Any]) -> str | No
             "Исследователю из браузера разрешены только `browser_navigate` и `browser_take_screenshot`; "
             f"{short or tool} закрыт."
         )
-    if short == "browser_take_screenshot" and tin.get("filename") is not None:
-        return "У `browser_take_screenshot` параметр `filename` закрыт: имя файла задаёт сам инструмент."
+    if short == "browser_take_screenshot":
+        if tin.get("filename") is not None:
+            return "У `browser_take_screenshot` параметр `filename` закрыт: имя файла задаёт сам инструмент."
+        if tin.get("type") not in (None, "png", "jpeg"):
+            return (
+                "У `browser_take_screenshot` разрешён `type` только `png` или `jpeg`: `ux import` берёт их."
+            )
+        return _nav_reason(svc.ux_nav())
     if short == "browser_navigate":
         url = tin.get("url")
         scheme = url.split(":", 1)[0].lower() if isinstance(url, str) and ":" in url else ""
         if scheme not in ("http", "https"):
             return "`browser_navigate` ходит только по адресам http и https."
+        try:
+            wanted = ux_targets.normalize(str(url))
+        except ValueError as exc:
+            return f"Адрес для `browser_navigate` не принят: {exc}."
+        if wanted not in svc.ux_urls():
+            return (
+                f"Адреса {wanted} нет в списке разбора проекта: переход закрыт. "
+                "Не снимай его сам, назови адрес в «Пометках» и попроси человека: `strateg ux add <адрес>`."
+            )
     return None
+
+
+def _nav_reason(nav: ux_targets.NavState | None) -> str | None:
+    """Снимок экрана — только после перехода по списку, домен которого подтверждён."""
+    if nav is None:
+        return "Снимок экрана закрыт: сначала `browser_navigate` по адресу из списка разбора."
+    if nav.status == ux_targets.FOREIGN:
+        return (
+            f"Снимок экрана закрыт: переход на {nav.requested} ушёл на другой домен ({nav.final}). "
+            "Не повторяй переход: верни адрес и итоговый домен в «Пометках»."
+        )
+    if nav.status != ux_targets.CONFIRMED:
+        return (
+            "Снимок экрана закрыт: итог перехода не подтверждён (итогового адреса нет ни в этом ответе, "
+            "ни раньше). Верни это в «Пометках»."
+        )
+    return None
+
+
+def browser_post_kind(event: Mapping[str, Any]) -> str | None:
+    """`navigate` или `shot` — вызов браузера исследователя, ответ которого сверяет хук `PostToolUse`."""
+    short = playwright_tool(str(event.get("tool_name") or ""))
+    if role_kind(event) != RESEARCHER:
+        return None
+    return {"browser_navigate": "navigate", "browser_take_screenshot": "shot"}.get(short or "")
+
+
+def is_navigation(event: Mapping[str, Any]) -> bool:
+    """Переход исследователя в браузере: до него итог сбрасывается, после него хук сверяет домен."""
+    return browser_post_kind(event) == "navigate"
 
 
 # --- Запуск субагента --------------------------------------------------------------------------------------
@@ -854,7 +927,7 @@ def decide_pre_tool_use(event: Mapping[str, Any], ctx: Ctx, services: Services) 
             return Decision("allow")
         return _deny("Веб-поиск закрыт: веб — через исследователя (субагент `researcher`).", tool, event)
     if playwright_tool(tool) is not None:
-        reason = _decide_playwright(tool, kind, tin)
+        reason = _decide_playwright(tool, kind, tin, services)
         return _deny(reason, tool, event) if reason else Decision("allow")
     if kind in (RESEARCHER, CRITIC):
         who = "Исследователю" if kind == RESEARCHER else "Критику"

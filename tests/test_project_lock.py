@@ -720,6 +720,7 @@ def test_every_hook_waits_for_the_folder_less_than_its_own_timeout_in_settings()
         "SubagentStop": runner.STOP_LOCK_TIMEOUT,
         "UserPromptSubmit": storage.HOOK_LOCK_TIMEOUT,
         "PreToolUse": 2 * storage.HOOK_LOCK_TIMEOUT,  # чтение проекта и запись события
+        "PostToolUse": storage.HOOK_LOCK_TIMEOUT,  # одна запись события о чужом домене
     }
     assert set(settings["hooks"]) == set(waits), "новому хуку нужен заявленный срок ожидания папки"
     for event, entries in settings["hooks"].items():

@@ -1,6 +1,6 @@
 """Точка входа CLI `strateg`: `doctor` и команды проекта (`new`, `use`, `status`, `step`, `gate`, `fetch`,
 `add`, `claim`, `write`, `event`, `check`, `cost`, `budget`, `pack`, `rubric`, `route`, `due`, `impact`,
-`metric`, `diff`, `search`, `guide`, `synth`, `data`, `calc`). Сами команды
+`metric`, `diff`, `search`, `guide`, `synth`, `data`, `calc`, `ux`). Сами команды
 проекта — в `strateg.commands`, проверка полноты — в `strateg.rubric`, маршрут роли — в `strateg.routing`.
 
 Коды возврата: 0 — успех, 1 — ошибка данных или правил, 2 — ошибка использования.
@@ -32,6 +32,7 @@ from strateg import (
     rubric,
     search,
     synth,
+    ux_targets,
 )
 from strateg.hooks import flags as hookflags
 
@@ -139,6 +140,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     console = getattr(args, "console", None) or detect_console_encoding()
     levels.append(_report("Кодировка консоли", *console))
     levels.append(_report("SQLite", *getattr(args, "sqlite", None) or search.sqlite_status()))
+    levels.append(_report("Node", *getattr(args, "node", None) or ux_targets.node_line()))
     root = find_repo_root()
     if root is None:
         levels.append(_report("Запись в projects/", ERR, "не найден корень репозитория (pyproject.toml)"))
@@ -564,6 +566,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="стоимость проекта по ролям, шагам и моделям; --json — машинный вывод",
     )
     p.set_defaults(func=commands.run, handler=costreport.cmd_cost_report)
+
+    ux_targets.register(sub, common, _Parser)
     return parser
 
 

@@ -288,11 +288,12 @@ def test_at_79_percent_nothing_is_refused(small, tx):
     assert pre_tx(main, "Bash", {"command": "ls"}) is None
 
 
-def test_at_100_percent_paid_calls_are_refused_in_the_middle_of_a_turn(small, tx):
+def test_at_100_percent_paid_calls_are_refused_in_the_middle_of_a_turn(small, tx, cli):
     """Stop не звали: платный вызов сам дочитывает транскрипт и видит исчерпание."""
     main, _ = tx
     spend(main, 100_000)
     assert costs(small) == []
+    assert cli("ux", "add", "https://example.com")[0] == 0  # переход по списку доходит до бюджета
     for tool, tin, agent in (
         ("WebSearch", {"query": "цена"}, "researcher"),
         ("Agent", {"subagent_type": "critic", "prompt": "проверь"}, None),

@@ -95,6 +95,8 @@ def run_pre_tool_use(
             )
         if decision.denied:
             return HookResult(decision.output(), stderr=note)
+        if rules.is_navigation(event):
+            effects.mark_navigation_pending(event, ctx)  # сбой записи — отказ: снимок не откроет прежний итог
     except Exception as exc:
         return HookResult(crash_output(exc))
     return HookResult(budget_output(event, ctx, decision), stderr=note)
@@ -202,6 +204,41 @@ def run_post_tool_use_failure(raw: bytes, env: Mapping[str, str]) -> HookResult:
             _run_cli(argv)
     except Exception:
         pass  # сбой учёта работу не блокирует
+    return HookResult()
+
+
+# --- PostToolUse -------------------------------------------------------------------------------------------
+
+
+def run_post_tool_use(raw: bytes, env: Mapping[str, str]) -> HookResult:
+    """Переход исследователя в браузере: итоговый адрес из ответа сверяется с доменом запрошенного.
+
+    Чужой домен — итог «неподтверждён», снимок экрана закрыт до нового перехода по списку (`PreToolUse`), а
+    исследователю уходит пояснение. Ответ снимка с блоком «Page» обновляет итог так же.
+    Сбой хука итог не пишет: он остаётся «не подтверждён», снимок закрыт.
+    """
+    if flags.hooks_off(env):
+        return HookResult()
+    try:
+        event = parse_event(raw)
+        action = rules.browser_post_kind(event) if rules.is_claude_code(event) else None
+        if action is None:
+            return HookResult()
+        ctx = effects.make_ctx(event, env)
+        if action == "navigate":
+            state = effects.record_navigation(event, ctx)
+            what, tail = "Переход ушёл на другой домен", "снимок экрана закрыт"
+        else:
+            state = effects.record_screenshot(event, ctx)
+            what, tail = "Страница на снимке уже на другом домене", "снимок не годится, не возвращай его"
+        if state is not None and state.status == "foreign":
+            reason = (
+                f"{what} ({state.final}): {tail}. "
+                "Не повторяй переход: верни адрес и итоговый домен в «Пометках»."
+            )
+            return HookResult(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))
+    except Exception:  # noqa: BLE001 - итог остался «не подтверждён»: снимок закрыт
+        pass
     return HookResult()
 
 

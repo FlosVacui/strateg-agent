@@ -35,7 +35,15 @@ MAX_ROLE_LINES = 150
 # Роли с обёртками и их права по описанию ролей; ключи `config/routing.yaml` — те же имена. У респондента
 # инструментов нет: текст роли — тело обёртки.
 ROLE_TOOLS = {
-    "researcher": ["WebSearch", "Read", "Grep", "Glob", "Bash"],
+    "researcher": [
+        "WebSearch",
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash",
+        "mcp__playwright__browser_navigate",
+        "mcp__playwright__browser_take_screenshot",
+    ],
     "critic": ["Read", "Grep", "Glob"],
     "respondent": [],
 }

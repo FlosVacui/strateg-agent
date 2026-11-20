@@ -112,5 +112,5 @@ def test_hook_closes_every_kind_that_add_accepts():
 
 def test_claude_code_asks_the_human_before_add_confirm():
     ask = SETTINGS["permissions"]["ask"]
-    assert ask == ["Bash(uv run strateg add --confirm*)"]
+    assert ask == ["Bash(uv run strateg add --confirm*)", "Bash(uv run strateg ux add*)"]
     assert not any("add --confirm" in rule for rule in SETTINGS["permissions"].get("allow", []))

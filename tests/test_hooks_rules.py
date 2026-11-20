@@ -589,12 +589,32 @@ def test_playwright_closed_for_main_agent():
         refused(decide(name, {"url": "https://x.com"}), "Браузер закрыт")
 
 
+LISTED = "https://x.com/app"
+CONFIRMED = rules.ux_targets.NavState(rules.ux_targets.CONFIRMED, LISTED, LISTED)
+
+
+def browser(urls=(LISTED,), nav=CONFIRMED) -> Services:
+    """Список разбора и итог последнего перехода подставлены: диска нет."""
+    return Services(
+        project=lambda: VIEW,
+        routing=lambda: ROUTING,
+        agents=lambda: WRAPPERS,
+        ux_urls=lambda: tuple(urls),
+        ux_nav=lambda: nav,
+    )
+
+
 def test_researcher_playwright_whitelist():
-    allowed(decide(NAV, {"url": "https://x.com/app"}, "researcher"))
-    allowed(decide(SHOT, {}, "researcher"))
-    allowed(decide(SHOT, {"fullPage": True}, "researcher"))
+    allowed(decide(NAV, {"url": LISTED}, "researcher", svc=browser()))
+    allowed(decide(SHOT, {}, "researcher", svc=browser()))
+    allowed(decide(SHOT, {"fullPage": True}, "researcher", svc=browser()))
     allowed(
-        decide("mcp__plugin_playwright_playwright__browser_navigate", {"url": "http://x.com"}, "researcher")
+        decide(
+            "mcp__plugin_playwright_playwright__browser_navigate",
+            {"url": LISTED},
+            "researcher",
+            svc=browser(),
+        )
     )
 
 
@@ -617,19 +637,82 @@ def test_researcher_playwright_whitelist():
     ],
 )
 def test_researcher_other_playwright_tools_refused(tool):
-    refused(decide(f"mcp__playwright__{tool}", {}, "researcher"), "только `browser_navigate`")
+    refused(decide(f"mcp__playwright__{tool}", {}, "researcher", svc=browser()), "только `browser_navigate`")
+
+
+def test_researcher_has_exactly_two_playwright_tools_and_the_others_none():
+    """Белый список — ровно два имени; у основного агента и критика ни одно не проходит, даже по списку."""
+    assert rules.PLAYWRIGHT_ALLOWED == {"browser_navigate", "browser_take_screenshot"}
+    for agent in (None, "critic", "other-role"):
+        for tool, tin in ((NAV, {"url": LISTED}), (SHOT, {})):
+            refused(decide(tool, tin, agent, svc=browser()), "Браузер закрыт")
 
 
 def test_screenshot_filename_is_refused():
-    refused(decide(SHOT, {"filename": "../../.env"}, "researcher"), "filename")
-    refused(decide(SHOT, {"filename": ""}, "researcher"), "filename")
+    refused(decide(SHOT, {"filename": "../../.env"}, "researcher", svc=browser()), "filename")
+    refused(decide(SHOT, {"filename": ""}, "researcher", svc=browser()), "filename")
 
 
 @pytest.mark.parametrize(
     "url", ["file:///C:/Windows/win.ini", "javascript:alert(1)", "about:blank", "chrome://settings", "x.com"]
 )
 def test_navigate_only_http(url):
-    refused(decide(NAV, {"url": url}, "researcher"), "http")
+    refused(decide(NAV, {"url": url}, "researcher", svc=browser()), "http")
+
+
+def test_navigation_only_to_an_address_from_the_list_and_the_refusal_names_the_way():
+    d = refused(decide(NAV, {"url": "https://x.com/other"}, "researcher", svc=browser()), "нет в списке")
+    assert "strateg ux add" in d.reason
+    refused(decide(NAV, {"url": LISTED}, "researcher", svc=browser(urls=())), "нет в списке")  # список пуст
+    refused(decide(NAV, {"url": "https://x.com/app?a=1"}, "researcher", svc=browser()), "нет в списке")
+    refused(decide(NAV, {"url": "https://evil.example/app"}, "researcher", svc=browser()), "нет в списке")
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "HTTPS://X.COM/app",  # схема и хост — строчными
+        "https://x.com:443/app#section",  # порт по умолчанию и фрагмент не различают адрес
+        "https://x.com./app",
+    ],
+)
+def test_navigation_compares_the_normalized_address(url):
+    allowed(decide(NAV, {"url": url}, "researcher", svc=browser()))
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://x.com\\@evil.example/app",  # обратная косая черта: браузер читает её как «/»
+        "https://user:pw@x.com/app",
+        " https://x.com/app\n",
+        "https:///app",
+    ],
+)
+def test_navigation_refuses_addresses_that_parse_differently_in_the_browser(url):
+    refused(decide(NAV, {"url": url}, "researcher", svc=browser()))
+
+
+def test_screenshot_needs_a_confirmed_navigation():
+    ux = rules.ux_targets
+    refused(decide(SHOT, {}, "researcher", svc=browser(nav=None)), "сначала `browser_navigate`")
+    pending = ux.NavState(ux.PENDING, LISTED)
+    refused(decide(SHOT, {}, "researcher", svc=browser(nav=pending)), "не подтверждён")
+    for kind in ("webp", "gif"):
+        refused(decide(SHOT, {"type": kind}, "researcher", svc=browser()), "png")
+    allowed(decide(SHOT, {"type": "jpeg"}, "researcher", svc=browser()))
+    foreign = ux.NavState(ux.FOREIGN, LISTED, "https://evil.example/")
+    d = refused(decide(SHOT, {}, "researcher", svc=browser(nav=foreign)), "другой домен", "evil.example")
+    assert "не повторяй переход" in d.reason.lower()  # отказ не зовёт повторить тот же адрес
+
+
+def test_ux_nav_state_file_is_written_only_by_the_hook():
+    for tool, tin in (
+        ("Write", {"file_path": "projects/demo/.tmp/ux-nav.json", "content": "{}"}),
+        ("Bash", {"command": "echo {} > projects/demo/.tmp/ux-nav.json"}),
+        ("Bash", {"command": "echo x > projects/demo/ux-targets.yaml"}),
+    ):
+        refused(decide(tool, tin, svc=browser()), "CLI")
 
 
 # --- запуск субагента: допустимые роли и модель ---

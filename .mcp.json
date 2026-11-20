@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "uv",
+      "args": ["run", "--frozen", "python", "-X", "utf8", "scripts/playwright_mcp.py"]
+    }
+  }
+}

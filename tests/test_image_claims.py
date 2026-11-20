@@ -600,7 +600,7 @@ def test_docs_describe_images_and_the_limits():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     limits = (ROOT / "docs" / "limitations.md").read_text(encoding="utf-8")
     assert "Аудио и видео" in readme and "экран <название>; элемент <что и где>" in limits
-    assert "Playwright не подключён" in readme and "Playwright не подключён" in limits
+    assert "Playwright MCP снимает экраны только по адресам" in readme and "Клики и сценарии" in limits
     adr5 = (ROOT / "docs" / "adr" / "0005-claims-quote-check.md").read_text(encoding="utf-8")
     assert "по изображению" in adr5 and "не признак вида источника" in adr5
     adr11 = (ROOT / "docs" / "adr" / "0011-data-safety.md").read_text(encoding="utf-8")
