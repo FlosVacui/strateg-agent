@@ -9,13 +9,13 @@ from strateg import safety
 def test_email_and_phones_are_replaced_but_hotlines_stay():
     text = (
         "Пишите на help@example.com или звоните +7 (495) 123-45-67, 8 916 000-11-22, (812) 555-66-77. "
-        "Бесплатно: 8 800 550-05-00 и 8-800-100-00-01."
+        "Бесплатно: 8 800 000-00-00 и 8-800-100-00-01."
     )
     rep = safety.inspect_text(text)
     assert "help@example.com" not in rep.text
     assert rep.text.count(safety.PHONE_LABEL) == 3
     assert safety.EMAIL_LABEL in rep.text
-    assert "8 800 550-05-00" in rep.text and "8-800-100-00-01" in rep.text
+    assert "8 800 000-00-00" in rep.text and "8-800-100-00-01" in rep.text
     assert rep.anonymized == ["адреса почты", "телефоны"]
 
 

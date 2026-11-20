@@ -1,4 +1,4 @@
-"""Доработка по ревью: роботы, извлечение текста, PDF, правила факта, ключ утверждения, спор, время."""
+"""Доработки: роботы, извлечение текста, PDF, правила факта, ключ утверждения, спор, время."""
 
 from __future__ import annotations
 
@@ -125,7 +125,7 @@ def test_price_cards_dropped_by_trafilatura_come_from_visible_text():
         and "dataLayer" not in result.text
         and "color: red" not in result.text
     )
-    assert "МегаФон, 2026" not in result.text
+    assert "Компания «Пример», 2026" not in result.text
 
 
 def test_normal_page_keeps_main_extractor(page_html):

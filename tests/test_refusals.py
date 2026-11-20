@@ -298,7 +298,7 @@ def test_contacts_are_masked_and_hotline_stays(cli, net, home, page_html):
     cli("fetch", URL)
     text = (home / "demo" / "sources" / "i-1.txt").read_text(encoding="utf-8")
     assert "help@example.com" not in text and "123-45-67" not in text
-    assert "[почта]" in text and "[телефон]" in text and "8 800 550-05-00" in text
+    assert "[почта]" in text and "[телефон]" in text and "8 800 000-00-00" in text
     assert sources_of(home / "demo")[0]["anonymized"] == ["адреса почты", "телефоны"]
 
 

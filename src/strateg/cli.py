@@ -1,6 +1,6 @@
 """Точка входа CLI `strateg`: `doctor` и команды проекта (`new`, `use`, `status`, `step`, `gate`, `fetch`,
 `add`, `claim`, `write`, `event`, `check`, `cost`, `budget`, `pack`, `rubric`, `route`, `due`, `impact`,
-`metric`, `diff`, `search`, `guide`, `synth`, `data`, `calc`). Сами команды
+`metric`, `diff`, `search`, `guide`, `synth`, `data`, `calc`, `export`). Сами команды
 проекта — в `strateg.commands`, проверка полноты — в `strateg.rubric`, маршрут роли — в `strateg.routing`.
 
 Коды возврата: 0 — успех, 1 — ошибка данных или правил, 2 — ошибка использования.
@@ -26,6 +26,7 @@ from strateg import (
     commands,
     costreport,
     datacheck,
+    export,
     followup,
     guide,
     routing,
@@ -375,6 +376,28 @@ def build_parser() -> argparse.ArgumentParser:
             "и выпуск); повтор оценивается ценой шага, резерв выпуска не учитывается"
         ),
     )
+
+    ex = add("export", export.cmd_export, "документы outputs/*.md в читаемом виде: HTML и PDF")
+    export_sub = ex.add_subparsers(dest="export_command", required=True, parser_class=_Parser)
+    for fmt, what in (
+        ("html", "собрать HTML: номера У-n и И-n ведут к основаниям внутри документа"),
+        ("pdf", "собрать HTML и напечатать его в PDF установленным Chrome или Edge"),
+    ):
+        p = export_sub.add_parser(fmt, parents=[common], help=what)
+        p.set_defaults(func=commands.run, handler=export.cmd_export, format=fmt)
+        p.add_argument(
+            "documents",
+            nargs="*",
+            metavar="документ",
+            help="имя документа из outputs/: one-pager или one-pager.md (по умолчанию — все .md)",
+        )
+        p.add_argument("--out", help="папка для файлов (по умолчанию <проект>/export/)")
+        if fmt == "pdf":
+            p.add_argument(
+                "--browser",
+                metavar="ПУТЬ",
+                help="Chrome или Edge: путь к программе (по умолчанию ищется среди установленных)",
+            )
 
     p = add("pack", commands.cmd_pack, "упаковать проект в архив .zip без секретов и исходников с ПДн")
     p.add_argument("--out", help="куда положить архив (по умолчанию — рядом с проектами, <id>.zip)")
