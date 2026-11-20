@@ -2422,10 +2422,25 @@ def _next_step_arg(p: Project, raw: str | None) -> str | None:
 
 
 def _next_verdict(
-    p: Project, step: str, m: budgetlib.Measure, reserve: budgetlib.Reserve | None
+    p: Project, step: str, m: budgetlib.Measure, reserve: budgetlib.Reserve | None, then: str | None = None
 ) -> tuple[budgetlib.NextStep, list[str]]:
-    """Оценка шага и то, чего на него не хватит: «деньги», «время». Нет лимита или цены — только время."""
-    est = budgetlib.estimate_step(p, step, budgetlib.load_defaults().step_estimate)
+    """Оценка шага (с `then` — вместе со следующим за ним) и то, чего не хватит: «деньги», «время».
+
+    Нет лимита или цены — только время.
+    """
+    table = budgetlib.load_defaults().step_estimate
+    est = budgetlib.estimate_step(p, step, table)
+    if then is not None:
+        nxt = budgetlib.estimate_step(p, then, table)
+        est = budgetlib.NextStep(
+            f"{est.step} и {nxt.step}",
+            est.usd + nxt.usd,
+            est.minutes + nxt.minutes,
+            est.usd_source if est.usd_source == nxt.usd_source else f"{est.usd_source}; {nxt.usd_source}",
+            est.minutes_source
+            if est.minutes_source == nxt.minutes_source
+            else f"{est.minutes_source}; {nxt.minutes_source}",
+        )
     lacking = []
     left_usd = m.left_usd
     if left_usd is not None and reserve is not None:
@@ -2452,6 +2467,11 @@ def cmd_budget_check(args: argparse.Namespace) -> int:
     p = _open(args)
     action = (args.action or "").strip() or None
     step = _next_step_arg(p, getattr(args, "next_step", None))
+    then = getattr(args, "then_step", None)
+    if then is not None:
+        if step is None:
+            raise UsageError("--then задаётся вместе с --next: шаг, а за ним шаг из --then")
+        then = _norm_step(then)
     release = budgetlib.is_release(action)
     defaults = budgetlib.load_defaults().budget if release else None
     m = budgetlib.measure(p)
@@ -2462,7 +2482,7 @@ def cmd_budget_check(args: argparse.Namespace) -> int:
     est: budgetlib.NextStep | None = None
     lacking: list[str] = []
     if step is not None and not reasons:
-        est, lacking = _next_verdict(p, step, m, reserve)
+        est, lacking = _next_verdict(p, step, m, reserve, then)
     estimate = (
         None
         if est is None
@@ -2479,7 +2499,11 @@ def cmd_budget_check(args: argparse.Namespace) -> int:
         lines = [f"Бюджет позволяет {what}: " + view["text"] + "."]
         if est is not None:
             data["estimate"] = estimate
-            lines = [f"Бюджет позволяет шаг {est.step}: " + _next_text(m, est, lacking) + "."]
+            lines = [
+                f"Бюджет позволяет {'шаги' if then else 'шаг'} {est.step}: "
+                + _next_text(m, est, lacking)
+                + "."
+            ]
         if view["warning"]:
             lines.append("Внимание: " + view["warning"] + ".")
         return emit(args, data, lines)
@@ -2498,9 +2522,11 @@ def cmd_budget_check(args: argparse.Namespace) -> int:
         body = summary
     else:
         assert est is not None
-        reason = f"на шаг {est.step} не хватит: " + " и ".join(lacking)
-        head = f"бюджета не хватит на шаг {est.step} ({' и '.join(lacking)}):"
-        error = f"бюджета не хватит на шаг {est.step} ({' и '.join(lacking)}): шаг не начинать"
+        steps = f"шаги {est.step}" if then else f"шаг {est.step}"
+        reason = f"на {steps} не хватит: " + " и ".join(lacking)
+        head = f"бюджета не хватит на {steps} ({' и '.join(lacking)}):"
+        refuse = "не начинать" if then else "шаг не начинать"
+        error = f"бюджета не хватит на {steps} ({' и '.join(lacking)}): {refuse}"
         body = _next_text(m, est, lacking)
         details = [body, summary]
     message = f"{head} {body}"
@@ -2664,7 +2690,11 @@ def _status_data(p: Project) -> dict[str, Any]:
         running = round((proj.work_seconds(p.journal, at=proj.now()) - proj.work_seconds(p.journal)) / 60, 2)
     open_steps = [e.step for e in _open_steps(p).values()]
     waiting = [g for g in GATES if p.state.gates.get(g) == "ждут ответа"]  # type: ignore[call-overload]
-    paused = proj.pause_kind(p.journal) if p.state.step in open_steps else None
+    # Остановка ждёт ответа и после `step done` (агент закрывает шаг и только потом останавливается);
+    # ворота — пока шаг идёт.
+    paused = proj.pause_kind(p.journal)
+    if paused == proj.PAUSE_GATE and p.state.step not in open_steps:
+        paused = None
     if waiting:
         nxt = (
             f"ждём ответа на {waiting[0]}: следующее сообщение человека и есть ответ; "
@@ -2734,7 +2764,7 @@ PAUSE_TEXT = {
 
 def _step_state(d: dict[str, Any]) -> str:
     """Пометка у шага: «в работе» или «на паузе: чего ждём» (ворота или остановка)."""
-    if not d["step_in_progress"]:
+    if not d["step_in_progress"] and d["paused"] != proj.PAUSE_STOP:
         return ""
     if d["paused"] is None:
         return " · в работе"
@@ -2753,6 +2783,8 @@ def _clock_note(d: dict[str, Any]) -> str:
 def status_line(d: dict[str, Any]) -> str:
     """Одна строка статуса из `docs/user-journey.md`: «Шаг 2б из 8 · Сбор · источников 9 · …»."""
     parts = [f"Шаг {d['step']} из 8 · {d['step_name']}"]
+    if d["paused"] == proj.PAUSE_STOP:
+        parts.append("на паузе: " + PAUSE_TEXT[proj.PAUSE_STOP])
     parts.append(f"источников {d['sources']['total']}")
     parts.append(f"утверждений {d['claims']['active']}, без цитаты {d['claims']['without_quote']}")
     parts.append(f"сбоев {d['failures']}")

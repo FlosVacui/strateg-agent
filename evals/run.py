@@ -526,9 +526,8 @@ def _journal(project: Path | None) -> list[dict[str, Any]]:
 def stop_pending(project: Path | None) -> bool:
     """Агент остановился и ждёт ответа: последнее событие хода проекта — «внеплановая остановка».
 
-    `status --json` показывает `paused: остановка` только пока шаг идёт. Агент же закрывает шаг (`step done`)
-    и после этого пишет остановку (например, «бюджет израсходован» на границе шагов): шаг закрыт, `paused`
-    пуст, а ответа человека агент ждёт. Поэтому остановку стенд читает ещё и по журналу.
+    `status --json` показывает `paused: остановка` и после `step done`. Журнал стенд читает ещё и сам:
+    так остановка видна и в проектах, записанных прежней версией CLI.
     """
     progress = [
         e
@@ -701,8 +700,11 @@ class Supervisor:
                 if template:
                     return Answer(str(template), "unknown_and_closed")
         persona = self.card.get("persona") or {}
+        budget_answer = (self.card.get("off_card") or {}).get("budget_question")
         for sentence in sentences:
             folded = sentence.casefold()
+            if budget_answer and "бюджет" in folded and any(w in folded for w in BUDGET_ASK_WORDS):
+                return Answer(str(budget_answer), "off_card.budget_question")
             if persona.get("deadline") and any(w in folded for w in DEADLINE_WORDS):
                 return Answer(f"Срок: {persona['deadline']}.", "persona.deadline")
             if persona.get("reports_to") and any(w in folded for w in RECIPIENT_WORDS):
@@ -717,6 +719,8 @@ class Supervisor:
 
 
 DEADLINE_WORDS = ("срок", "дедлайн", "к какому числу", "к какому дню", "когда нужно", "когда вам нужно")
+# Вопрос о размере бюджета («назовите сумму», «сколько добавить», «на сколько увеличить»): ответ — в карточке.
+BUDGET_ASK_WORDS = ("сумм", "сколько", "увелич", "добав", "назов", "лимит", "новый бюджет", "новом бюджет")
 RECIPIENT_WORDS = ("кому ", "кому?", "получател", "адресат", "для кого", "кто будет читать", "кто прочитает")
 
 

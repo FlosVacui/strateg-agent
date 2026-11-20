@@ -1297,7 +1297,7 @@ def real_cli(tmp_path, name="w1", source="project_valid"):
 
 
 def test_stop_after_a_closed_step_is_seen_as_a_stop(tmp_path):
-    """Живой порядок: `step done 4`, затем `stop`. `status --json`: шаг закрыт, `paused` пуст."""
+    """Живой порядок: `step done 4`, затем `stop`. `status --json`: шаг закрыт, `paused` — остановка."""
     cli, project = real_cli(tmp_path)
     for args in (
         ("step", "start", "4"),
@@ -1308,9 +1308,9 @@ def test_stop_after_a_closed_step_is_seen_as_a_stop(tmp_path):
     ):
         assert cli.run(*args)[0] == 0, args
     st = cli.json("status")
-    assert st["step_in_progress"] is False and st["paused"] is None and st["waiting_gates"] == []
+    assert st["step_in_progress"] is False and st["paused"] == "остановка" and st["waiting_gates"] == []
     assert st["next_action"].startswith("Внеплановая остановка")
-    assert run.classify_wait(st) == run.Wait("вопрос")  # по одному `status` остановки не видно
+    assert run.classify_wait(st) == run.Wait("остановка")  # `status` теперь показывает остановку сам
     assert run.stop_pending(project)
     assert run.classify_wait(st, stop_logged=run.stop_pending(project)) == run.Wait("остановка")
     answer = sup().answer(run.Wait("остановка"), project)
@@ -1497,3 +1497,22 @@ def test_call_timeout_shrinks_to_the_time_left(tmp_path):
     bench, invoker = make_bench(tmp_path, [RELEASE], [reply(1)], limits=run.Limits(max_minutes=1))
     bench.run("x")
     assert invoker.opts[0].timeout_s <= 60  # `--call-timeout-min` по умолчанию 30 мин, но осталась минута
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Назовите сумму бюджета, на которую можно увеличить лимит?",
+        "Сколько бюджета добавить для повтора проверки?",
+        "Какой новый бюджет вы готовы выделить?",
+    ],
+)
+def test_question_about_the_budget_amount_is_answered_from_the_card(text):
+    a = sup().answer(run.Wait("вопрос"), None, text)
+    assert not a.off_card and a.source == "off_card.budget_question"
+    assert a.text == "бюджет не увеличиваем, выпустите с пометкой о неполноте"
+
+
+def test_a_budget_word_without_asking_for_an_amount_is_not_a_budget_question():
+    assert sup().answer(run.Wait("вопрос"), None, "Бюджет принят?").off_card
+    assert sup().answer(run.Wait("вопрос"), None, "Какой цвет у страницы?").off_card
