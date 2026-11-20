@@ -957,7 +957,7 @@ def test_real_path_of_the_call_has_nothing_from_the_repository(tmp_path):
 
 def test_run_settings_deny_the_repository_worktrees_and_profiles(tmp_path, monkeypatch):
     home = tmp_path / "home"
-    (home / ".claude-acc9" / "projects").mkdir(parents=True)
+    (home / ".claude-other" / "projects").mkdir(parents=True)
     for name in ("HOME", "USERPROFILE"):
         monkeypatch.setenv(name, str(home))
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
@@ -968,7 +968,7 @@ def test_run_settings_deny_the_repository_worktrees_and_profiles(tmp_path, monke
     run.write_run_settings(path, repo, copy)
     rules = json.loads(path.read_text(encoding="utf-8"))["permissions"]["deny"]
     for tool in ("Read", "Grep", "Glob", "Edit", "Write"):
-        for root in (repo.parent, home / ".claude-acc9" / "projects"):  # репозиторий внутри родителя
+        for root in (repo.parent, home / ".claude-other" / "projects"):  # репозиторий внутри родителя
             for glob in run.permission_globs(root):
                 assert f"{tool}({glob})" in rules, (tool, glob)
 
@@ -989,7 +989,7 @@ def test_permission_globs_use_the_root_form():
             "//C:/work/x/repo/**",
         ]
     else:
-        assert run.permission_globs(Path("/home/x/repo")) == ["//home/x/repo/**"]
+        assert run.permission_globs(Path("/home/ivan/repo")) == ["//home/ivan/repo/**"]
 
 
 def test_argv_loads_only_project_settings_and_strict_mcp(tmp_path):

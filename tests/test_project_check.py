@@ -484,7 +484,7 @@ def test_paths_in_free_text_are_not_errors(project):
 
     def change(d):
         claim(d, "У-3")["text"] = "Тариф A:/B самый популярный"
-        claim(d, "У-3")["check_method"] = "посмотреть каталог /home/user и D:/data"
+        claim(d, "У-3")["check_method"] = "посмотреть каталог /home/ivan и D:/data"
         claim(d, "У-1")["taken_from"] = f"файл {win}"
 
     edit_yaml(project, "claims.yaml", change)
