@@ -42,9 +42,12 @@ def test_skill_commands_exist_in_the_cli():
 
 def test_documents_name_the_commands_and_the_limits():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    for word in ("strateg data check", "strateg calc run", "strateg calc check", "Регрессий, сезонности"):
+    limits = (ROOT / "docs" / "limitations.md").read_text(encoding="utf-8")
+    for word in ("strateg data check", "strateg calc run", "strateg calc check"):
         assert word in readme, word
-    assert "Нет: лимита памяти" in readme  # чего нет в изоляции, названо
+    assert "Регрессий, сезонности" in limits
+    assert "Нет: лимита памяти" in limits  # чего нет в изоляции, названо
+    assert "лимита памяти" in readme  # и в README, коротко
     adr5 = (ROOT / "docs" / "adr" / "0005-claims-quote-check.md").read_text(encoding="utf-8")
     assert "`calc: {name, key}`" in adr5 and "а не локатор" in adr5
     model = (ROOT / "docs" / "data-model.md").read_text(encoding="utf-8")
