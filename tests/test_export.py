@@ -407,6 +407,19 @@ def test_no_browser_installed(work, cli, monkeypatch):
     assert all(d["pdf"] is None for d in data["documents"])
 
 
+def test_export_changes_nothing_in_the_project_but_its_export_folder(work, cli):
+    root = work()
+    before = {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    code, out, err = cli("export", "html", "--project", str(root))
+    assert code == 0, err
+    after = {
+        p: p.read_bytes()
+        for p in root.rglob("*")
+        if p.is_file() and "export" not in p.relative_to(root).parts
+    }
+    assert after == before
+
+
 def test_no_browser_keeps_the_stale_pdf_and_names_it(work, cli, monkeypatch):
     root = work()
     (root / "export").mkdir()

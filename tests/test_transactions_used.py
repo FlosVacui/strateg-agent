@@ -15,6 +15,9 @@ MODULES = sorted(p for p in SRC.rglob("*.py") if "__pycache__" not in p.parts)
 WRITES = {"add_event", "add_cost", "save_state", "save_sources", "save_claims"}
 # Помимо `cmd_*`: функции, которые меняют проект, но не называются командой.
 EXTRA = {"register", "confirm", "_pick", "_set_profile", "_resume"}
+# Команды, которые пишут только производные файлы вне состояния проекта: `export` собирает HTML и PDF в
+# `export/` (или в `--out`) и не трогает файлы состояния, выводов и журнал. Блокировка им не нужна.
+DERIVED_ONLY = {"export.py:cmd_export"}
 
 
 def parsed(path: Path) -> list[ast.FunctionDef]:
@@ -91,6 +94,8 @@ def test_every_write_of_a_command_stands_inside_its_transaction_block():
     for module in MODULES:
         for fn in parsed(module):
             if not (fn.name.startswith("cmd_") or fn.name in EXTRA):
+                continue
+            if f"{module.name}:{fn.name}" in DERIVED_ONLY:
                 continue
             blocks = [
                 (w.body[0].lineno, w.end_lineno)
