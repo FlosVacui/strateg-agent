@@ -368,6 +368,14 @@ def build_parser() -> argparse.ArgumentParser:
         const="",
         help="цена следующего шага: остаток меньше оценки — код 1; без значения — следующий по `status`",
     )
+    p.add_argument(
+        "--then",
+        dest="then_step",
+        help=(
+            "с --next: цена двух шагов вместе, --then — шаг после --next (`--next 6 --then 7`: повтор шага 6 "
+            "и выпуск); повтор оценивается ценой шага, резерв выпуска не учитывается"
+        ),
+    )
 
     ex = add("export", export.cmd_export, "документы outputs/*.md в читаемом виде: HTML и PDF")
     export_sub = ex.add_subparsers(dest="export_command", required=True, parser_class=_Parser)

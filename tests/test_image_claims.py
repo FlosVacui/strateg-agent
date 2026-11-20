@@ -598,8 +598,9 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def test_docs_describe_images_and_the_limits():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    assert "Аудио и видео" in readme and "экран <название>; элемент <что и где>" in readme
-    assert "Playwright не подключён" in readme
+    limits = (ROOT / "docs" / "limitations.md").read_text(encoding="utf-8")
+    assert "Аудио и видео" in readme and "экран <название>; элемент <что и где>" in limits
+    assert "Playwright не подключён" in readme and "Playwright не подключён" in limits
     adr5 = (ROOT / "docs" / "adr" / "0005-claims-quote-check.md").read_text(encoding="utf-8")
     assert "по изображению" in adr5 and "не признак вида источника" in adr5
     adr11 = (ROOT / "docs" / "adr" / "0011-data-safety.md").read_text(encoding="utf-8")
@@ -608,7 +609,7 @@ def test_docs_describe_images_and_the_limits():
     assert "Снимок, вставленный в чат" in adr11 and "в среде без хука" in adr11  # ограничение сказано прямо
     assert "модель его не видит" not in adr11
     assert "второй слой (проверка смысла критиком) к ней не применяется" in adr5
-    assert "Агенту запрещено открывать его до `add --confirm`" in readme and "не давайте" in readme
+    assert "Агенту запрещено открывать его до `add --confirm`" in limits and "не давайте" in limits
     adr13 = (ROOT / "docs" / "adr" / "0013-mcp.md").read_text(encoding="utf-8")
     assert "разбор по снимкам экрана от человека сделан" in adr13
     schema = json.loads((ROOT / "schemas" / "claims.schema.json").read_text(encoding="utf-8"))
