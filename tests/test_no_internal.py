@@ -1,5 +1,7 @@
 """Тест-страж: в продукте нет служебного штаба, графа знаний, личных путей и имени автора,
-а также номеров замечаний ревью и заданий и ссылок на рабочую папку заданий.
+номеров замечаний и заданий, ссылок на рабочую папку заданий, служебных слов штаба, имён
+профилей Claude и рабочих копий, личных адресов почты и имён участников, а также названия
+компании-спонсора в фикстурах.
 
 Строки поиска собраны из частей, чтобы тест не находил сам себя.
 Проверяются файлы, которые попадут в репозиторий: отслеживаемые git и новые, не закрытые
@@ -20,12 +22,32 @@ FORBIDDEN = {
     "личный путь (\\)": "C:" + "\\" + "Users",
     "личный путь (/)": "C:" + "/" + "Users",
     "имя автора": "Flos" + "Vacui",
+    "рабочая копия штаба": "strateg" + "-wt",
+    "профиль Claude": ".claude" + "-acc",
+    "имя участника (Б)": "Danilov" + "AD",
+    "имя участника (В)": "nekit" + "476",
 }
 # Номера замечаний и заданий: шаблоны, тоже собранные из частей.
 PATTERNS = {
-    "номер замечания ревью": re.compile(r"\b" + "R" + "V-"),
+    "номер замечания (RV)": re.compile(r"\b" + "R" + "V-"),
     "номер замечания вида R-n.n-n": re.compile(r"\bR-\d+\.\d+-\d+"),
     "папка заданий": re.compile(r"\b" + "brief" + r"s\b", re.IGNORECASE),
+    "номер замечания вида IMP-n": re.compile(r"\b" + "IM" + r"P-\d+"),
+    "служебное слово (роль штаба)": re.compile("оркестр" + "атор", re.IGNORECASE),
+    "служебное слово (оценка)": re.compile(r"\b" + "жю" + r"ри\b", re.IGNORECASE),
+    "служебное слово (проверка штаба)": re.compile("рев" + "ью|ревь" + "юер", re.IGNORECASE),
+    "личный путь macOS": re.compile("/" + "Users" + r"/(?!ivan\b)"),
+    "личная почта": re.compile(
+        "@(?:g"
+        + "mail|yand"
+        + "ex|outl"
+        + "ook|hotm"
+        + "ail|icl"
+        + "oud|proton(?:mail)?)"
+        + r"\.(?:com|ru|me)"
+        "|@" + "mail" + r"\.ru(?![\w.])",
+        re.IGNORECASE,
+    ),
     "номер пакета работ": re.compile(
         r"\b" + "пакет" + r"\w*\s+\d+\.\d+(?!\d)(?!\.\d)(?!\s*(?:[гмкт]б|gb|mb|мин|смс|sms|₽|руб))",
         re.IGNORECASE,
@@ -37,6 +59,8 @@ EXCEPTIONS: dict[str, set[str]] = {
     "LICENSE": {"имя автора"},
     "NOTICE": {"имя автора"},
     "pyproject.toml": {"имя автора"},  # адрес репозитория в [project.urls] и в User-Agent
+    "docs/requirements.md": {"служебное слово (проверка штаба)"},  # 4.13 заменит слово; тогда убрать
+    "tests/test_skills.py": {"личный путь macOS"},  # шаблон поиска личных путей в скиллах
 }
 
 SKIP_DIRS = {".venv", ".git", "__pycache__", ".pytest_cache", ".ruff_cache", "node_modules"}
@@ -88,12 +112,18 @@ def test_forbidden_strings_assembled_from_parts_are_not_in_this_file():
         assert not pattern.search(text), label
 
 
-def test_patterns_catch_review_and_brief_numbers():
+def test_patterns_catch_service_numbers_and_words():
     samples = {
-        "номер замечания ревью": "см. " + "RV" + "-2.3-1",
+        "номер замечания (RV)": "см. " + "RV" + "-2.3-1",
         "номер замечания вида R-n.n-n": "замечание " + "R" + "-2.3-14",
         "папка заданий": "docs/" + "brief" + "s/2.3.md",
         "номер пакета работ": "появится в " + "пакет" + "е 3.1",
+        "номер замечания вида IMP-n": "см. " + "IM" + "P-027",
+        "служебное слово (роль штаба)": "решает " + "оркестр" + "атор",
+        "служебное слово (оценка)": "видно " + "жю" + "ри",
+        "служебное слово (проверка штаба)": "по " + "рев" + "ью",
+        "личный путь macOS": "/" + "Users" + "/anna/work",
+        "личная почта": "anna@" + "g" + "mail.com",
     }
     for label, sample in samples.items():
         assert PATTERNS[label].search(sample), label
@@ -107,6 +137,11 @@ def test_patterns_catch_review_and_brief_numbers():
         "пакет 1.5 ГБ",
         "пакет 3.5 мин",
         "пакет 2.14.3",
+        "пересмотр, проверка и критик",
+        "/Users/ivan/Documents",
+        "ivan@example.test",
+        "petrov@mail.ru.png",
+        "жюрить",
     ):
         assert not any(p.search(harmless) for p in PATTERNS.values()), harmless
 
@@ -127,6 +162,22 @@ def test_no_internal_traces_in_product():
                 found.append(f"{rel}: {label}")
         original = path.read_bytes().decode("utf-8", "ignore")
         for label, pattern in PATTERNS.items():
+            if label in EXCEPTIONS.get(rel, set()):
+                continue
             if pattern.search(original) or pattern.search(rel):
                 found.append(f"{rel}: {label}")
     assert not found, "служебное в продукте:\n" + "\n".join(found)
+
+
+def test_no_sponsor_company_in_fixtures():
+    # Страницы-образцы — вымышленные; название компании-спонсора в них не нужно.
+    name = ("мега" + "фон").lower()
+    found = []
+    for path in candidate_files():
+        rel = path.relative_to(ROOT).as_posix()
+        if not rel.startswith("tests/fixtures/"):
+            continue
+        text = path.read_bytes().decode("utf-8", "ignore").lower()
+        if name in text or name in rel.lower():
+            found.append(rel)
+    assert not found, "компания-спонсор в фикстурах:" + chr(10) + chr(10).join(found)

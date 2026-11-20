@@ -419,7 +419,7 @@ def test_fallback_keeps_article_header_with_price():
     )
     extraction = fetch.extract_page(html)
     assert extraction.fallback and "777 ₽" in extraction.text
-    assert "Частным лицам" not in extraction.text and "МегаФон, 2026" not in extraction.text
+    assert "Частным лицам" not in extraction.text and "Компания «Пример», 2026" not in extraction.text
 
 
 def test_header_footer_nav_aside_are_dropped_outside_main_and_article():

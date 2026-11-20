@@ -417,7 +417,7 @@ def test_status_line_warns_by_time_too(cli, home, clock):
     assert "израсходовано 83 % бюджета (время)" in cli("status", "--line")[1]
 
 
-# --- budget check --next: цена следующего шага (Д-5) -------------------------------------------------
+# --- budget check --next: цена следующего шага -------------------------------------------------
 
 
 def add_cost(cli, usd: float) -> None:
