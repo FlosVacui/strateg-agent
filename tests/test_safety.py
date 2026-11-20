@@ -345,8 +345,8 @@ def test_grouped_card_number_is_replaced_whatever_the_first_digit():
 def test_what_the_detector_does_not_find_is_written_in_the_readme_and_is_true():
     from pathlib import Path
 
-    readme = (Path(__file__).resolve().parent.parent / "README.md").read_text(encoding="utf-8")
-    assert "ИНН, записанный с пробелами по группам" in readme and "телефон из десяти цифр без" in readme
+    limits = (Path(__file__).resolve().parent.parent / "docs" / "limitations.md").read_text(encoding="utf-8")
+    assert "ИНН, записанный с пробелами по группам" in limits and "телефон из десяти цифр без" in limits
     assert safety.mask_personal("ИНН 500 100 732 259 и 9161234567")[1] == []
 
 
