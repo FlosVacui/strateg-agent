@@ -989,7 +989,7 @@ def test_permission_globs_use_the_root_form():
             "//C:/work/x/repo/**",
         ]
     else:
-        assert run.permission_globs(Path("/home/x/repo")) == ["//home/x/repo/**"]
+        assert run.permission_globs(Path("/home/ivan/repo")) == ["//home/ivan/repo/**"]
 
 
 def test_argv_loads_only_project_settings_and_strict_mcp(tmp_path):

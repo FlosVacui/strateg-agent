@@ -32,7 +32,7 @@ def add_synthetic(project: Path) -> None:
     edit_yaml(project, "claims.yaml", lambda d: d["claims"].append(synthetic_claim()))
 
 
-# --- 23: минимумы считают разные записи ----------------------------
+# --- минимумы считают разные записи ----------------------------
 
 
 def test_premortem_causes_must_differ(project):
@@ -69,7 +69,7 @@ def test_option_titles_must_differ(project):
     assert_error(project, "options.yaml", "названия вариантов Вар-2 и Вар-5 совпадают")
 
 
-# --- 24: причина пре-мортема ведёт в защитный показатель ----------------------------
+# --- причина пре-мортема ведёт в защитный показатель ----------------------------
 
 
 def test_premortem_row_must_be_a_guard_row(project):
@@ -82,7 +82,7 @@ def test_premortem_row_must_be_a_guard_row(project):
     assert errors_of(project) == []
 
 
-# --- 25: условие решения связано со строкой плана проверки ----------------------------
+# --- условие решения связано со строкой плана проверки ----------------------------
 
 
 def test_condition_row_must_exist(project):
@@ -117,7 +117,7 @@ def test_condition_row_stays_optional(project):
     assert errors_of(project) == []
 
 
-# --- 26: синтетика не опора ----------------------------
+# --- синтетика не опора ----------------------------
 
 
 def test_recommendation_not_on_synthetic(project):
@@ -159,7 +159,7 @@ def test_decision_basis_not_on_synthetic(project):
     assert_error(project, "decisions.yaml", "запись Реш-1 (№1)", "basis", "У-7 — синтетика")
 
 
-# --- 27: владелец — роль ----------------------------
+# --- владелец — роль ----------------------------
 
 
 @pytest.mark.parametrize(
@@ -195,7 +195,7 @@ def test_real_roles_stay_valid(project, owner):
     assert errors_of(project) == []
 
 
-# --- 28: сравнение действий веток ----------------------------
+# --- сравнение действий веток ----------------------------
 
 
 @pytest.mark.parametrize(
@@ -227,7 +227,7 @@ def test_different_actions_stay_valid(project):
     assert errors_of(project) == []
 
 
-# --- 29: «почти номера» в свободных полях ----------------------------
+# --- «почти номера» в свободных полях ----------------------------
 
 
 @pytest.mark.parametrize(
@@ -264,7 +264,7 @@ def test_baseline_text_stays_valid(project, value):
     assert errors_of(project) == []
 
 
-# --- 30: проверка history/ ----------------------------
+# --- проверка history/ ----------------------------
 
 
 def test_frame_version_has_an_upper_limit(project):
@@ -312,7 +312,7 @@ def test_service_files_are_not_versions(project):
     assert errors_of(project) == []
 
 
-# --- 31: history_path бросает один вид ошибки ----------------------------
+# --- history_path бросает один вид ошибки ----------------------------
 
 
 @pytest.mark.parametrize("path", ["../x.yaml", "/abs.yaml", "", "outputs/", "C:/x.yaml", "a//b.md"])
@@ -329,7 +329,7 @@ def test_history_path_rejects_a_bad_version_in_russian():
         history_path("frame.yaml", 0)
 
 
-# --- 32: дата строго из цифр ASCII ----------------------------
+# --- дата строго из цифр ASCII ----------------------------
 
 
 @pytest.mark.parametrize(
@@ -340,7 +340,7 @@ def test_date_is_ascii_digits_only(project, value):
     assert_error(project, "gaps.yaml", "П-1", "searched[0].date", "в кавычках")
 
 
-# --- 33: from_change_mind сверяется с рекомендацией ----------------------------
+# --- from_change_mind сверяется с рекомендацией ----------------------------
 
 
 def test_from_change_mind_threshold_must_match_the_recommendation(project):
@@ -364,7 +364,7 @@ def test_equal_threshold_after_normalization_is_fine(project):
     assert errors_of(project) == []
 
 
-# --- 34: формулировки ----------------------------
+# --- формулировки ----------------------------
 
 
 def test_case_in_a_number_hint(project):
@@ -390,7 +390,7 @@ def test_premortem_is_exactly_three(project):
     assert not any("не меньше 3" in e or "не больше 3" in e for e in errors)
 
 
-# --- 35: тесты на ослабления ----------------------------
+# --- тесты на ослабления ----------------------------
 
 
 def test_plan_numbers_are_not_repeated(project):
@@ -436,7 +436,7 @@ def test_hashes_of_new_files_and_history_go_to_state(project):
     assert history_path("frame.yaml", 1) in files
 
 
-# --- 36: gap остаётся у закрытого вопроса плана ----------------------------
+# --- gap остаётся у закрытого вопроса плана ----------------------------
 
 
 def test_closed_plan_question_keeps_its_gap(project):
@@ -446,7 +446,7 @@ def test_closed_plan_question_keeps_its_gap(project):
     assert_error(project, "plan.yaml", "ВП-3", "gap задано при статусе «открыт»")
 
 
-# --- 37: хеши history/ ----------------------------
+# --- хеши history/ ----------------------------
 
 
 def test_history_files_are_hashed(project):
@@ -463,7 +463,7 @@ def test_history_files_are_hashed(project):
     assert {"history/frame.v1.yaml", "history/frame.v2.yaml"} <= set(loaded.state.files)
 
 
-# --- 38: описание укладывается с запасом ----------------------------
+# --- описание укладывается с запасом ----------------------------
 
 
 def test_data_model_doc_keeps_room_and_has_no_wall_of_text():
@@ -472,7 +472,7 @@ def test_data_model_doc_keeps_room_and_has_no_wall_of_text():
     assert max(len(line.encode("utf-8")) for line in doc.splitlines()) <= 1200
 
 
-# --- 39: допущения решения ----------------------------
+# --- допущения решения ----------------------------
 
 
 def test_decision_assumptions_are_assumptions_or_hypotheses(project):
@@ -490,7 +490,7 @@ def test_decision_assumptions_are_assumptions_or_hypotheses(project):
         assert errors_of(project) == []
 
 
-# --- 40: заглушки ----------------------------
+# --- заглушки ----------------------------
 
 
 @pytest.mark.parametrize("stub", ["-", "нет", "—", "1234567890", "...........", " \u00a0 "])
@@ -541,7 +541,7 @@ def test_premortem_threshold_has_a_number(project):
     assert_error(project, "verification.yaml", "premortem, запись №1", "threshold", "нет числа")
 
 
-# --- 42: модели собираются по имени поля ----------------------------
+# --- модели собираются по имени поля ----------------------------
 
 
 def test_models_are_built_by_field_name_and_by_file_key():
@@ -564,7 +564,7 @@ def test_doc_says_what_decision_assumptions_hold():
     assert "допущение или гипотеза у `decisions[].assumptions`" in doc
 
 
-# --- правки по второму раунду ----------------------------
+# --- поздние правки ----------------------------
 
 
 def test_followup_1_file_keys_with_underscore_instead_of_if_and_from_are_rejected(project):
