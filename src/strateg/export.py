@@ -12,11 +12,13 @@ PDF — печать этого HTML установленным Chrome или Ed
 from __future__ import annotations
 
 import argparse
+import contextlib
 import html
 import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -32,7 +34,7 @@ from markdown_it.token import Token
 
 from strateg import commands, storage
 from strateg import project as proj
-from strateg.models import Claim, ClaimsFile, Source, SourcesFile
+from strateg.models import Claim, Source
 from strateg.project import CliError, UsageError
 
 OUTPUTS_DIR = "outputs"
@@ -42,8 +44,14 @@ FORMATS = ("html", "pdf")
 
 CLAIM_PREFIX, SOURCE_PREFIX = "У", "И"
 CLAIM_ANCHOR, SOURCE_ANCHOR = "claim", "source"
-# Номер не склеен с буквой или дефисом слева и справа: «ВП-1», «ПП-5», «У-3-й» ссылками не становятся.
-_REF = re.compile(r"(?<![\w-])([УИ])-([1-9][0-9]*)(?![\w-])")
+# Номер не склеен с буквой, дефисом, «/» или точкой слева и с буквой, дефисом или «.5», «,5» справа:
+# «ВП-1», «ПП-5», «У-3-й», «У-2.5» и номер в конце адреса («…/У-2») ссылками не становятся.
+_REF = re.compile(r"(?<![\w./-])([УИ])-([1-9][0-9]*)(?![\w-]|[.,][0-9])")
+# Слово, начинающееся адресом: номер внутри него (`?id=У-2`) — часть адреса, а не ссылка.
+_ADDRESS = re.compile(r"(?i)^[(\[<«\"']*(?:https?://|www\.|mailto:|ftp://)")
+# Ссылка вне документа: схема из этого списка; без схемы — относительный путь, но не «//host».
+_SCHEME = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*:")
+_SAFE_SCHEME = re.compile(r"(?i)^(?:https?|mailto):")
 
 CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src data:"
 
@@ -145,6 +153,9 @@ def _link_text(content: str, refs: _Refs) -> list[Token]:
     out: list[Token] = []
     pos = 0
     for m in _REF.finditer(content):
+        word = re.split(r"\s", content[: m.start()])[-1]  # слово, в котором стоит номер, до него
+        if _ADDRESS.match(word):
+            continue
         ref = f"{m.group(1)}-{m.group(2)}"
         if not refs.known(ref):
             refs.unknown.add(ref)
@@ -159,13 +170,32 @@ def _link_text(content: str, refs: _Refs) -> list[Token]:
     return out or [_text(content)]
 
 
+def _safe_href(href: str) -> bool:
+    """Ссылка вне документа: `#…`, `http(s):`, `mailto:` или относительный путь без ведущего `//`."""
+    href = href.strip()
+    if href.startswith("#"):
+        return True
+    if href.startswith(("//", "\\", "/\\")):
+        return False  # на Windows «//host/x» из файла открывает сетевой ресурс
+    if _SCHEME.match(href):
+        return bool(_SAFE_SCHEME.match(href))
+    return True
+
+
 def _inline(children: list[Token], refs: _Refs) -> list[Token]:
     out: list[Token] = []
     depth = 0  # внутри готовой ссылки номера не трогаем
+    dropping = False  # небезопасная ссылка: остаётся её текст
     for tok in children:
         if tok.type == "link_open":
+            if not _safe_href(str(tok.attrGet("href") or "")):
+                dropping = True
+                continue
             depth += 1
         elif tok.type == "link_close":
+            if dropping:
+                dropping = False
+                continue
             depth -= 1
         if tok.type == "image":
             # Картинки не грузятся (CSP): остаётся подпись, ни адреса, ни файла в выходе нет.
@@ -241,6 +271,19 @@ def _status_html(claim: Claim) -> tuple[str, str]:
     return f'<span class="tag">{_esc(claim.status)}</span>', ""
 
 
+def _caveats(claim: Claim, sources: dict[str, Source]) -> list[str]:
+    """Признаки реестра, от которых зависит доверие к основанию: спор, источник о себе, подозрительный."""
+    out = []
+    if claim.dispute is not None:
+        out.append(f"спор: {_esc(claim.dispute.reason)} (см. {_esc(claim.dispute.claim)})")
+    if any(q.self_reported for q in claim.quotes):
+        out.append("источник пишет о себе")
+    cited = (sources.get(q.source) for q in claim.quotes)
+    if claim.suspicious or any(src is not None and src.suspicious for src in cited):
+        out.append("источник помечен подозрительным")
+    return out
+
+
 def _claim_html(claim: Claim, sources: dict[str, Source]) -> str:
     status, cls = _status_html(claim)
     rows = []
@@ -259,6 +302,9 @@ def _claim_html(claim: Claim, sources: dict[str, Source]) -> str:
         rows.append(_row("Как проверить", _esc(claim.check_method)))
     if claim.taken_from:
         rows.append(_row("Откуда взято", _esc(claim.taken_from)))
+    flags = _caveats(claim, sources)
+    if flags:
+        rows.append(_row("Оговорки", "; ".join(flags)))
     quotes = _quote_html(claim, sources)
     if quotes:
         rows.append(_row("Цитата" if len(quotes) == 1 else "Цитаты", "".join(quotes)))
@@ -414,11 +460,14 @@ def browser_candidates(env: dict[str, str] | None = None, platform: str | None =
 def find_browser(
     explicit: str | None = None, candidates: Callable[[], list[Path]] | None = None
 ) -> Path | None:
-    """Путь к браузеру: флаг `--browser`, затем известные места. Флаг на несуществующий файл — None, а не
-    молчаливый переход к другому браузеру: человек назвал свой."""
+    """Путь к браузеру: флаг `--browser` (файл или имя программы из PATH), затем известные места. Флаг на
+    несуществующее — None, а не молчаливый переход к другому браузеру: человек назвал свой."""
     if explicit:
         path = Path(explicit).expanduser()
-        return path if path.is_file() else None
+        if path.is_file():
+            return path
+        named = shutil.which(explicit)
+        return Path(named) if named else None
     for path in (candidates or browser_candidates)():
         if path.is_file():
             return path
@@ -426,11 +475,22 @@ def find_browser(
 
 
 def _kill_tree(proc: subprocess.Popen) -> None:
+    """Останавливает браузер и его процессы-потомки (Chrome запускает их несколько)."""
     if sys.platform == "win32":
         subprocess.run(
             ["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True, check=False, timeout=15
         )
-    proc.kill()
+    else:  # браузер запущен в своей сессии: номер группы совпадает с номером процесса
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(proc.pid, signal.SIGKILL)
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        proc.kill()
+
+
+SANDBOX_HINT = (
+    "от имени root Chrome не стартует без отключения защитной оболочки, а браузер из snap не видит "
+    "временную папку: укажите --browser с путём к обычной установке"
+)
 
 
 def _remove_tree(path: Path) -> None:
@@ -462,7 +522,11 @@ def print_pdf(browser: Path, html_file: Path, pdf_file: Path, timeout: float = P
         ]
         try:
             proc = subprocess.Popen(
-                args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+                args,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=sys.platform != "win32",
             )
         except OSError as exc:
             raise PrintError(f"браузер {browser} не запустился: {exc}") from exc
@@ -470,7 +534,8 @@ def print_pdf(browser: Path, html_file: Path, pdf_file: Path, timeout: float = P
             _, err = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             _kill_tree(proc)
-            proc.communicate()
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                proc.communicate(timeout=5)  # без предела: потомки могли удержать общие каналы
             raise PrintError(f"браузер не напечатал PDF за {timeout:g} с и был остановлен") from None
         deadline = time.monotonic() + 5  # файл может появиться чуть позже конца процесса
         while not (raw.is_file() and raw.stat().st_size > 0) and time.monotonic() < deadline:
@@ -478,7 +543,8 @@ def print_pdf(browser: Path, html_file: Path, pdf_file: Path, timeout: float = P
         if not (raw.is_file() and raw.stat().st_size > 0):
             tail = (err or b"").decode("utf-8", "replace").strip().splitlines()[-1:]
             hint = f": {tail[0]}" if tail else ""
-            raise PrintError(f"браузер завершился (код {proc.returncode}), но PDF не создан{hint}")
+            extra = f" ({SANDBOX_HINT})" if sys.platform != "win32" else ""
+            raise PrintError(f"браузер завершился (код {proc.returncode}), но PDF не создан{hint}{extra}")
         pdf_file.parent.mkdir(parents=True, exist_ok=True)
         tmp = storage.temp_name(pdf_file)
         try:
@@ -519,9 +585,9 @@ def _documents(root: Path, names: list[str]) -> list[Path]:
 
 
 def _registry(root: Path) -> tuple[dict[str, Claim], dict[str, Source]]:
-    claims = ClaimsFile.model_validate(proj.read_yaml(root / "claims.yaml"))
-    sources = SourcesFile.model_validate(proj.read_yaml(root / "sources.yaml"))
-    return {c.id: c for c in claims.claims}, {s.id: s for s in sources.sources}
+    """Реестр утверждений и источников; повреждённые файлы дают ту же ошибку, что у остальных команд."""
+    p = proj.Project.load_readonly(root)  # без блокировки: в папку проекта ничего не пишется
+    return {c.id: c for c in p.claims.claims}, {s.id: s for s in p.sources.sources}
 
 
 def _read(path: Path) -> str:
@@ -531,50 +597,35 @@ def _read(path: Path) -> str:
         raise CliError(f"документ {path.name} не читается как текст UTF-8") from exc
 
 
-def _no_browser_details(html_files: list[Path], browser: str | None) -> list[str]:
+def _no_browser_details(html_files: list[Path], browser: str | None, removed: list[Path]) -> list[str]:
     named = f"браузер {browser} не найден" if browser else "не найден установленный Chrome или Edge"
-    return [
+    details = [
         named + "; PDF не создан",
         *[f"HTML собран: {p}" for p in html_files],
+        *[f"прежний PDF удалён, чтобы не путать его с новым HTML: {p}" for p in removed],
         "Откройте HTML в браузере и напечатайте в PDF вручную: Ctrl+P, «Сохранить как PDF», "
         "колонтитулы выключите",
-        "Или укажите браузер: `strateg export pdf --browser <путь к chrome или msedge>`",
     ]
+    if not browser:
+        details.append("Или укажите браузер: `strateg export pdf --browser <путь или имя chrome, msedge>`")
+    return details
 
 
-def cmd_export(args: argparse.Namespace) -> int:
-    fmt = args.format
-    root = proj.resolve_project(getattr(args, "project", None))
-    docs = _documents(root, list(args.documents))
-    claims, sources = _registry(root)
-    out_dir = Path(args.out) if args.out else root / DEFAULT_OUT
-    md = make_parser()
-
-    rendered = [render_document(p.stem, _read(p), claims, sources, md) for p in docs]
+def _drop_stale_pdf(pdf: Path) -> bool:
+    """Прежний PDF рядом с новым HTML выглядел бы свежим: при неудачной печати он удаляется."""
+    if not pdf.is_file():
+        return False
     try:
-        out_dir.mkdir(parents=True, exist_ok=True)
-        html_files = []
-        for r in rendered:
-            target = out_dir / f"{r.name}.html"
-            proj.write_text(target, r.html)
-            html_files.append(target)
-    except OSError as exc:
-        raise CliError(f"не удалось записать в {out_dir}: {exc}") from exc
+        pdf.unlink()
+    except OSError:
+        return False
+    return True
 
-    pdf_files: list[Path] = []
-    pdf_errors: list[str] = []
-    if fmt == "pdf":
-        browser = find_browser(args.browser)
-        if browser is None:
-            return _fail_no_browser(args, html_files, args.browser)
-        for r, html_file in zip(rendered, html_files, strict=True):
-            pdf = out_dir / f"{r.name}.pdf"
-            try:
-                print_pdf(browser, html_file, pdf)
-                pdf_files.append(pdf)
-            except PrintError as exc:
-                pdf_errors.append(f"{r.name}: {exc}")
 
+def _summary(
+    root: Path, fmt: str, rendered: list[Rendered], out_dir: Path, pdf_files: list[Path]
+) -> tuple[dict[str, Any], list[str]]:
+    """Данные для `--json` и строки итога: что создано, сколько ссылок, какие номера не найдены."""
     unknown = {r.name: list(r.unknown) for r in rendered if r.unknown}
     data: dict[str, Any] = {
         "out": str(out_dir),
@@ -607,30 +658,63 @@ def cmd_export(args: argparse.Namespace) -> int:
             + "."
         )
     lines.append(f"Папка: {out_dir}")
+    return data, lines
+
+
+def cmd_export(args: argparse.Namespace) -> int:
+    fmt = args.format
+    root = proj.resolve_project(getattr(args, "project", None))
+    docs = _documents(root, list(args.documents))
+    claims, sources = _registry(root)
+    out_dir = Path(args.out) if args.out else root / DEFAULT_OUT
+    md = make_parser()
+
+    rendered = [render_document(p.stem, _read(p), claims, sources, md) for p in docs]
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        html_files = []
+        for r in rendered:
+            target = out_dir / f"{r.name}.html"
+            proj.write_text(target, r.html)
+            html_files.append(target)
+    except OSError as exc:
+        raise CliError(f"не удалось записать в {out_dir}: {exc}") from exc
+
+    pdf_files: list[Path] = []
+    pdf_errors: list[str] = []
+    if fmt == "pdf":
+        browser = find_browser(args.browser)
+        if browser is None:
+            removed = [p for p in (out_dir / f"{r.name}.pdf" for r in rendered) if _drop_stale_pdf(p)]
+            data, lines = _summary(root, fmt, rendered, out_dir, [])
+            details = _no_browser_details(html_files, args.browser, removed)
+            return _fail(args, "PDF не создан: нет браузера для печати", details, data, lines)
+        for r in rendered:
+            pdf = out_dir / f"{r.name}.pdf"
+            try:
+                print_pdf(browser, out_dir / f"{r.name}.html", pdf)
+                pdf_files.append(pdf)
+            except PrintError as exc:
+                dropped = "; прежний PDF удалён" if _drop_stale_pdf(pdf) else ""
+                pdf_errors.append(f"{r.name}: {exc}{dropped}")
+
+    data, lines = _summary(root, fmt, rendered, out_dir, pdf_files)
     if pdf_errors:
         data["pdf_errors"] = pdf_errors
-        return _fail_print(args, data, lines, pdf_errors)
+        message = f"PDF создан не для всех документов: ошибок {len(pdf_errors)}"
+        return _fail(args, message, pdf_errors, data, lines)
     return commands.emit(args, data, lines)
 
 
-def _fail_print(args: argparse.Namespace, data: dict[str, Any], lines: list[str], errors: list[str]) -> int:
-    message = f"PDF создан не для всех документов: ошибок {len(errors)}"
+def _fail(
+    args: argparse.Namespace, message: str, details: list[str], data: dict[str, Any], lines: list[str]
+) -> int:
+    """Ошибка после того, как HTML собран: итог (что создано, ссылки, номера) выводится всё равно."""
     if getattr(args, "json", False):
-        print(_json({"ok": False, "error": message, "details": errors, **data}))
+        print(_json({"ok": False, "error": message, "details": details, **data}))
         return 1
     for line in lines:
         print(line)
-    return commands.fail(args, CliError(message, errors))
-
-
-def _fail_no_browser(args: argparse.Namespace, html_files: list[Path], browser: str | None) -> int:
-    details = _no_browser_details(html_files, browser)
-    message = "PDF не создан: нет браузера для печати"
-    if getattr(args, "json", False):
-        print(
-            _json({"ok": False, "error": message, "details": details, "html": [str(p) for p in html_files]})
-        )
-        return 1
     return commands.fail(args, CliError(message, details))
 
 

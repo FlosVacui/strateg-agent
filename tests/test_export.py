@@ -6,6 +6,8 @@ import ctypes
 import json
 import re
 import shutil
+import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -162,6 +164,8 @@ def test_quote_and_yaml_fields_are_escaped(work):
         "data:text/html;base64,PHNjcmlwdD4=",
         "vbscript:x",
         "file:///etc/passwd",
+        "//evil.example/x",
+        "data:image/png;base64,AAAA",
     ],
 )
 def test_dangerous_link_scheme_is_not_a_link(link):
@@ -171,6 +175,14 @@ def test_dangerous_link_scheme_is_not_a_link(link):
     assert "<a " not in r.html.replace('<a href="https://example.com/ok">', "")
     assert '<a href="https://example.com/ok">ещё</a>' in r.html
     assert "нажми" in r.html
+
+
+@pytest.mark.parametrize(
+    "link", ["#claim-2", "mailto:a@example.com", "inputs/report.pdf", "../x/y.md", "HTTP://EXAMPLE.COM/a"]
+)
+def test_safe_links_stay_links(link):
+    r = export.render_document("x", f"[см.]({link})", {}, {})
+    assert re.findall(r'href="([^"]*)"', r.html) == [link]
 
 
 def test_images_are_never_loaded_only_caption_stays():
@@ -242,6 +254,29 @@ def test_number_inside_existing_link_and_glued_ids_are_untouched(work):
     assert "<a href" not in r.html.replace('<a href="https://example.com/a">', "")
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "оценка У-2.5 пунктов",
+        "оценка У-2,5 пункта",
+        "адрес https://x.example/У-2 в тексте",
+        "адрес https://x.example/?id=У-2&a=1 в тексте",
+        "путь inputs/У-2",
+        "файл.У-2",
+    ],
+)
+def test_number_followed_by_fraction_or_inside_address_is_not_a_link(work, text):
+    claims, sources = registry(work())
+    r = export.render_document("x", text, claims, sources)
+    assert r.links == 0 and "<a " not in r.html and r.unknown == ()
+
+
+def test_number_before_sentence_punctuation_is_still_a_link(work):
+    claims, sources = registry(work())
+    r = export.render_document("x", "Цена (У-2), прогноз У-4. Источники: И-1, И-2; У-3.", claims, sources)
+    assert r.claims == ("У-2", "У-3", "У-4") and r.sources == ("И-1", "И-2") and r.links == 5
+
+
 def test_numbers_in_tables_headings_and_lists_become_links(work):
     root = work()
     claims, sources = registry(root)
@@ -250,6 +285,22 @@ def test_numbers_in_tables_headings_and_lists_become_links(work):
     assert r.claims == ("У-2", "У-3", "У-4") and r.sources == ("И-1",) and r.links == 4
     assert "<table>" in r.html
     check_links(r.html)
+
+
+def test_caveats_dispute_self_reported_and_suspicious(work):
+    from strateg.models import Dispute
+
+    claims, sources = registry(work())
+    plain = export.render_document("x", "(У-4)", claims, sources).html
+    assert "Оговорки" not in plain  # у У-4 цитата из независимого источника
+
+    claim = claims["У-2"].model_copy(update={"dispute": Dispute(claim="У-4", reason="цифры расходятся <b>")})
+    shady = {**sources, "И-2": sources["И-2"].model_copy(update={"suspicious": True})}
+    html = export.render_document("x", "(У-2)", {**claims, "У-2": claim}, shady).html
+    row = re.search(r"<dt>Оговорки</dt><dd>(.*?)</dd>", html).group(1)
+    assert "спор: цифры расходятся &lt;b&gt; (см. У-4)" in row
+    assert "источник пишет о себе" in row and "источник помечен подозрительным" in row
+    assert html.count("<dt>Оговорки</dt>") == 1 and "Происхождение" not in html
 
 
 # --- команда --------------------------------------------------------------------------------------
@@ -337,17 +388,69 @@ def test_no_browser_flag_to_missing_file(work, cli, tmp_path):
     assert code == 1
     assert (root / "export" / "one-pager.html").is_file() and not list((root / "export").glob("*.pdf"))
     assert str(root / "export" / "one-pager.html") in err
-    assert "вручную" in err and "--browser" in err and "Ctrl+P" in err and str(missing) in err
+    assert "вручную" in err and "Ctrl+P" in err and str(missing) in err
+    # человек сам назвал браузер: совет «укажите --browser» ему не повторяется
+    assert "укажите браузер" not in err
+    # итог команды виден и без браузера
+    assert "Ссылок на основания: 2." in out and "one-pager.md -> one-pager.html" in out
 
 
 def test_no_browser_installed(work, cli, monkeypatch):
     root = work()
     monkeypatch.setattr(export, "browser_candidates", lambda *a, **k: [])
     code, out, err = cli("export", "pdf", "--project", str(root))
-    assert code == 1 and "Chrome или Edge" in err and "--browser" in err
+    assert code == 1 and "Chrome или Edge" in err and "укажите браузер" in err and "--browser" in err
+    assert "Ссылок на основания: 14." in out
     assert len(list((root / "export").glob("*.html"))) == len(DOCS)
     data = json.loads(cli("export", "pdf", "--project", str(root), "--json")[1])
-    assert data["ok"] is False and len(data["html"]) == len(DOCS)
+    assert data["ok"] is False and len(data["documents"]) == len(DOCS) and data["links"] == 14
+    assert all(d["pdf"] is None for d in data["documents"])
+
+
+def test_no_browser_removes_the_stale_pdf(work, cli, monkeypatch):
+    root = work()
+    (root / "export").mkdir()
+    stale = root / "export" / "one-pager.pdf"
+    stale.write_bytes(b"%PDF-1.4 old")
+    monkeypatch.setattr(export, "browser_candidates", lambda *a, **k: [])
+    code, out, err = cli("export", "pdf", "one-pager", "--project", str(root))
+    assert code == 1 and not stale.exists() and "прежний PDF удалён" in err
+
+
+def test_failed_print_removes_the_stale_pdf_and_says_so(work, cli):
+    root = work()
+    (root / "export").mkdir()
+    stale = root / "export" / "one-pager.pdf"
+    stale.write_bytes(b"%PDF-1.4 old")
+    # python не умеет печатать в PDF: завершается без файла
+    code, out, err = cli("export", "pdf", "one-pager", "--project", str(root), "--browser", sys.executable)
+    assert code == 1 and not stale.exists()
+    assert "one-pager:" in err and "PDF не создан" in err and "прежний PDF удалён" in err
+    assert (root / "export" / "one-pager.html").is_file() and "Ссылок на основания: 2." in out
+
+
+def test_browser_flag_accepts_a_program_name_from_path(tmp_path, monkeypatch):
+    fake = tmp_path / "mybrowser.exe"
+    fake.write_text("", encoding="utf-8")
+    monkeypatch.setattr(shutil, "which", lambda name: str(fake) if name == "mybrowser" else None)
+    assert export.find_browser("mybrowser") == fake
+    assert export.find_browser("other") is None
+
+
+def test_broken_registry_is_a_clean_error(work, cli):
+    for name, old, new in (
+        ("claims.yaml", "status: действует", "status: непонятно"),
+        ("sources.yaml", "kind: страница", "kind: ерунда"),
+    ):
+        root = work()
+        path = root / name
+        path.write_text(path.read_text(encoding="utf-8").replace(old, new), encoding="utf-8")
+        code, out, err = cli("export", "html", "--project", str(root))
+        assert code == 1 and "не читаются" in err and "Traceback" not in err, err
+        assert not (root / "export").exists()
+        data = json.loads(cli("export", "html", "--project", str(root), "--json")[1])
+        assert data["ok"] is False and "не читаются" in data["error"]
+        shutil.rmtree(root.parent)
 
 
 def test_browser_candidates_by_platform(tmp_path):
@@ -366,24 +469,24 @@ def test_browser_candidates_by_platform(tmp_path):
     assert export.find_browser(None, lambda: [tmp_path / "нет", fake]) == fake
 
 
-def test_print_failure_is_a_clear_error_and_leaves_nothing(tmp_path):
-    import sys
-    import tempfile
-
+def test_print_failure_is_a_clear_error_and_leaves_nothing(tmp_path, monkeypatch):
+    own = tmp_path / "своя временная"  # общий %TEMP% не смотрим: в нём идут чужие экспорты
+    own.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(own))
     page = tmp_path / "a.html"
     page.write_text("<!doctype html><title>x</title>", encoding="utf-8")
     pdf = tmp_path / "a.pdf"
-    before = {p.name for p in Path(tempfile.gettempdir()).glob("strateg-export-*")}
     # python не умеет печатать в PDF: завершается без файла
     with pytest.raises(export.PrintError, match="PDF не создан"):
         export.print_pdf(Path(sys.executable), page, pdf, timeout=30)
     assert not pdf.exists()
-    assert {p.name for p in Path(tempfile.gettempdir()).glob("strateg-export-*")} == before
+    assert list(own.iterdir()) == []  # профиль браузера и временный файл убраны
 
 
-def test_print_timeout_kills_the_browser(tmp_path):
-    import sys
-
+def test_print_timeout_kills_the_browser(tmp_path, monkeypatch):
+    own = tmp_path / "своя временная"
+    own.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(own))
     sleeper = tmp_path / "sleeper.py"
     sleeper.write_text("import time\ntime.sleep(60)\n", encoding="utf-8")
     page = tmp_path / "a.html"
@@ -397,7 +500,7 @@ def test_print_timeout_kills_the_browser(tmp_path):
         runner.chmod(0o755)
     with pytest.raises(export.PrintError, match="остановлен"):
         export.print_pdf(runner, page, tmp_path / "a.pdf", timeout=2)
-    assert not (tmp_path / "a.pdf").exists()
+    assert not (tmp_path / "a.pdf").exists() and list(own.iterdir()) == []
 
 
 # --- PDF настоящим браузером ----------------------------------------------------------------------
