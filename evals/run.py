@@ -544,8 +544,8 @@ def classify_wait(status: dict[str, Any] | None, *, stop_logged: bool = False) -
     """По `strateg status --json` и журналу: ворота, остановка, выпуск или вопрос без ворот.
 
     - ворота ждут ответа — в списке `waiting_gates`;
-    - внеплановая остановка — `paused` равно «остановка» (шаг идёт) или `stop_logged`: остановка — последнее
-      событие хода проекта (`stop_pending`), а шаг к этому времени уже закрыт;
+    - внеплановая остановка — `paused` равно «остановка» (при любом шаге) или `stop_logged`: остановка —
+      последнее событие хода проекта в журнале (`stop_pending`; видна и в проектах прежней версии CLI);
     - выпуск — шаг 7 закрыт: `step` равен 7 (или 8) и шаг не идёт;
     - иначе агент закончил вызов без записи ожидания: вопрос без ворот. Проекта ещё нет — тоже вопрос.
     """
@@ -700,11 +700,8 @@ class Supervisor:
                 if template:
                     return Answer(str(template), "unknown_and_closed")
         persona = self.card.get("persona") or {}
-        budget_answer = (self.card.get("off_card") or {}).get("budget_question")
         for sentence in sentences:
             folded = sentence.casefold()
-            if budget_answer and "бюджет" in folded and any(w in folded for w in BUDGET_ASK_WORDS):
-                return Answer(str(budget_answer), "off_card.budget_question")
             if persona.get("deadline") and any(w in folded for w in DEADLINE_WORDS):
                 return Answer(f"Срок: {persona['deadline']}.", "persona.deadline")
             if persona.get("reports_to") and any(w in folded for w in RECIPIENT_WORDS):
@@ -712,6 +709,15 @@ class Supervisor:
                     f"Результат читает: {persona['reports_to']}. Одна страница с рекомендацией.",
                     "persona.reports_to",
                 )
+        budget_answer = (self.card.get("off_card") or {}).get("budget_question")
+        if budget_answer:
+            for sentence in sentences:
+                if is_budget_question(sentence):
+                    return Answer(
+                        str(budget_answer),
+                        "off_card.budget_question",
+                        note="вопрос о бюджете проекта: ответ из off_card.budget_question",
+                    )
         return self._default("вопрос без ворот вне карточки")
 
     def _default(self, note: str) -> Answer:
@@ -719,9 +725,31 @@ class Supervisor:
 
 
 DEADLINE_WORDS = ("срок", "дедлайн", "к какому числу", "к какому дню", "когда нужно", "когда вам нужно")
-# Вопрос о размере бюджета («назовите сумму», «сколько добавить», «на сколько увеличить»): ответ — в карточке.
-BUDGET_ASK_WORDS = ("сумм", "сколько", "увелич", "добав", "назов", "лимит", "новый бюджет", "новом бюджет")
+# Вопрос о бюджете проекта (сумма, увеличение, лимит прогона). Нужны привязка к бюджету или лимиту прогона и
+# просьба назвать, добавить или выделить; деньги предметной области («бюджет клиента», «бюджетный сегмент»,
+# «лимит звонков», цена подписки) — не вопрос о бюджете проекта.
+BUDGET_ANCHORS = ("бюджет", "лимит", "долл", "$", "на повтор", "на выпуск")
+BUDGET_ASKS = ("сумм", "сколько", "увелич", "добав", "назов", " нов", "выдел", "поднять", "повыс")
+BUDGET_OTHER_MONEY = (
+    "клиент",
+    "абонент",
+    "бюджетн",
+    "подписк",
+    "конкурент",
+    "звонк",
+    "тариф",
+    "сегмент",
+    "стоимост",
+)
 RECIPIENT_WORDS = ("кому ", "кому?", "получател", "адресат", "для кого", "кто будет читать", "кто прочитает")
+
+
+def is_budget_question(sentence: str) -> bool:
+    """Агент спрашивает про бюджет проекта: сколько добавить, на какую сумму увеличить лимит."""
+    folded = sentence.casefold()
+    if any(w in folded for w in BUDGET_OTHER_MONEY):
+        return False
+    return any(w in folded for w in BUDGET_ANCHORS) and any(w in folded for w in BUDGET_ASKS)
 
 
 def stop_key(reason: str) -> str | None:

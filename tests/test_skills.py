@@ -1617,7 +1617,8 @@ def test_the_stop_on_completeness_comes_only_after_the_repeat_and_the_budget_che
     paths = repeat.split("Код 0")[0]
     assert "выпуск" in paths and "бюджет" in paths  # человеку два пути
     assert "Код 0 — повтор" in repeat and "словами не оценивай" in repeat
-    assert "budget check --next 6 --then 7" in repeat  # на повтор и выпуск вместе, не только на повтор
+    # на шаге 6 — повтор и выпуск вместе, на шаге 7 выпуск уже идёт: только он
+    assert "budget check --next 6 --then 7` на шаге 6" in repeat and "`--next 7` на шаге 7" in repeat
     assert repeat.index("budget check") < repeat.index("route critic --upgrade")
     # остаток и цену прохода решает CLI, а не оценка агента
     _lacks(

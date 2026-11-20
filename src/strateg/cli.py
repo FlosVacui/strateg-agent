@@ -370,7 +370,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--then",
         dest="then_step",
-        help="с --next: цена шага и этого шага вместе (повтор шага 6 и выпуск: `--next 6 --then 7`)",
+        help=(
+            "с --next: цена двух шагов вместе, --then — шаг после --next (`--next 6 --then 7`: повтор шага 6 "
+            "и выпуск); повтор оценивается ценой шага, резерв выпуска не учитывается"
+        ),
     )
 
     p = add("pack", commands.cmd_pack, "упаковать проект в архив .zip без секретов и исходников с ПДн")

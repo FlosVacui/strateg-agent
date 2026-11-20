@@ -2436,10 +2436,8 @@ def _next_verdict(
             f"{est.step} и {nxt.step}",
             est.usd + nxt.usd,
             est.minutes + nxt.minutes,
-            est.usd_source if est.usd_source == nxt.usd_source else f"{est.usd_source}; {nxt.usd_source}",
-            est.minutes_source
-            if est.minutes_source == nxt.minutes_source
-            else f"{est.minutes_source}; {nxt.minutes_source}",
+            est.usd_source,  # оба шага оцениваются по одной истории или по одной таблице
+            est.minutes_source,
         )
     lacking = []
     left_usd = m.left_usd
@@ -2472,6 +2470,8 @@ def cmd_budget_check(args: argparse.Namespace) -> int:
         if step is None:
             raise UsageError("--then задаётся вместе с --next: шаг, а за ним шаг из --then")
         then = _norm_step(then)
+        if budgetlib.STEPS.index(then) <= budgetlib.STEPS.index(step):
+            raise UsageError(f"--then называет шаг после --next: после шага {step} идёт не шаг {then}")
     release = budgetlib.is_release(action)
     defaults = budgetlib.load_defaults().budget if release else None
     m = budgetlib.measure(p)

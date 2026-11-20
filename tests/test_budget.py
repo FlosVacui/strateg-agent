@@ -602,3 +602,22 @@ def test_then_allows_when_both_steps_fit_and_needs_next(cli, home, clock):
     code, out, _ = cli("budget", "check", "--next", "6", "--then", "7")
     assert code == 0 and "Бюджет позволяет шаги 6 и 7" in out
     assert cli("budget", "check", "--then", "7")[0] == 2  # --then без --next — ошибка применения
+
+
+def test_then_adds_the_minutes_too(cli, home, clock):
+    """Остаток минут между ценой одного и двух шагов: `--next 6` проходит, с `--then 7` — нет (время)."""
+    new(cli)
+    history(cli, clock, {"1": 0.1, "2а": 0.1, "2б": 0.1}, minutes=10)  # медиана 10 мин на шаг
+    assert cli("budget", "set", "--minutes", "45")[0] == 0  # потрачено 30 мин, остаток 15
+    assert cli("budget", "check", "--next", "6")[0] == 0
+    code, _, err = cli("budget", "check", "--next", "6", "--then", "7")
+    assert code == 1 and "шаги 6 и 7 (время)" in err and "(деньги)" not in err
+    data = json.loads(cli("budget", "check", "--next", "6", "--then", "7", "--json")[1])
+    assert data["estimate"]["minutes"] == 20
+
+
+@pytest.mark.parametrize(("nxt", "then"), [("7", "6"), ("6", "6"), ("6", "2а")])
+def test_then_must_name_a_later_step_than_next(cli, home, nxt, then):
+    new(cli)
+    code, _, err = cli("budget", "check", "--next", nxt, "--then", then)
+    assert code == 2 and "--then" in err

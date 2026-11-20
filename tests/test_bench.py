@@ -1499,20 +1499,59 @@ def test_call_timeout_shrinks_to_the_time_left(tmp_path):
     assert invoker.opts[0].timeout_s <= 60  # `--call-timeout-min` по умолчанию 30 мин, но осталась минута
 
 
-@pytest.mark.parametrize(
-    "text",
-    [
-        "Назовите сумму бюджета, на которую можно увеличить лимит?",
-        "Сколько бюджета добавить для повтора проверки?",
-        "Какой новый бюджет вы готовы выделить?",
-    ],
-)
+BUDGET_YES = [
+    "Назовите сумму бюджета, на которую можно увеличить лимит?",
+    "Сколько бюджета добавить для повтора проверки?",
+    "Какой новый бюджет вы готовы выделить?",
+    "Назовите новый лимит в долларах?",
+    "На сколько увеличить лимит?",
+    "Сколько долларов выделите на повтор?",
+    "Выделите ещё бюджета на повтор проверки?",
+    "Какую сумму добавить на повтор?",
+]
+BUDGET_NO = [
+    "Сколько стоит подписка у конкурентов, чтобы вписаться в бюджет клиента?",
+    "Назовите сумму бюджета клиента на подписку?",
+    "Добавить в рамку ограничение по бюджету клиента?",
+    "Сколько абонентов в бюджетном сегменте?",
+    "Какой лимит звонков в сутки учитывать в бюджете?",
+    "Учесть ли бюджет абонента при выборе тарифа — сколько он готов платить?",
+    "Сколько вариантов рассмотреть?",
+    "Добавить источник в план?",
+    "Назовите получателя отчёта?",
+    "Какой срок?",
+    "Бюджет принят?",
+    "Какой цвет у страницы?",
+]
+
+
+@pytest.mark.parametrize("text", BUDGET_YES)
 def test_question_about_the_budget_amount_is_answered_from_the_card(text):
     a = sup().answer(run.Wait("вопрос"), None, text)
     assert not a.off_card and a.source == "off_card.budget_question"
     assert a.text == "бюджет не увеличиваем, выпустите с пометкой о неполноте"
+    assert a.note and "бюджет" in a.note  # в итогах ответ о бюджете виден
 
 
-def test_a_budget_word_without_asking_for_an_amount_is_not_a_budget_question():
-    assert sup().answer(run.Wait("вопрос"), None, "Бюджет принят?").off_card
-    assert sup().answer(run.Wait("вопрос"), None, "Какой цвет у страницы?").off_card
+@pytest.mark.parametrize("text", BUDGET_NO)
+def test_money_of_the_subject_area_is_not_a_budget_question(text):
+    assert sup().answer(run.Wait("вопрос"), None, text).source != "off_card.budget_question"
+
+
+def test_deadline_and_recipient_are_checked_before_the_budget_question():
+    a = sup().answer(run.Wait("вопрос"), None, "Назовите срок, чтобы уложиться в бюджет?")
+    assert a.source == "persona.deadline"
+    a = sup().answer(run.Wait("вопрос"), None, "Сколько добавить бюджета? К какому сроку нужен результат?")
+    assert a.source == "persona.deadline"
+    a = sup().answer(run.Wait("вопрос"), None, "Выделите ещё бюджета? Для кого эта страница?")
+    assert a.source == "persona.reports_to"
+
+
+def test_a_budget_answer_is_noted_in_the_results(tmp_path):
+    bench, _ = make_bench(tmp_path, [gate("В1", 1)], [reply(1)])
+    wait = run.Wait("вопрос")
+    answer = sup().answer(wait, None, "Какую сумму добавить на повтор?")
+    bench._record_answer(wait, answer)
+    assert (
+        answer.note in bench.state.notes and bench.state.questions[-1]["source"] == "off_card.budget_question"
+    )

@@ -146,3 +146,44 @@ def test_open_gates_after_step_done_are_not_a_pause_as_before(cli, clock):
     assert cli("gate", "open", "В1", "--questions", "2")[0] == 0
     d = run(cli, "status")
     assert d["paused"] is None and d["waiting_gates"] == ["В1"]
+
+
+def stopped_after_done(cli, clock) -> None:
+    setup(cli, clock, step_closed=True)
+    assert run(cli, "status")["paused"] == "остановка"
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ("route", "critic", "--reason", "повод"),
+        ("event", "error", "--message", "сбой"),
+        ("step", "start", "3"),
+    ],
+    ids=["route", "event error", "step start"],
+)
+def test_a_command_that_writes_a_progress_event_lifts_the_stop(cli, clock, argv):
+    """Агент пошёл дальше: остановка уже не настоящая."""
+    stopped_after_done(cli, clock)
+    assert cli(*argv)[0] == 0
+    assert run(cli, "status")["paused"] is None
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ("status",),
+        ("status", "--line"),
+        ("status", "--brief", "--peek"),
+        ("budget", "check"),
+        ("check",),
+        ("claim", "list"),
+    ],
+    ids=lambda a: " ".join(a),
+)
+def test_a_read_only_command_does_not_lift_the_stop(cli, root, clock, argv):
+    stopped_after_done(cli, clock)
+    before = journal_of(root)
+    cli(*argv)
+    assert run(cli, "status")["paused"] == "остановка"
+    assert [e for e in journal_of(root)[len(before) :] if e["kind"] != "изменено вне агента"] == []
