@@ -479,7 +479,7 @@ def test_old_project_without_the_new_fields_is_clean():
     assert check_project(FIXTURE) == []
 
 
-# --- отказ ответить — не обещание будущего (Д-1) ---------------------------------------------------------
+# --- отказ ответить — не обещание будущего ---------------------------------------------------------
 
 
 def answer_warnings(started, cli, answer: str) -> str:
@@ -516,7 +516,7 @@ def test_a_real_promise_of_the_future_is_still_marked(started, cli, answer):
     assert "обещает будущее" in answer_warnings(started, cli, answer)
 
 
-# --- путь к снимку — реальная папка проекта (Д-3) --------------------------------------------------------
+# --- путь к снимку — реальная папка проекта --------------------------------------------------------
 
 
 def test_snapshot_path_is_the_real_folder_of_a_project_outside_projects(started, cli, tmp_path, monkeypatch):

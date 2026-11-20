@@ -115,7 +115,7 @@ def test_source_may_be_a_folder_path(cli, tmp_path, home):
 
 
 def test_cyrillic_and_spaces_in_paths(cli, tmp_path, monkeypatch):
-    folder = tmp_path / "мои проекты 2026" / "для жюри"
+    folder = tmp_path / "мои проекты 2026" / "для проверки"
     monkeypatch.setenv(proj.PROJECTS_ENV, str(folder))
     src = put_example(folder, "project_complete", "образец")  # папка с кириллицей в имени
     before = snapshot(src)
