@@ -3,6 +3,7 @@
 профилей Claude и рабочих копий, личных адресов почты и имён участников, а также названия
 компании-спонсора в фикстурах.
 
+Имена участников в тесте не записаны: хранятся хеши sha256 слов, а тест хеширует слова файлов.
 Строки поиска собраны из частей, чтобы тест не находил сам себя.
 Проверяются файлы, которые попадут в репозиторий: отслеживаемые git и новые, не закрытые
 `.gitignore`. Без git (например, из архива) — обход папки без `.venv` и `.git`.
@@ -10,6 +11,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import subprocess
 from pathlib import Path
@@ -24,9 +26,27 @@ FORBIDDEN = {
     "имя автора": "Flos" + "Vacui",
     "рабочая копия штаба": "strateg" + "-wt",
     "профиль Claude": ".claude" + "-acc",
-    "имя участника (Б)": "Danilov" + "AD",
-    "имя участника (В)": "nekit" + "476",
 }
+# Имена участников: sha256 слова в нижнем регистре (слово — подряд идущие латинские буквы и цифры).
+# Хеш, а не имя: само имя в продукте не нужно. Новое имя добавляют так:
+# `python -c "import hashlib; print(hashlib.sha256(b'слово').hexdigest())"`.
+NAME_HASHES = {
+    "f735fb23ffb96815d2027bc60d5273c118fe90180d70ea7b5dfb8669dbbc427f",
+    "a32341b5b616225aa409315ca2f789f023b0c71fb6a77c43cd954a44401f8ffb",
+}
+WORD = re.compile(r"[A-Za-z0-9]+")
+
+
+def known_names(text: str, hashes: set[str] = NAME_HASHES) -> list[str]:
+    """Слова текста, чей хеш — в списке имён; возвращает хеши, а не сами слова."""
+    found = []
+    for word in set(WORD.findall(text)):
+        digest = hashlib.sha256(word.lower().encode()).hexdigest()
+        if digest in hashes:
+            found.append(digest[:8])
+    return found
+
+
 # Номера замечаний и заданий: шаблоны, тоже собранные из частей.
 PATTERNS = {
     "номер замечания (RV)": re.compile(r"\b" + "R" + "V-"),
@@ -35,7 +55,9 @@ PATTERNS = {
     "номер замечания вида IMP-n": re.compile(r"\b" + "IM" + r"P-\d+"),
     "служебное слово (роль штаба)": re.compile("оркестр" + "атор", re.IGNORECASE),
     "служебное слово (оценка)": re.compile(r"\b" + "жю" + r"ри\b", re.IGNORECASE),
-    "служебное слово (проверка штаба)": re.compile("рев" + "ью|ревь" + "юер", re.IGNORECASE),
+    "служебное слово (проверка штаба)": re.compile("(?<![а-яё])(?:рев" + "ью|ревь" + "юер)", re.IGNORECASE),
+    "служебное слово (этап М)": re.compile(r"(?<![\w-])" + "М" + r"\d(?![\w-])"),
+    "служебное слово (метка прогона)": re.compile(r"\b" + "LI" + r"VE\b"),
     "личный путь macOS": re.compile("/" + "Users" + r"/(?!ivan\b)"),
     "личная почта": re.compile(
         "@(?:g"
@@ -59,7 +81,8 @@ EXCEPTIONS: dict[str, set[str]] = {
     "LICENSE": {"имя автора"},
     "NOTICE": {"имя автора"},
     "pyproject.toml": {"имя автора"},  # адрес репозитория в [project.urls] и в User-Agent
-    "docs/requirements.md": {"служебное слово (проверка штаба)"},  # 4.13 заменит слово; тогда убрать
+    # страница ведётся отдельно от этой чистки: слово там заменят, и тогда исключение убрать
+    "docs/requirements.md": {"служебное слово (проверка штаба)"},
     "tests/test_skills.py": {"личный путь macOS"},  # шаблон поиска личных путей в скиллах
 }
 
@@ -124,6 +147,8 @@ def test_patterns_catch_service_numbers_and_words():
         "служебное слово (проверка штаба)": "по " + "рев" + "ью",
         "личный путь macOS": "/" + "Users" + "/anna/work",
         "личная почта": "anna@" + "g" + "mail.com",
+        "служебное слово (этап М)": "этап " + "М" + "1",
+        "служебное слово (метка прогона)": "режим " + "LI" + "VE",
     }
     for label, sample in samples.items():
         assert PATTERNS[label].search(sample), label
@@ -142,8 +167,23 @@ def test_patterns_catch_service_numbers_and_words():
         "ivan@example.test",
         "petrov@mail.ru.png",
         "жюрить",
+        "пре" + "вью страницы",
+        "М" + "1" + "2",
+        "m1 и M1",
+        "sk_live_" + "abc",
+        "live = []",
     ):
         assert not any(p.search(harmless) for p in PATTERNS.values()), harmless
+
+
+def test_known_names_are_found_by_hash_without_naming_them():
+    word = "sample" + "token"
+    hashes = {hashlib.sha256(word.encode()).hexdigest()}
+    assert known_names("автор SampleToken", hashes) == [next(iter(hashes))[:8]]
+    assert known_names("github.com/SAMPLETOKEN/repo", hashes)
+    assert known_names("sample-token, sampletokens, mysampletoken", hashes) == []
+    assert known_names("обычный текст без имён", hashes) == []
+    assert known_names("sampletoken", set()) == []
 
 
 def test_there_are_files_to_check():
@@ -161,6 +201,8 @@ def test_no_internal_traces_in_product():
             if needle.lower() in text or needle.lower() in rel.lower():
                 found.append(f"{rel}: {label}")
         original = path.read_bytes().decode("utf-8", "ignore")
+        if "имя участника" not in EXCEPTIONS.get(rel, set()):
+            found += [f"{rel}: имя участника ({h})" for h in known_names(original + " " + rel)]
         for label, pattern in PATTERNS.items():
             if label in EXCEPTIONS.get(rel, set()):
                 continue
