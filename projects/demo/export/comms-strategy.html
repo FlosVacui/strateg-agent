@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Коммуникационная стратегия</title>
+<style>
+:root { color-scheme: light; }
+* { box-sizing: border-box; }
+html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+body {
+  margin: 0 auto; padding: 24px 20px 48px; max-width: 54rem; color: #1b1b1f; background: #fff;
+  font: 11pt/1.5 "Segoe UI", Arial, "DejaVu Sans", sans-serif; overflow-wrap: anywhere;
+}
+h1 { font-size: 1.7rem; line-height: 1.25; margin: 0 0 1rem; }
+h2 { font-size: 1.3rem; margin: 1.8rem 0 .6rem; border-bottom: 1px solid #c8c8d0; padding-bottom: .2rem; }
+h3 { font-size: 1.1rem; margin: 1.2rem 0 .4rem; }
+h1, h2, h3, h4 { break-after: avoid; }
+p, ul, ol { margin: .5rem 0; }
+code, pre { font-family: Consolas, "DejaVu Sans Mono", monospace; font-size: .92em; }
+pre { background: #f3f3f6; border: 1px solid #d8d8e0; padding: .6rem .8rem; white-space: pre-wrap; }
+blockquote { margin: .6rem 0; padding: .1rem 1rem; border-left: 4px solid #c8c8d0; color: #3a3a44; }
+a { color: #0b4fb3; text-decoration: underline; }
+a.ref { font-weight: 600; white-space: nowrap; }
+table { border-collapse: collapse; width: 100%; margin: .8rem 0; }
+th, td { border: 1px solid #7a7a86; padding: 4px 8px; text-align: left; vertical-align: top; }
+th { background: #ececf1; }
+tr { break-inside: avoid; }
+section.grounds { margin-top: 2.5rem; border-top: 2px solid #1b1b1f; }
+article.ground { border: 1px solid #c8c8d0; border-radius: 4px; padding: .5rem .9rem; margin: .8rem 0;
+  break-inside: avoid; }
+article.ground h3 { margin: 0 0 .3rem; }
+article.ground.replaced, article.ground.revoked { border-style: dashed; background: #fbf6ea; }
+.tag { font-size: .85rem; font-weight: 400; color: #4a4a55; }
+.tag.alert { color: #8a2a00; font-weight: 600; }
+dl { margin: .3rem 0 0; display: grid; grid-template-columns: 9rem 1fr; gap: .15rem .8rem; }
+dt { color: #4a4a55; }
+dd { margin: 0; }
+.quote { margin: 0 0 .3rem; }
+.note { color: #4a4a55; font-size: .95rem; }
+@page { size: A4; margin: 16mm 15mm 18mm; }
+@media print {
+  body { max-width: none; padding: 0; font-size: 10.5pt; }
+  a, a.ref { color: #0b4fb3; text-decoration: underline; }
+}
+@media (max-width: 40rem) { dl { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<h1>Коммуникационная стратегия</h1>
+<h2>Кратко</h2>
+<p>Говорим с организаторами семейных групп и с их близкими. Главное сообщение: интернет близкому можно добавить из свободного остатка [О-2], а остаток виден только с его разрешения [О-3]. Оба сообщения держатся на брифе (<a href="#claim-50" class="ref">У-50</a>, <a href="#claim-51" class="ref">У-51</a>). Обещание «предупредим заранее» и «перебоев станет меньше» не подтверждено и в сообщения не идёт. Принято 9 допущений, список в <code>outputs/frame.md</code>.</p>
+<h2>Аудитория и ситуация</h2>
+<ul>
+<li>Организатор группы: узнаёт о перебое часто из просьбы близкого (бриф, стр. 1), может добавить интернет из остатка (<a href="#claim-50" class="ref">У-50</a>, факт).</li>
+<li>Участник: решает, какие сведения видны, и может отозвать согласие (<a href="#claim-51" class="ref">У-51</a>, факт).</li>
+<li>Оценка руководителя: чаще всего жалуются на исчерпание общего пакета (<a href="#claim-37" class="ref">У-37</a>, допущение, не факт).</li>
+</ul>
+<h2>Барьер</h2>
+<ul>
+<li><strong>Понимание (участник):</strong> не ясно, что увидит организатор. Снимает сообщение: остаток виден только с разрешения участника, отзыв в любой момент [О-3] (<a href="#claim-51" class="ref">У-51</a>).</li>
+<li><strong>Выбор (организатор):</strong> не заметит, что остаток уходит. Это барьер продукта, а не текста: его снимает предупреждение, а не сообщение. Сообщение о предупреждении не пишем, пока услуга не доказана (О-1, не подтверждено).</li>
+</ul>
+<h2>Ключевые сообщения</h2>
+<ol>
+<li>Организатору: «Если у близкого закончилась его доля, добавьте интернет из свободного остатка [О-2]. Работает, если тариф разрешает и в пакете хватает объёма.» Основание: <a href="#claim-50" class="ref">У-50</a> (факт), аудитория: организатор, действие из направления продуктовой стратегии.</li>
+<li>Участнику: «Организатор увидит только остаток интернета, и только с вашего разрешения; отозвать его можно в любой момент [О-3].» Основание: <a href="#claim-51" class="ref">У-51</a> (факт), аудитория: участник.</li>
+</ol>
+<p>Сообщения об осознанных отказах не пишутся.</p>
+<h2>Роли каналов</h2>
+<ul>
+<li><strong>Кабинет и приложение оператора.</strong> Роль: место действия, где организатор смотрит остаток и добавляет интернет. Несёт сообщение 1. Аудитория бывает там: у конкурента единый кабинет используется для привязки номеров семьи (<a href="#claim-14" class="ref">У-14</a>, факт).</li>
+<li><strong>Приглашение участнику.</strong> Роль: получить разрешение. Несёт сообщение 2. Основание: согласие запрашивается при приглашении (<a href="#claim-7" class="ref">У-7</a>, факт Verizon; бриф).</li>
+<li><strong>Уведомление организатору.</strong> Роль: сигнал об остатке. Канал остаётся гипотезой: реакцию проверяет ПП-5 (<a href="#claim-41" class="ref">У-41</a>, гипотеза); сообщения не несёт, пока О-1 не подтверждено.</li>
+</ul>
+<h2>Таблица обещаний</h2>
+<table>
+<thead>
+<tr>
+<th>Обещание</th>
+<th>Возможность продукта</th>
+<th>Факт</th>
+<th>Условия и исключения</th>
+<th>Статус</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>О-1 Предупредим организатора, когда пакет подходит к концу</td>
+<td>услуги ещё нет</td>
+<td>нет</td>
+<td>нужно разрешение участника; срок не оценён</td>
+<td>не подтверждено</td>
+</tr>
+<tr>
+<td>О-2 Интернет участнику можно добавить из остатка</td>
+<td>действие организатора по брифу</td>
+<td><a href="#claim-50" class="ref">У-50</a></td>
+<td>тариф разрешает, организатор вправе распределять пакет, объёма хватает; справка по тарифам не открылась (<a href="#source-2" class="ref">И-2</a>)</td>
+<td>подтверждено</td>
+</tr>
+<tr>
+<td>О-3 Остаток видят только с разрешения участника, отзыв в любой момент</td>
+<td>правило согласия по брифу</td>
+<td><a href="#claim-51" class="ref">У-51</a></td>
+<td>касается только остатка интернета; начисления отдельно</td>
+<td>подтверждено</td>
+</tr>
+<tr>
+<td>О-4 Перебоев станет меньше</td>
+<td>эффект не измерен</td>
+<td>нет (П-1)</td>
+<td>пилот проверит</td>
+<td>не подтверждено</td>
+</tr>
+</tbody>
+</table>
+<section class="grounds" id="osnovaniya"><h2>Основания</h2><article class="ground" id="claim-7"><h3>У-7 <span class="tag">факт</span> <span class="tag">действует</span></h3><p>По политике Verizon Family, чтобы добавить участника, опекун должен согласиться на сбор части данных о нём; у участника запрашивается разрешение, в том числе на показ опекунам посещаемых сайтов и приложений</p><dl><dt>Период</dt><dd>2026</dd><dt>Оговорки</dt><dd>источник пишет о себе</dd><dt>Цитаты</dt><dd><p class="quote">«When your Guardian adds you to their Verizon Family account, they have to agree to let us collect some information about you.»</p><p class="note"><a class="ref" href="#source-8">И-8</a>; раздел «What control do I have over the information you have about me?»; Verizon (официальный первоисточник); проверена: точное вхождение, 21.11.2026</p><p class="quote">«You’ll also be asked to let your Guardians and others they allow see what websites and apps you’re using, block certain ones, and pause the internet.»</p><p class="note"><a class="ref" href="#source-8">И-8</a>; раздел «What control do I have over the information you have about me?»; Verizon (официальный первоисточник); проверена: точное вхождение, 21.11.2026</p></dd></dl></article><article class="ground" id="claim-14"><h3>У-14 <span class="tag">факт</span> <span class="tag">действует</span></h3><p>МТС в приложении «Мой МТС» позволяет привязать к основному номеру другие номера семьи и управлять ими из одного места: после привязки достаточно зайти под основным номером</p><dl><dt>Период</dt><dd>2026</dd><dt>Оговорки</dt><dd>источник пишет о себе</dd><dt>Цитата</dt><dd><p class="quote">«В будущем достаточно будет зайти в Мой МТС под основным номером, и все привязанные к нему номера станут доступны для управления.»</p><p class="note"><a class="ref" href="#source-4">И-4</a>; Шаг 5/6; МТС (МТС Редспот) (официальный первоисточник); проверена: точное вхождение, 21.11.2026</p></dd></dl></article><article class="ground" id="claim-37"><h3>У-37 <span class="tag">допущение</span> <span class="tag">действует</span></h3><p>По опыту поддержки, в семейных группах чаще всего жалуются на исчерпание общего пакета, на неоплату реже; это учебная оценка руководителя, не факт</p><dl><dt>Период</dt><dd>2026</dd><dt>Откуда взято</dt><dd>слова руководителя в чате: опыт поддержки, учебная оценка</dd></dl></article><article class="ground" id="claim-41"><h3>У-41 <span class="tag">гипотеза</span> <span class="tag">действует</span></h3><p>Организаторы групп реагируют на предупреждения вяло: меньше трети действуют в течение суток</p><dl><dt>Период</dt><dd>2026</dd><dt>Как проверить</dt><dd>в пилотной группе посчитать долю нажатий кнопки «добавить из остатка» в течение суток после предупреждения за первые две недели</dd></dl></article><article class="ground" id="claim-50"><h3>У-50 <span class="tag">факт</span> <span class="tag">действует</span></h3><p>По брифу, если у близкого закончилась выделенная ему доля общего пакета, организатор группы уже может добавить интернет из свободного остатка</p><dl><dt>Период</dt><dd>2026</dd><dt>Оговорки</dt><dd>источник пишет о себе</dd><dt>Цитата</dt><dd><p class="quote">«организатор группы уже может добавить интернет из свободного остатка»</p><p class="note"><a class="ref" href="#source-1">И-1</a>; стр. 1; бриф учебного оператора (материал пользователя); проверена: точное вхождение, 21.11.2026</p></dd></dl></article><article class="ground" id="claim-51"><h3>У-51 <span class="tag">факт</span> <span class="tag">действует</span></h3><p>По брифу, участник семейной группы решает, какие сведения о его номере можно видеть, и в любой момент может отозвать согласие</p><dl><dt>Период</dt><dd>2026</dd><dt>Оговорки</dt><dd>источник пишет о себе</dd><dt>Цитата</dt><dd><p class="quote">«Участник решает, какие сведения о его номере можно видеть, и в любой момент может отозвать согласие»</p><p class="note"><a class="ref" href="#source-1">И-1</a>; стр. 1; бриф учебного оператора (материал пользователя); проверена: точное вхождение, 21.11.2026</p></dd></dl></article></section><section class="grounds" id="istochniki"><h2>Источники</h2><article class="ground" id="source-1"><h3>И-1</h3><dl><dt>Вид</dt><dd>PDF</dd><dt>Файл</dt><dd>inputs/Бриф — связь для близких.pdf</dd></dl></article><article class="ground" id="source-2"><h3>И-2</h3><dl><dt>Вид</dt><dd>страница</dd><dt>Адрес</dt><dd><a href="https://spravka.invalid/semeynye-tarify">https://spravka.invalid/semeynye-tarify</a></dd><dt>Дата обращения</dt><dd>21.11.2026</dd><dt>Доступ</dt><dd>имя spravka.invalid не найдено</dd></dl></article><article class="ground" id="source-4"><h3>И-4</h3><dl><dt>Вид</dt><dd>страница</dd><dt>Адрес</dt><dd><a href="https://media.mts.ru/internet/145684">https://media.mts.ru/internet/145684</a></dd><dt>Дата обращения</dt><dd>21.11.2026</dd></dl></article><article class="ground" id="source-8"><h3>И-8</h3><dl><dt>Вид</dt><dd>страница</dd><dt>Адрес</dt><dd><a href="https://www.verizon.com/about/privacy/verizon-family-privacy-policy-for-kids">https://www.verizon.com/about/privacy/verizon-family-privacy-policy-for-kids</a></dd><dt>Дата обращения</dt><dd>21.11.2026</dd></dl></article></section>
+</body>
+</html>

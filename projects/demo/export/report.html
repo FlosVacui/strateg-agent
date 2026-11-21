@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Отчёт</title>
+<style>
+:root { color-scheme: light; }
+* { box-sizing: border-box; }
+html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+body {
+  margin: 0 auto; padding: 24px 20px 48px; max-width: 54rem; color: #1b1b1f; background: #fff;
+  font: 11pt/1.5 "Segoe UI", Arial, "DejaVu Sans", sans-serif; overflow-wrap: anywhere;
+}
+h1 { font-size: 1.7rem; line-height: 1.25; margin: 0 0 1rem; }
+h2 { font-size: 1.3rem; margin: 1.8rem 0 .6rem; border-bottom: 1px solid #c8c8d0; padding-bottom: .2rem; }
+h3 { font-size: 1.1rem; margin: 1.2rem 0 .4rem; }
+h1, h2, h3, h4 { break-after: avoid; }
+p, ul, ol { margin: .5rem 0; }
+code, pre { font-family: Consolas, "DejaVu Sans Mono", monospace; font-size: .92em; }
+pre { background: #f3f3f6; border: 1px solid #d8d8e0; padding: .6rem .8rem; white-space: pre-wrap; }
+blockquote { margin: .6rem 0; padding: .1rem 1rem; border-left: 4px solid #c8c8d0; color: #3a3a44; }
+a { color: #0b4fb3; text-decoration: underline; }
+a.ref { font-weight: 600; white-space: nowrap; }
+table { border-collapse: collapse; width: 100%; margin: .8rem 0; }
+th, td { border: 1px solid #7a7a86; padding: 4px 8px; text-align: left; vertical-align: top; }
+th { background: #ececf1; }
+tr { break-inside: avoid; }
+section.grounds { margin-top: 2.5rem; border-top: 2px solid #1b1b1f; }
+article.ground { border: 1px solid #c8c8d0; border-radius: 4px; padding: .5rem .9rem; margin: .8rem 0;
+  break-inside: avoid; }
+article.ground h3 { margin: 0 0 .3rem; }
+article.ground.replaced, article.ground.revoked { border-style: dashed; background: #fbf6ea; }
+.tag { font-size: .85rem; font-weight: 400; color: #4a4a55; }
+.tag.alert { color: #8a2a00; font-weight: 600; }
+dl { margin: .3rem 0 0; display: grid; grid-template-columns: 9rem 1fr; gap: .15rem .8rem; }
+dt { color: #4a4a55; }
+dd { margin: 0; }
+.quote { margin: 0 0 .3rem; }
+.note { color: #4a4a55; font-size: .95rem; }
+@page { size: A4; margin: 16mm 15mm 18mm; }
+@media print {
+  body { max-width: none; padding: 0; font-size: 10.5pt; }
+  a, a.ref { color: #0b4fb3; text-decoration: underline; }
+}
+@media (max-width: 40rem) { dl { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<h1>Отчёт</h1>
+<h2>Кратко</h2>
+<p>Неполно: проверка полноты не прошла по признакам Б-3, Б-9, Б-10, Б-13, Б-15; Б-7 исправлен и повторно не проверялся; выпуск по вашему слову. Выбран Вар-2 (пилот для семейных групп: предупреждение организатору об остатке общего пакета и действие «добавить из остатка»). Рекомендация была Вар-5, сначала проверка причины. Главный довод: уведомления помогают удерживаться в пределах пакета (<a href="#claim-30" class="ref">У-30</a>, факт). Главный пробел: эффекта предупреждений на перебои и отток независимо не измеряли (П-1). Принято 9 допущений, список в <code>outputs/frame.md</code>.</p>
+<h2>Картина ситуации</h2>
+<p>Операторы уже дают единый кабинет, пополнение за близких и лимиты; правила согласия участника открыты. Причины перебоев именно у семейных групп, эффект предупреждений, конверсия, выручка и затраты открытыми данными не закрываются. Споров между источниками нет. См. <code>outputs/situation.md</code>.</p>
+<h2>Варианты</h2>
+<p>Шесть вариантов: оставить как есть, три пилота (семьи, владельцы нескольких номеров, разбор начислений), проверка причины и «не запускать». Варианты различаются аудиторией и ценностью. Рекомендован Вар-5, выбран Вар-2. См. <code>outputs/options.md</code>.</p>
+<h2>Стратегии</h2>
+<p>Направление: помогать организатору раньше, чем близкий попросит, без новых сведений сверх остатка пакета. Отказы: начисления участника, автопополнение, предупреждения без согласия. Главное сообщение: интернет близкому можно добавить из свободного остатка [О-2], остаток виден только с разрешения [О-3]; обещание «предупредим заранее» не подтверждено и не идёт в сообщения. См. <code>outputs/product-strategy.md</code>, <code>outputs/comms-strategy.md</code>.</p>
+<h2>План проверки</h2>
+<p>Проверяем эффект на долю перебоев против контроля за квартал (ПП-1) и реакцию организаторов за сутки за две недели (ПП-5). Условия отказа: исчерпание пакета или неоплата выше 50 % причин, прибыль пилота ниже 6 млн руб., «уже знал» выше 50 из 100. Все пороги предложены, базы нет. См. <code>outputs/verification-plan.md</code>.</p>
+<h2>Пробелы</h2>
+<ul>
+<li>П-1: эффект предупреждений на отток и перебои неизвестен; влияет на выбор.</li>
+<li>П-2: причины перебоя в семейных группах неизвестны; влияет на выбор.</li>
+<li>П-4: выручка и затраты неизвестны; влияет на выбор.</li>
+<li>П-3 (конверсия) и П-5 (справка по тарифам не открылась): на выбор не влияют.
+См. <code>outputs/situation.md</code>.</li>
+</ul>
+<h2>Решение</h2>
+<p>Реш-1: Вар-2; основания <a href="#claim-9" class="ref">У-9</a>, <a href="#claim-30" class="ref">У-30</a>, <a href="#claim-37" class="ref">У-37</a>, <a href="#claim-39" class="ref">У-39</a>; отвергнуты Вар-1, Вар-3, Вар-4, Вар-5, Вар-6. Владелец: руководитель направления; пересмотр 30.06.2027. Выбор, владелец и дата пересмотра подтверждены человеком; пороги плана проверки предложены агентом. Условия отказа: шесть, с порогами в <code>verification-plan.md</code>. Причина пре-мортема <a href="#claim-47" class="ref">У-47</a> бьёт по главному допущению выбора; вы оставили выбор.</p>
+<section class="grounds" id="osnovaniya"><h2>Основания</h2><article class="ground" id="claim-9"><h3>У-9 <span class="tag">факт</span> <span class="tag">действует</span></h3><p>По статистике Роскомнадзора за второй квартал (пересказ «Известий» в «Интерфаксе») самыми частыми жалобами абонентов на операторов сотовой связи были навязывание дополнительных платных услуг и завышение счёта, реже жаловались на качество связи</p><dl><dt>Период</dt><dd>2019</dd><dt>Цитата</dt><dd><p class="quote">«Наиболее частыми жалобами российских абонентов к операторам сотовой связи являются навязывание дополнительных платных услуг и завышение счета компаниями, несколько реже пользователи жалуются на качество связи»</p><p class="note"><a class="ref" href="#source-13">И-13</a>; первый абзац новости; Роскомнадзор (статистика), через «Известия» и «Интерфакс» (СМИ); проверена: точное вхождение, 21.11.2026</p></dd></dl></article><article class="ground" id="claim-30"><h3>У-30 <span class="tag">факт</span> <span class="tag">действует</span></h3><p>По данным исследования Emory (Goizueta), уведомления об использовании помогают клиентам оставаться в пределах пакета данных; на тех, у кого пакет больше, они действуют заметно сильнее, чем на тех, у кого малый пакет</p><dl><dt>Период</dt><dd>2022</dd><dt>Цитаты</dt><dd><p class="quote">«they do help all customers adjust their behavior to stay within their allowance»</p><p class="note"><a class="ref" href="#source-17">И-17</a>; основной текст, 4-й абзац; Goizueta Business School, Emory University (отраслевое исследование); проверена: точное вхождение, 21.11.2026</p><p class="quote">«these consumption nudges seem to be significantly more effective with customers who have purchased higher data allowance than those who opt for low-capped packages»</p><p class="note"><a class="ref" href="#source-17">И-17</a>; основной текст, 5-й абзац; Goizueta Business School, Emory University (отраслевое исследование); проверена: точное вхождение, 21.11.2026</p></dd></dl></article><article class="ground" id="claim-37"><h3>У-37 <span class="tag">допущение</span> <span class="tag">действует</span></h3><p>По опыту поддержки, в семейных группах чаще всего жалуются на исчерпание общего пакета, на неоплату реже; это учебная оценка руководителя, не факт</p><dl><dt>Период</dt><dd>2026</dd><dt>Откуда взято</dt><dd>слова руководителя в чате: опыт поддержки, учебная оценка</dd></dl></article><article class="ground" id="claim-39"><h3>У-39 <span class="tag">гипотеза</span> <span class="tag">действует</span></h3><p>Журналы обращений оператора не отделяют перебой из-за исчерпания пакета от перебоя из-за неоплаты, и причину придётся размечать вручную</p><dl><dt>Период</dt><dd>2026</dd><dt>Как проверить</dt><dd>выгрузить обращения семейных групп за месяц, вручную разметить причину по сотне случаев и посмотреть, у какой доли причина читается из записи</dd></dl></article><article class="ground" id="claim-47"><h3>У-47 <span class="tag">гипотеза</span> <span class="tag">действует</span></h3><p>Просьба близких доходит до организатора раньше, чем предупреждение: «поздно» узнаёт не организатор, а оператор, и предупреждение ничего не добавляет</p><dl><dt>Период</dt><dd>2026</dd><dt>Как проверить</dt><dd>в пробном месяце спросить организаторов пилотной группы после каждого предупреждения, знали ли они о нехватке до него, и сверить с журналом времени предупреждений</dd></dl></article></section><section class="grounds" id="istochniki"><h2>Источники</h2><article class="ground" id="source-13"><h3>И-13</h3><dl><dt>Вид</dt><dd>страница</dd><dt>Адрес</dt><dd><a href="https://www.interfax.ru/russia/668678">https://www.interfax.ru/russia/668678</a></dd><dt>Дата обращения</dt><dd>21.11.2026</dd></dl></article><article class="ground" id="source-17"><h3>И-17</h3><dl><dt>Вид</dt><dd>страница</dd><dt>Адрес</dt><dd><a href="https://goizueta.emory.edu/research-spotlight/check-your-phone-emory-experts-are-asking-do-alerts-actually-help-customers">https://goizueta.emory.edu/research-spotlight/check-your-phone-emory-experts-are-asking-do-alerts-actually-help-customers</a></dd><dt>Дата обращения</dt><dd>21.11.2026</dd></dl></article></section>
+</body>
+</html>

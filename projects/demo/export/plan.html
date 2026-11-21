@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>План исследования</title>
+<style>
+:root { color-scheme: light; }
+* { box-sizing: border-box; }
+html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+body {
+  margin: 0 auto; padding: 24px 20px 48px; max-width: 54rem; color: #1b1b1f; background: #fff;
+  font: 11pt/1.5 "Segoe UI", Arial, "DejaVu Sans", sans-serif; overflow-wrap: anywhere;
+}
+h1 { font-size: 1.7rem; line-height: 1.25; margin: 0 0 1rem; }
+h2 { font-size: 1.3rem; margin: 1.8rem 0 .6rem; border-bottom: 1px solid #c8c8d0; padding-bottom: .2rem; }
+h3 { font-size: 1.1rem; margin: 1.2rem 0 .4rem; }
+h1, h2, h3, h4 { break-after: avoid; }
+p, ul, ol { margin: .5rem 0; }
+code, pre { font-family: Consolas, "DejaVu Sans Mono", monospace; font-size: .92em; }
+pre { background: #f3f3f6; border: 1px solid #d8d8e0; padding: .6rem .8rem; white-space: pre-wrap; }
+blockquote { margin: .6rem 0; padding: .1rem 1rem; border-left: 4px solid #c8c8d0; color: #3a3a44; }
+a { color: #0b4fb3; text-decoration: underline; }
+a.ref { font-weight: 600; white-space: nowrap; }
+table { border-collapse: collapse; width: 100%; margin: .8rem 0; }
+th, td { border: 1px solid #7a7a86; padding: 4px 8px; text-align: left; vertical-align: top; }
+th { background: #ececf1; }
+tr { break-inside: avoid; }
+section.grounds { margin-top: 2.5rem; border-top: 2px solid #1b1b1f; }
+article.ground { border: 1px solid #c8c8d0; border-radius: 4px; padding: .5rem .9rem; margin: .8rem 0;
+  break-inside: avoid; }
+article.ground h3 { margin: 0 0 .3rem; }
+article.ground.replaced, article.ground.revoked { border-style: dashed; background: #fbf6ea; }
+.tag { font-size: .85rem; font-weight: 400; color: #4a4a55; }
+.tag.alert { color: #8a2a00; font-weight: 600; }
+dl { margin: .3rem 0 0; display: grid; grid-template-columns: 9rem 1fr; gap: .15rem .8rem; }
+dt { color: #4a4a55; }
+dd { margin: 0; }
+.quote { margin: 0 0 .3rem; }
+.note { color: #4a4a55; font-size: .95rem; }
+@page { size: A4; margin: 16mm 15mm 18mm; }
+@media print {
+  body { max-width: none; padding: 0; font-size: 10.5pt; }
+  a, a.ref { color: #0b4fb3; text-decoration: underline; }
+}
+@media (max-width: 40rem) { dl { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<h1>План исследования</h1>
+<h2>Кратко</h2>
+<p>В плане четыре вопроса: причины перебоев (ВП-1), что операторы уже дают клиентам (ВП-2), эффект предупреждений на перебои и отток (ВП-3), согласие и видимость данных (ВП-4). Они покрывают охват, удержание и отток, выручку и затраты, качество услуги. Конверсия в подключение по открытым данным не измеряется, её закроют допущения и план проверки пилота. Оценка пути до выпуска — около $5 и 30 минут. Допущений в рамке принято три, см. <code>outputs/frame.md</code>.</p>
+<h2>Вопросы плана</h2>
+<table>
+<thead>
+<tr>
+<th>Вопрос</th>
+<th>Влияние</th>
+<th>Если А → действие</th>
+<th>Если Б → действие</th>
+<th>Где искать</th>
+<th>Цена закрытия</th>
+<th>Статус</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ВП-1. Какие причины перебоя связи и неприятных сюрпризов (исчерпание пакета, неоплата, непонятное списание) чаще всего встречаются в открытых данных об абонентах семейных тарифов и нескольких номеров</td>
+<td>высокое</td>
+<td>перебой чаще из-за исчерпания пакета → пилот для семейных групп: предупреждение об остатке и действие организатора</td>
+<td>чаще неоплата или непонятные списания → пилот про платёж или разбор начислений</td>
+<td>отчёты операторов и регуляторов об обращениях абонентов, отраслевые обзоры</td>
+<td>$0,5, 6 мин</td>
+<td>открыт</td>
+</tr>
+<tr>
+<td>ВП-2. Что операторы уже дают бесплатно или за плату: уведомления об остатке, докупка пакета организатором, контроль расходов, единый кабинет</td>
+<td>высокое</td>
+<td>близкое уже есть без платы → самый простой вариант: сигнал в существующем приложении</td>
+<td>готового предупреждения нет → новый кабинет или отдельная услуга</td>
+<td>страницы условий и справки операторов</td>
+<td>$0,5, 6 мин</td>
+<td>открыт</td>
+</tr>
+<tr>
+<td>ВП-3. Есть ли открытые данные, что предупреждения об остатке или платеже снижают перебои и отток</td>
+<td>высокое</td>
+<td>свидетельства есть → одобрить пилот, диапазон эффекта от свидетельств</td>
+<td>свидетельств нет → сначала дешёвая проверка причины</td>
+<td>исследования удержания в телекоме, отчёты операторов</td>
+<td>$0,5, 6 мин</td>
+<td>открыт</td>
+</tr>
+<tr>
+<td>ВП-4. Какие условия согласия и видимости данных участника для организатора действуют у операторов и в открытых правилах защиты данных</td>
+<td>среднее</td>
+<td>остаток можно показывать при согласии участника → путь на согласии, начисления отдельно</td>
+<td>нужно отдельное согласие, ограничения шире → сузить пилот и заложить срок на проверку</td>
+<td>оферты и справка операторов, открытые правила обработки данных</td>
+<td>$0,4, 5 мин</td>
+<td>открыт</td>
+</tr>
+</tbody>
+</table>
+<h2>Исключено из плана</h2>
+<ul>
+<li>Названия реальных операторов-конкурентов и их доли рынка: рынок учебный, ни одно действие от них не меняется.</li>
+<li>Точная стоимость разработки: неизвестна и вне рамки, расчёт даст предельную сумму вложений.</li>
+</ul>
+<h2>Оценка пути</h2>
+<p>Оценка: около $5,0 и 30 минут на весь путь до выпуска, включая пре-мортем и проверку полноты. Остаток бюджета: $7,43 из $8 и 59,0 из 60 минут, оценка укладывается.</p>
+
+</body>
+</html>

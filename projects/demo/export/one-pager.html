@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Одна страница для решения</title>
+<style>
+:root { color-scheme: light; }
+* { box-sizing: border-box; }
+html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+body {
+  margin: 0 auto; padding: 24px 20px 48px; max-width: 54rem; color: #1b1b1f; background: #fff;
+  font: 11pt/1.5 "Segoe UI", Arial, "DejaVu Sans", sans-serif; overflow-wrap: anywhere;
+}
+h1 { font-size: 1.7rem; line-height: 1.25; margin: 0 0 1rem; }
+h2 { font-size: 1.3rem; margin: 1.8rem 0 .6rem; border-bottom: 1px solid #c8c8d0; padding-bottom: .2rem; }
+h3 { font-size: 1.1rem; margin: 1.2rem 0 .4rem; }
+h1, h2, h3, h4 { break-after: avoid; }
+p, ul, ol { margin: .5rem 0; }
+code, pre { font-family: Consolas, "DejaVu Sans Mono", monospace; font-size: .92em; }
+pre { background: #f3f3f6; border: 1px solid #d8d8e0; padding: .6rem .8rem; white-space: pre-wrap; }
+blockquote { margin: .6rem 0; padding: .1rem 1rem; border-left: 4px solid #c8c8d0; color: #3a3a44; }
+a { color: #0b4fb3; text-decoration: underline; }
+a.ref { font-weight: 600; white-space: nowrap; }
+table { border-collapse: collapse; width: 100%; margin: .8rem 0; }
+th, td { border: 1px solid #7a7a86; padding: 4px 8px; text-align: left; vertical-align: top; }
+th { background: #ececf1; }
+tr { break-inside: avoid; }
+section.grounds { margin-top: 2.5rem; border-top: 2px solid #1b1b1f; }
+article.ground { border: 1px solid #c8c8d0; border-radius: 4px; padding: .5rem .9rem; margin: .8rem 0;
+  break-inside: avoid; }
+article.ground h3 { margin: 0 0 .3rem; }
+article.ground.replaced, article.ground.revoked { border-style: dashed; background: #fbf6ea; }
+.tag { font-size: .85rem; font-weight: 400; color: #4a4a55; }
+.tag.alert { color: #8a2a00; font-weight: 600; }
+dl { margin: .3rem 0 0; display: grid; grid-template-columns: 9rem 1fr; gap: .15rem .8rem; }
+dt { color: #4a4a55; }
+dd { margin: 0; }
+.quote { margin: 0 0 .3rem; }
+.note { color: #4a4a55; font-size: .95rem; }
+@page { size: A4; margin: 16mm 15mm 18mm; }
+@media print {
+  body { max-width: none; padding: 0; font-size: 10.5pt; }
+  a, a.ref { color: #0b4fb3; text-decoration: underline; }
+}
+@media (max-width: 40rem) { dl { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<h1>Одна страница для решения</h1>
+<h2>Кратко</h2>
+<p>Неполно: проверка полноты не прошла по пяти признакам (пробелы, страница из запроса, охват и качество, пороги плана проверки, расчёт рекомендации); выпуск по вашему слову. Вы выбрали Вар-2: пилот для семейных групп с предупреждением организатору об остатке общего пакета. Рекомендация была другой, Вар-5, сначала проверить причину. Главный довод пилота: уведомления помогают удерживаться в пределах пакета. Главный риск: организатор может узнавать о нехватке раньше предупреждения. Не проверено: эффект на перебои и отток, причины перебоев в группах, затраты. Принято 9 допущений, список в <code>outputs/frame.md</code>.</p>
+<h2>Рекомендация и почему</h2>
+<p>Рекомендован Вар-5: выгрузка обращений и опрос семей, около 15 минут на ответ о причинах перебоев (П-2), до затрат на пилот. Выбор условный: открытые данные не различают пилоты по эффекту, а жалобы абонентов в целом касаются счетов и платных услуг, а не перебоев групп (<a href="#claim-9" class="ref">У-9</a>, факт, 2019 год); уведомления меняют поведение в пределах пакета (<a href="#claim-30" class="ref">У-30</a>, факт).</p>
+<h2>Сильнейшее возражение и ответ</h2>
+<p>После выгрузки всё равно нужен пилот с контрольной группой. Да: проверка не заменяет пилот, а выбирает его вид, про общий пакет или про начисления. Цена проверки — задержка помощи клиентам; срок не оценён.</p>
+<h2>Что заставит передумать</h2>
+<ul>
+<li>Исчерпание пакета выше 50 % размеченных причин: пилот Вар-2 с контрольной группой.</li>
+<li>Неоплата и непонятные списания выше 50 %: Вар-4.</li>
+<li>Прирост прибыли пилота ниже 6 млн руб. (285 − 279): не запускать.</li>
+<li>Организатор «уже знал» на более чем 50 из 100 предупреждений: остановить запуск, перейти к проверке причины.</li>
+</ul>
+<h2>Владелец и пересмотр</h2>
+<p>Владелец: руководитель направления; пересмотр до 30.06.2027. Оба значения подтверждены человеком; пороги плана проверки по-прежнему предложены агентом.</p>
+<section class="grounds" id="osnovaniya"><h2>Основания</h2><article class="ground" id="claim-9"><h3>У-9 <span class="tag">факт</span> <span class="tag">действует</span></h3><p>По статистике Роскомнадзора за второй квартал (пересказ «Известий» в «Интерфаксе») самыми частыми жалобами абонентов на операторов сотовой связи были навязывание дополнительных платных услуг и завышение счёта, реже жаловались на качество связи</p><dl><dt>Период</dt><dd>2019</dd><dt>Цитата</dt><dd><p class="quote">«Наиболее частыми жалобами российских абонентов к операторам сотовой связи являются навязывание дополнительных платных услуг и завышение счета компаниями, несколько реже пользователи жалуются на качество связи»</p><p class="note"><a class="ref" href="#source-13">И-13</a>; первый абзац новости; Роскомнадзор (статистика), через «Известия» и «Интерфакс» (СМИ); проверена: точное вхождение, 21.11.2026</p></dd></dl></article><article class="ground" id="claim-30"><h3>У-30 <span class="tag">факт</span> <span class="tag">действует</span></h3><p>По данным исследования Emory (Goizueta), уведомления об использовании помогают клиентам оставаться в пределах пакета данных; на тех, у кого пакет больше, они действуют заметно сильнее, чем на тех, у кого малый пакет</p><dl><dt>Период</dt><dd>2022</dd><dt>Цитаты</dt><dd><p class="quote">«they do help all customers adjust their behavior to stay within their allowance»</p><p class="note"><a class="ref" href="#source-17">И-17</a>; основной текст, 4-й абзац; Goizueta Business School, Emory University (отраслевое исследование); проверена: точное вхождение, 21.11.2026</p><p class="quote">«these consumption nudges seem to be significantly more effective with customers who have purchased higher data allowance than those who opt for low-capped packages»</p><p class="note"><a class="ref" href="#source-17">И-17</a>; основной текст, 5-й абзац; Goizueta Business School, Emory University (отраслевое исследование); проверена: точное вхождение, 21.11.2026</p></dd></dl></article></section><section class="grounds" id="istochniki"><h2>Источники</h2><article class="ground" id="source-13"><h3>И-13</h3><dl><dt>Вид</dt><dd>страница</dd><dt>Адрес</dt><dd><a href="https://www.interfax.ru/russia/668678">https://www.interfax.ru/russia/668678</a></dd><dt>Дата обращения</dt><dd>21.11.2026</dd></dl></article><article class="ground" id="source-17"><h3>И-17</h3><dl><dt>Вид</dt><dd>страница</dd><dt>Адрес</dt><dd><a href="https://goizueta.emory.edu/research-spotlight/check-your-phone-emory-experts-are-asking-do-alerts-actually-help-customers">https://goizueta.emory.edu/research-spotlight/check-your-phone-emory-experts-are-asking-do-alerts-actually-help-customers</a></dd><dt>Дата обращения</dt><dd>21.11.2026</dd></dl></article></section>
+</body>
+</html>

@@ -1,0 +1,126 @@
+schema_version: 1
+step: '6'
+checked_at: '2026-11-21T17:57:43+03:00'
+by: критик
+part_a:
+- id: А-1
+  answer: да
+- id: А-2
+  answer: да
+- id: А-3
+  answer: да
+- id: А-4
+  answer: да
+- id: А-5
+  answer: да
+- id: А-6
+  answer: да
+- id: А-7
+  answer: да
+- id: А-8
+  answer: да
+- id: А-9
+  answer: да
+- id: А-10
+  answer: да
+- id: А-11
+  answer: да
+- id: А-12
+  answer: да
+- id: А-13
+  answer: да
+- id: А-14
+  answer: да
+- id: А-15
+  answer: да
+- id: А-16
+  answer: да
+- id: А-17
+  answer: да
+- id: А-18
+  answer: да
+- id: А-19
+  answer: да
+- id: А-21
+  answer: да
+- id: А-22
+  answer: да
+- id: А-23
+  answer: да
+- id: А-24
+  answer: да
+- id: А-25
+  answer: да
+part_b:
+- id: Б-1
+  answer: да
+  where: plan.yaml, ВП-1…ВП-4
+  why: у каждой ветки своё действие
+- id: Б-2
+  answer: да
+  where: options.yaml, Вар-2…Вар-5
+  why: активные варианты различаются аудиторией и ценностью, не масштабом
+- id: Б-3
+  answer: нет
+  where: gaps.yaml, П-5, П-2
+  why: у П-5 один вид источника и два запроса по предмету не набираются; запрос 2 у П-2 записан как пометка,
+    а не формулировка
+- id: Б-4
+  answer: да
+  where: options.yaml, recommendation
+  why: сказано «выбор условный», названы П-1 и П-2, возражение переведено в change_mind с порогами
+- id: Б-5
+  answer: да
+  where: 'recommendation.claims: У-9, У-30'
+  why: факты подтверждены снимками и поданы не шире цитат
+- id: Б-6
+  answer: да
+  where: promises.yaml, comms-strategy.md
+  why: данные компаний помечены, обещание результата не подтверждено и не идёт в сообщения
+- id: Б-7
+  answer: нет
+  where: comms-strategy.md, «Кратко» и «Барьер»
+  why: обещания О-2 и О-3 повторены без меток [О-n]
+- id: Б-8
+  answer: да
+  where: comms-strategy.md, product-strategy.md
+  why: сообщения опираются на аудиторию и направление, отказов не касаются
+- id: Б-9
+  answer: нет
+  where: sources.yaml И-2, comms-strategy.md
+  why: справка из запроса не открылась; границы в сообщениях взяты из брифа, а утверждений о них нет
+- id: Б-10
+  answer: нет
+  where: gaps.yaml, metric_coverage, П-5
+  why: качество продукта закрыто пробелом о недоступной справке (соседняя величина); связь охвата с П-2
+    натянута
+- id: Б-11
+  answer: да
+  where: verification.yaml, premortem
+  why: У-47 бьёт по допущению выбора и отмечена, остановка записана
+- id: Б-12
+  answer: да
+  where: product-strategy.md, отказы
+  why: у каждого отказа названы потеря и условие возврата
+- id: Б-13
+  answer: нет
+  where: verification.yaml, ПП-10, ПП-11, ПП-1
+  why: у ПП-10 и ПП-11 нет объяснения порога; минимальный эффект ПП-1 обоснован по кругу
+- id: Б-14
+  answer: да
+  where: product-strategy.md, Альтернативы
+  why: первой стоит текущая практика
+- id: Б-15
+  answer: нет
+  where: options.yaml, Вар-5, recommendation
+  why: 'рекомендация держится на разнице неоценённых величин: около 15 минут против квартала пилота, а
+    затраты и срок Вар-5 записаны как «не оценены, П-4»'
+result: не пройдено
+failed:
+- Б-3
+- Б-7
+- Б-9
+- Б-10
+- Б-13
+- Б-15
+critic_call: подтверждён

@@ -96,6 +96,12 @@ EXCEPTIONS: dict[str, set[str]] = {
 
 SKIP_DIRS = {".venv", ".git", "__pycache__", ".pytest_cache", ".ruff_cache", "node_modules"}
 
+# Материал извне в проектах-образцах: снимки страниц (`sources/`), файлы человека (`inputs/`) и PDF выгрузки
+# (`export/*.pdf`, сжатые байты). Это чужой текст: в нём может быть любое слово или номер, поэтому словари
+# служебных слов и номеров к нему не применяются. Личные пути, почта, имена и служебные адреса — проверяются.
+EXTERNAL_MATERIAL = re.compile(r"^projects/[^/]+/(?:sources/|inputs/|export/[^/]+\.pdf$)")
+PRIVATE_LABELS = {"личный путь Windows", "личный путь macOS", "личный путь Linux", "личная почта"}
+
 
 def _walk() -> list[Path]:
     return [
@@ -146,10 +152,23 @@ def violations(rel: str, original: str) -> list[str]:
             found.append(label)
     if "имя участника" not in allowed:
         found += [f"имя участника ({h})" for h in known_names(text + " " + rel)]
+    external = bool(EXTERNAL_MATERIAL.match(rel))
     for label, pattern in PATTERNS.items():
+        if external and label not in PRIVATE_LABELS:
+            continue
         if label not in allowed and (pattern.search(text) or pattern.search(rel)):
             found.append(label)
     return found
+
+
+def test_external_material_is_checked_only_for_private_traces():
+    word = "рев" + "ью"
+    assert violations("projects/demo/sources/i-1.txt", f"текст страницы: {word}") == []
+    assert violations("projects/demo/export/plan.pdf", "R" + "V-1") == []
+    assert violations("projects/demo/outputs/plan.md", f"текст: {word}") != []
+    assert violations("projects/demo/export/plan.html", f"текст: {word}") != []
+    path = "C:" + "\\" + "Users" + "\\" + "someone"
+    assert "личный путь Windows" in violations("projects/demo/sources/i-1.txt", path)
 
 
 def sponsor_in_fixture(rel: str, original: str) -> bool:
