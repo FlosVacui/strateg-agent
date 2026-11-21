@@ -1,0 +1,223 @@
+Informa TechTarget |
+Telecoms Channel Dive TechTarget Infrastructure
+Explore our brands An Informa TechTarget Publication
+Leading Lights Awards Network X Webinars Partner with us
+Newsletter Sign-Up
+Network Tech
+Related Topics
+Optical Networking
+Broadband
+Semiconductors
+Cable Technology
+Routing & Switching
+SDN
+Recent in Network Tech
+See all
+Broadband
+The Buildout: WOW goes wide in Georgia The Buildout: WOW goes wide in Georgia
+by Nicole Ferraro
+Nov 20, 2026
+5 Min Read
+Cable Technology
+Maria Popo stepping down as SCTE president and CEO Maria Popo stepping down as SCTE president and CEO
+by Jeff Baumgartner
+Nov 19, 2026
+3 Min Read
+Wireless
+Related Topics
+5G
+Mobile Core
+6G
+Open RAN
+Satellite
+Smartphones & Devices
+2G/3G/4G
+Private Networks
+IOT
+Recent in Wireless
+See all
+Sponsored Content
+Operator Survey: Real progress toward AI RAN Operator Survey: Real progress toward AI RAN
+by Gabriel Brown
+Nov 20, 2026
+3 Min Read
+Sustainability
+Eurobites: VMO2 soups up its 'social' broadband packages Eurobites: VMO2 soups up its 'social' broadband packages
+by Paul Rainford
+Nov 20, 2026
+2 Min Read
+Software
+Related Topics
+OSS/BSS/CX
+Network Platforms
+Recent in Software
+See All
+IOT
+Verizon IoT connects Bosch Motorsport race cars at 200 mph Verizon IoT connects Bosch Motorsport race cars at 200 mph
+by Michelle Donegan
+Nov 18, 2026
+3 Min Read
+AI & Machine Learning
+VodafoneThree to test Nokia's AI-RAN with Nvidia GPUs VodafoneThree to test Nokia's AI-RAN with Nvidia GPUs
+by Michelle Donegan
+Nov 18, 2026
+4 Min Read
+IT Infrastructure
+Related Topics
+Data Centers
+The Edge Network
+Recent in IT Infrastructure
+See all
+AI & Machine Learning
+Eurobites: Nokia and friends plan 'Northern' AI gigafactory Eurobites: Nokia and friends plan 'Northern' AI gigafactory
+by Paul Rainford
+Nov 16, 2026
+2 Min Read
+Data Centers
+SKT powers up AI data centers with Hyosung SKT powers up AI data centers with Hyosung
+by Gigi Onag
+Nov 16, 2026
+2 Min Read
+Digital Transformation
+Related Topics
+AI & Machine Learning
+Network Automation
+Security
+Cloud
+Virtualization
+Customer Experience
+Recent in Digital Transformation
+See all
+Sponsored Content
+Operator Survey: Real progress toward AI RAN Operator Survey: Real progress toward AI RAN
+by Gabriel Brown
+Nov 20, 2026
+3 Min Read
+Satellite
+Eurobites: Orange Spain to track cattle with Skylo's satellites Eurobites: Orange Spain to track cattle with Skylo's satellites
+by Tereza Krásová
+Nov 19, 2026
+3 Min Read
+Business
+Related Topics
+Operations
+Business Transformation
+Regulatory & Politics
+Sustainability
+Diversity & Inclusion
+Finance
+Asia
+Recent in Business
+See all
+Regulatory & Politics
+FCC tightens grip on Chinese telcos, blocks direct access to US phone numbers FCC tightens grip on Chinese telcos, blocks direct access to US phone numbers
+by Gigi Onag
+Nov 20, 2026
+2 Min Read
+Sustainability
+Eurobites: VMO2 soups up its 'social' broadband packages Eurobites: VMO2 soups up its 'social' broadband packages
+by Paul Rainford
+Nov 20, 2026
+2 Min Read
+Services
+Related Topics
+Video Broadcast
+Video Streaming
+CDN
+SD-WAN
+Recent in Services
+See all
+Sustainability
+Eurobites: VMO2 soups up its 'social' broadband packages Eurobites: VMO2 soups up its 'social' broadband packages
+by Paul Rainford
+Nov 20, 2026
+2 Min Read
+Cable Technology
+Comcast touts Fastly partnership as gaming downloads and sports streaming collide Comcast touts Fastly partnership as gaming downloads and sports streaming collide
+Nov 18, 2026
+2 Min Read
+More
+Related Topics
+Newsletters
+Webinars
+Leading Lights Awards
+White Papers
+Videos
+Podcasts
+Symposiums
+Omdia Telecoms Research
+About us
+Meet the Light Reading Team
+Light Reading Resource Library
+Mobile Core
+Wireless
+Commentary
+Avoiding the Prepaid Death Spiral
+Operators that mainly serve prepaid customers must figure out a strategy for tackling churn.
+Steve Polsky, Founder & CEO, Juvo
+April 8, 2019
+5 Min Read
+Imagine a situation where the active roster of every American football team, or the first-team squad of every Spanish soccer team, changed in its entirety every two years. No more Tom Brady and his six Superbowl successes for the Patriots; no more Lionel Messi and his 33 trophies with Barcelona.
+Now, while some sports fans might like the idea of sharing those superstars around, imagine how the costs involved would continue to spiral as all the teams chased all the players all the time. No stability, no loyalty, no long-term relationships or planning -- just a constantly changing cast of characters.
+It's no way to run a sports franchise, or indeed a business, where certainty and stability is usually required to make a real success of an enterprise. Amazingly though, that very scenario is being played out in prepaid mobile markets all across the world.
+Prepaid is the great mobile market we don't talk about , yet its 5.7 billion users dominate the industry -- representing 71% of all mobile connections and accounting for 32%, or $265 billion, of global mobile service revenues.
+New insight
+Research carried out by Strategy Analytics has lifted the lid on the death spiral sitting at the heart of the prepaid market. The report -- " Death by a Thousand Nos " -- showed that, on average, operators in emerging markets must replace their entire prepaid subscriber base every two years; in some markets, the annual churn rates touched 80%. Imagine that in a region like Africa, where the prepaid market represents 94% of the continent's connections and 80% of its mobile revenues.
+This never-ending cycle of churn and replace sees billions of dollars of operator opex being wasted annually, as operators chase their tails acquiring and re-acquiring the same constantly churning customers. In the eight markets that Strategy Analytics focused on for the research -- Argentina, Brazil, India, Malaysia, Mexico, the Philippines, South Africa and Thailand -- the operators collectively spent some $670 million in 2018 replacing lost prepaid subscribers.
+It gets worse. In many cases, existing telco business models are actually geared towards trophy-hunting the same churning prepaid customers. In the last year, 90% of the cost of prepaid subscriber acquisition was devoted to replacing churning customers. Just 10% of the spend was focused on retention and revenue growth. In most businesses, this would be seen as folly and unsustainable. In the mobile market it is considered normal.
+However, the truth is that the current telco prepaid business model is not sustainable -- especially when the introduction of e-SIMs is going to make the whole process of switching operators even easier for everyone. This includes that highly valued and protected species of customer known as "post-paid."
+Breaking free
+So how do operators go about breaking the death spiral? What tools can reduce churn, build relationships and encourage loyalty? It can't be about airtime incentives or larger data bundles, because that's what every operator is doing, and is the key factor underpinning and encouraging the churn in the first place.
+According to the Strategy Analytics data, one answer could be for operators to put an end to the culture that says "No" when a customer hits a zero balance -- something that occurs for the average prepaid customer once every week. Two things happen when a prepaid customer hits zero balance -- the first is that they stop using their phone; the second is that they start looking for a deal. Neither of these developments is good for their current operator.
+Short-term thinking, a lack of trust, and an economy characterized by an aversion to risk that manifests itself in a tendency towards saying "No" rather than "Yes" are all part of the churn problem. A customer hitting zero balance should be an opportunity for the existing operator to retain them and encourage their loyalty, rather than a chance for a rival operator to acquire them.
+A positive strategy
+A prepaid customer proactively offered a low-risk, short-term credit facility, so that they can carry on making calls and accessing data services, will be deterred from shopping around for a better deal. The short-term credit is repaid when they top up. Saying "Yes" to that customer, at that time, can also mark the beginning of a longer-lasting, and mutually beneficial relationship -- one in which the customer gets access to more services, and the operator gets to learn more about that customer's identity.
+Currently, prepaid users are virtually invisible to their operators. Many of them do not have any formal financial identity and this only encourages the "No" culture. But the operator that says "Yes" to a small interest-free airtime credit extension can then start to build a picture based on payback behavior, using machine learning to determine individualized lending criteria based on real-time data.
+Using this model, customers can continue to borrow and pay back larger and larger amounts of credit. This will slowly build trust, reducing risk and forging a financial identity that creates a compelling reason to stay with their operator. Their SIM card has effectively become their first "formal" proof of financial identity and reliability, providing access to more sophisticated financial services.
+Simply by saying "Yes" and meeting their customer's needs at the right time, operators can benefit from improved engagement, increased subscriber lifetime value, and ultimately, reduced churn. It turns out that saying "Yes" more often is the way to stave off "Death by a Thousand Nos" and to escape the prepaid death spiral.
+— Steve Polsky, CEO, Juvo
+Read more about:
+Europe Asia
+About the Author
+Steve Polsky
+Founder & CEO, Juvo
+Steve founded Juvo with the mission to establish financial identities for the billions of people worldwide who are creditworthy yet financially excluded. Working with mobile operators, Juvo provides ongoing personalized access to otherwise unattainable financial services. Since coming out of stealth in September 2016, Juvo has increased subscriber reach from 100 million to 500 million across 25 countries and been recognized by the World Economic Forum as a Technology Pioneer. Steve's career has centered on founding, launching and managing early stage technology ventures, including Flixster/Rotten Tomatoes, Amber Networks, VoicePlex Corporation and Edusoft. He holds five patents in telecommunications network architecture.
+See more from Steve Polsky
+Want more Light Reading stories in your Google search results?
+Add Us Now
+Subscribe and receive the latest news from the industry.
+Join 62,000+ members. Yes it's completely free.
+Sign me up
+Want more Light Reading stories in your Google search results?
+OFC Conference and Exhibition
+Experience OFC. Where the industry goes to learn, showcase technologies, forge partnerships and close deals.
+Registration is Open
+Popular whitepapers in 5G
+More whitepapers
+Sponsored Content
+Antenna Monitoring for Programmable Performance Antenna Monitoring for Programmable Performance
+Jan 12, 2026
+Sponsored Content
+Antenna Beam Efficiency in Urban 4G/5G Networks Antenna Beam Efficiency in Urban 4G/5G Networks
+Nov 17, 2025
+Our Latest Videos
+More videos
+Wi-Fi
+Wi-Fi 8, Edge AI and the Introduction of Security and Management services Wi-Fi 8, Edge AI and the Introduction of Security and Management services
+Cable Technology
+Harmonic CEO Charts a Pure-Play Broadband Future Harmonic CEO Charts a Pure-Play Broadband Future
+5G
+Featured Story
+T-Mobile grabs for Bluewater's 600MHz licenses, keeping them out of SpaceX's reach
+T-Mobile informed the FCC it is acquiring Bluewater Wireless' 600MHz spectrum licenses covering 435 counties in 27 states. It will add about 10MHz of capacity in most areas, and it keeps the spectrum out of the hands of SpaceX.
+More
+Discover more
+Leading Lights Awards Network X Research & Consulting Omdia Telecoms Research Asia Europe
+Partner with us
+About Us Meet the Light Reading Team Media Kit Digital Symposiums Sponsorship Specifications
+Join Us
+Newsletter Sign-Up
+Follow Us
+Copyright © 2026 TechTarget, Inc. d/b/a Informa TechTarget. This website is owned and operated by Informa TechTarget, part of a global network that informs, influences and connects the world’s technology buyers and sellers. All copyright resides with them. Informa PLC’s registered office is 5 Howick Place, London SW1P 1WG. Registered in England and Wales. TechTarget, Inc.’s registered office is 275 Grove St. Newton, MA 02466.
+Home| CCPA: Do not sell my personal info| Cookies| Privacy| Terms
+Your Privacy Choices

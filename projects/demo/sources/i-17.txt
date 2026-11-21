@@ -1,0 +1,18 @@
+Skip to main content
+Check your phone! Emory experts are asking: 'Do Alerts Actually Help Customers Manage Their Data Allowance Better?'
+June 15, 2022 | 2 min read
+Featured Faculty:
+Anandhi
+Bharadwaj
+Goizueta Endowed Chair in Electronic Commerce and Professor of Information Systems & Operations Management
+View Profile
+Has your cell phone data ever inexplicably slowed down? Worse still, perhaps you’ve had a mobile bill come in way higher than you expected. Keeping track of your data usage can be tough, especially when the billing mechanisms routinely deployed by digital service providers are often more complex than they seem.
+Things like three-part tariffs bundle a certain amount of “free” data or services into a fixed monthly fee, with an excess charge payable whenever you go over your allocation. These packages are usually marketed to consumers as being simple as well as attractive (who after all doesn’t love the sound of “free data?”) but in reality, they can be hard for people to manage—and failing to do so, punitive. Exceed your allotted data and you end up with subpar services or unwanted costs. Underutilize your allocation and you’re leaving money on the table.
+Meanwhile, in a world where we use digital services to do any number of things—from scrolling to streaming to storing and beyond—how can we accurately track just how much of our allowance we’re getting through? To address this, service providers are increasingly sending usage notifications to customers at different points of the billing cycle.
+These nudges are designed to help us to act in our own best interest: to take stock and modify our usage accordingly. But do they work? It depends, says Anandhi Bharadwaj, Vice-Dean for Faculty and Research at Goizueta. She and her colleagues have published a study that looks at the impact of these nudges, and they’ve found that they do help all customers adjust their behavior to stay within their allowance, irrespective of how attentive or inattentive they might be to their consumption speed in general.
+But there are provisos. First off, these consumption nudges seem to be significantly more effective with customers who have purchased higher data allowance than those who opt for low-capped packages. Then, the timing of nudges matters. When notifications arrive later in the billing cycle—right before a bill is due, say—they have significantly more impact across the board, says Bharadwaj.
+Companies should take note. “Ours is the first study to really unpack the efficacy of nudges in the digital services space, and it shows that who and when are important factors that service providers will need to take into account if they want to improve customer experiences.”
+Interested in knowing more - let us help.
+Anandhi Bharadwaj is an information systems expert bringing a wide range of development and executive training experience to the classroom. Her research examines the adoption, use, and impact patterns associated with technological change.
+Anandhi is available to speak with reporters - simply click on her icon now to arrange an interview today.
+Share:

@@ -1,0 +1,1590 @@
+schema_version: 1
+claims:
+- id: У-1
+  text: 'Вопрос исследования: у каких клиентов и в какой момент перебой связи или непонятное списание
+    наносят наибольший ущерб, когда оператор ещё может помочь и какая первая услуга даст пользу клиенту
+    и валовую прибыль оператору'
+  type: допущение
+  origin: агент
+  subject: вопрос исследования
+  period: '2026'
+  basis: []
+  taken_from: ответ на В1
+  quotes: []
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:20:31+03:00'
+    by: агент
+  step: '1'
+  attempt: 1
+- id: У-2
+  text: 'Регион: вымышленный учебный рынок, реальный регион не задан'
+  type: допущение
+  origin: пользователь
+  subject: регион аудитории
+  period: '2026'
+  basis: []
+  taken_from: ответ на В1
+  quotes: []
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:20:31+03:00'
+    by: агент
+  step: '1'
+  attempt: 1
+- id: У-3
+  text: 'Вне рамки: реальные данные настоящих операторов и персональные данные клиентов; определение местоположения
+    участника и совместная подписка с партнёром как первая услуга (только как отдельная проверка); расчёт
+    стоимости разработки, пока она неизвестна'
+  type: допущение
+  origin: пользователь
+  subject: что вне рамки
+  period: '2026'
+  basis: []
+  taken_from: ответ на В1
+  quotes: []
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:20:31+03:00'
+    by: агент
+  step: '1'
+  attempt: 1
+- id: У-4
+  text: По правилам Apple Family Sharing организатор видит описание, цену и дату покупок участников в
+    App Store, а получает чеки, даже если участники скрыли покупки
+  type: факт
+  origin: источник
+  subject: видимость покупок участника организатору (Apple Family Sharing)
+  period: '2026'
+  basis: []
+  quotes:
+  - source: И-5
+    text: Organizers will be able to see the description, price, and date of all family members’ online
+      and in-app App Store transactions, as well as details of refund requests and outcomes, and disputes.
+    locator: раздел Purchase Sharing
+    publisher: Apple
+    publisher_kind: официальный первоисточник
+    self_reported: true
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: 6f5318a1b542ffd426c10e49674bf2eec6c69cfb9b2fdf22a4690c227eb36f57
+      checked_at: '2026-11-21T17:24:32+03:00'
+  - source: И-5
+    text: the Family organizer will continue to receive receipts for purchases made in the App Store,
+      Apple Books, and Apple Music even if family members have hidden their purchases
+    locator: раздел Purchase Sharing
+    publisher: Apple
+    publisher_kind: официальный первоисточник
+    self_reported: true
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: 6f5318a1b542ffd426c10e49674bf2eec6c69cfb9b2fdf22a4690c227eb36f57
+      checked_at: '2026-11-21T17:24:32+03:00'
+  suspicious: true
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:24:32+03:00'
+    by: агент
+  plan_question: ВП-4
+  step: 2б
+  attempt: 1
+- id: У-5
+  text: Apple указывает, что данные о местоположении участника обрабатываются только если он включил Location
+    Sharing, и участник может отключить автоматический обмен
+  type: факт
+  origin: источник
+  subject: согласие и отзыв при показе местоположения в семейной группе (Apple)
+  period: '2026'
+  basis: []
+  quotes:
+  - source: И-5
+    text: their location data will only be processed by Find My if they enable Location Sharing, either
+      through family settings or through the Find My app
+    locator: раздел Location Sharing
+    publisher: Apple
+    publisher_kind: официальный первоисточник
+    self_reported: true
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: 6f5318a1b542ffd426c10e49674bf2eec6c69cfb9b2fdf22a4690c227eb36f57
+      checked_at: '2026-11-21T17:24:32+03:00'
+  - source: И-5
+    text: Family members can disable the Automatically Share Location feature in Settings
+    locator: раздел Location Sharing
+    publisher: Apple
+    publisher_kind: официальный первоисточник
+    self_reported: true
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: 6f5318a1b542ffd426c10e49674bf2eec6c69cfb9b2fdf22a4690c227eb36f57
+      checked_at: '2026-11-21T17:24:32+03:00'
+  suspicious: true
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:24:32+03:00'
+    by: агент
+  plan_question: ВП-4
+  step: 2б
+  attempt: 1
+- id: У-6
+  text: Apple заявляет, что там, где основанием обработки данных служит согласие, она запрашивает его
+    по местному праву
+  type: факт
+  origin: источник
+  subject: правовое основание обработки данных семейной группы (Apple)
+  period: '2026'
+  basis: []
+  quotes:
+  - source: И-5
+    text: Where consent is the appropriate legal basis, we seek it in accordance with applicable local
+      law.
+    locator: раздел Applicable Legal Basis for Processing Personal Data
+    publisher: Apple
+    publisher_kind: официальный первоисточник
+    self_reported: true
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: 6f5318a1b542ffd426c10e49674bf2eec6c69cfb9b2fdf22a4690c227eb36f57
+      checked_at: '2026-11-21T17:24:32+03:00'
+  suspicious: true
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:24:32+03:00'
+    by: агент
+  plan_question: ВП-4
+  step: 2б
+  attempt: 1
+- id: У-7
+  text: По политике Verizon Family, чтобы добавить участника, опекун должен согласиться на сбор части
+    данных о нём; у участника запрашивается разрешение, в том числе на показ опекунам посещаемых сайтов
+    и приложений
+  type: факт
+  origin: источник
+  subject: согласие при показе активности участника организатору (Verizon Family)
+  period: '2026'
+  basis: []
+  quotes:
+  - source: И-8
+    text: When your Guardian adds you to their Verizon Family account, they have to agree to let us collect
+      some information about you.
+    locator: раздел «What control do I have over the information you have about me?»
+    publisher: Verizon
+    publisher_kind: официальный первоисточник
+    self_reported: true
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: 09f91a9bdd0e52195929fc4e6c8342777f28773cee5ad75cbde6a002b6b3e20f
+      checked_at: '2026-11-21T17:24:32+03:00'
+  - source: И-8
+    text: You’ll also be asked to let your Guardians and others they allow see what websites and apps
+      you’re using, block certain ones, and pause the internet.
+    locator: раздел «What control do I have over the information you have about me?»
+    publisher: Verizon
+    publisher_kind: официальный первоисточник
+    self_reported: true
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: 09f91a9bdd0e52195929fc4e6c8342777f28773cee5ad75cbde6a002b6b3e20f
+      checked_at: '2026-11-21T17:24:32+03:00'
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:24:32+03:00'
+    by: агент
+  plan_question: ВП-4
+  step: 2б
+  attempt: 1
+  verdict:
+    verdict: подтверждает
+    type_ok: true
+    reason: согласие опекуна на сбор данных и запрос разрешения на показ сайтов и приложений есть в цитатах
+    by: критик
+    model: sonnet
+    upgraded: false
+    critic_call: подтверждён
+    at: '2026-11-21T17:53:26+03:00'
+- id: У-8
+  text: Verizon сообщает, что собирает данные о том, кто и когда звонит и пишет и сколько трафика использовано;
+    остановить обмен информацией в Verizon Family может только опекун, удалив профиль участника
+  type: факт
+  origin: источник
+  subject: видимость использования и отзыв в Verizon Family
+  period: '2026'
+  basis: []
+  quotes:
+  - source: И-8
+    text: information about who and when you are calling and texting over the Verizon wireless network,
+      how much data you are using
+    locator: раздел «What information do we collect about you?»
+    publisher: Verizon
+    publisher_kind: официальный первоисточник
+    self_reported: true
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: 09f91a9bdd0e52195929fc4e6c8342777f28773cee5ad75cbde6a002b6b3e20f
+      checked_at: '2026-11-21T17:24:32+03:00'
+  - source: И-8
+    text: To stop all information sharing by Verizon Family, your Guardian needs to remove your profile
+      from their Verizon Family app.
+    locator: раздел «What control do I have over the information you have about me?»
+    publisher: Verizon
+    publisher_kind: официальный первоисточник
+    self_reported: true
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: 09f91a9bdd0e52195929fc4e6c8342777f28773cee5ad75cbde6a002b6b3e20f
+      checked_at: '2026-11-21T17:24:32+03:00'
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:24:32+03:00'
+    by: агент
+  plan_question: ВП-4
+  step: 2б
+  attempt: 1
+- id: У-9
+  text: По статистике Роскомнадзора за второй квартал (пересказ «Известий» в «Интерфаксе») самыми частыми
+    жалобами абонентов на операторов сотовой связи были навязывание дополнительных платных услуг и завышение
+    счёта, реже жаловались на качество связи
+  type: факт
+  origin: источник
+  subject: структура жалоб абонентов сотовой связи на операторов
+  period: '2019'
+  basis: []
+  quotes:
+  - source: И-13
+    text: Наиболее частыми жалобами российских абонентов к операторам сотовой связи являются навязывание
+      дополнительных платных услуг и завышение счета компаниями, несколько реже пользователи жалуются
+      на качество связи
+    locator: первый абзац новости
+    publisher: Роскомнадзор (статистика), через «Известия» и «Интерфакс»
+    publisher_kind: СМИ
+    self_reported: false
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: dd27c825c334279880538887bb3e98b180e18e252f2df24ceb9208179baebede
+      checked_at: '2026-11-21T17:24:48+03:00'
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:24:48+03:00'
+    by: агент
+  plan_question: ВП-1
+  step: 2б
+  attempt: 1
+  verdict:
+    verdict: частично
+    type_ok: true
+    reason: жалобы и их порядок есть, но «второй квартал» и «Роскомнадзор» в цитате не названы
+    by: критик
+    model: sonnet
+    upgraded: false
+    critic_call: подтверждён
+    at: '2026-11-21T17:53:26+03:00'
+- id: У-10
+  text: Во втором квартале клиенты МТС и «Мегафона» чаще всего не соглашались с суммой выставленного счёта
+    (40 и 39% жалоб), а абоненты «Билайна» и Tele2 выражали недовольство подключением платных услуг без
+    согласия (38 и 36%)
+  type: факт
+  origin: источник
+  subject: доли жалоб по категориям у операторов
+  period: '2019'
+  basis: []
+  quotes:
+  - source: И-13
+    text: клиенты МТС и "Мегафона" чаще всего не соглашались с суммой выставленного счета (40 и 39% жалоб
+      соответственно), в то время как абоненты "Билайна" и Tele2 выражали недовольство подключением платных
+      услуг без их согласия (38 и 36% соответственно)
+    locator: третий абзац новости
+    publisher: Роскомнадзор (статистика), через «Известия» и «Интерфакс»
+    publisher_kind: СМИ
+    self_reported: false
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: dd27c825c334279880538887bb3e98b180e18e252f2df24ceb9208179baebede
+      checked_at: '2026-11-21T17:24:48+03:00'
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:24:48+03:00'
+    by: агент
+  plan_question: ВП-1
+  step: 2б
+  attempt: 1
+- id: У-11
+  text: По сообщению Хабра, «Т Мобайл» в конце ноября сообщил о повышении стоимости услуг с 375 до 709
+    рублей
+  type: факт
+  origin: источник
+  subject: повышение цен «Т Мобайл»
+  period: '2025'
+  basis: []
+  quotes:
+  - source: И-16
+    text: «Т Мобайл» в конце ноября сообщил о повышении стоимости услуг с 375 рублей до 709 рублей
+    locator: список «Основные изменения в тарифах операторов связи РФ», последний пункт
+    publisher: Хабр, информационная служба (пересказ сообщений операторов и ФАС)
+    publisher_kind: СМИ
+    self_reported: false
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: f0099e304974ff4b539f039eaefaae7737bd2db11e9b54d643aa272ee3cfcda0
+      checked_at: '2026-11-21T17:24:48+03:00'
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:24:48+03:00'
+    by: агент
+  plan_question: ВП-1
+  step: 2б
+  attempt: 1
+- id: У-12
+  text: По пересказу Хабра, МТС проинформировала регулятора, что с февраля 2026 года тарифы вырастут в
+    среднем на 15,6% для 18 млн абонентов; это данные компании
+  type: факт
+  origin: источник
+  subject: повышение тарифов МТС в 2026 году
+  period: '2026'
+  basis: []
+  quotes:
+  - source: И-16
+    text: Компания проинформировала регулятора, что с февраля 2026 года тарифы для клиентов вырастут в
+      среднем на 15,6%, причём это изменение затронет 18 млн абонентов.
+    locator: первый абзац статьи
+    publisher: МТС, через ФАС России и Хабр
+    publisher_kind: СМИ
+    self_reported: true
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: f0099e304974ff4b539f039eaefaae7737bd2db11e9b54d643aa272ee3cfcda0
+      checked_at: '2026-11-21T17:24:48+03:00'
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:24:48+03:00'
+    by: агент
+  plan_question: ВП-1
+  step: 2б
+  attempt: 1
+- id: У-13
+  text: По пересказу Хабра, ФАС установила, что весной прошлого года (по тексту источника) МТС в среднем
+    на 8% повысила стоимость услуг сотовой связи для более чем 30 млн абонентов, и сочла повышение экономически
+    необоснованным
+  type: факт
+  origin: источник
+  subject: повышение тарифов МТС весной 2024 года
+  period: '2024'
+  basis: []
+  quotes:
+  - source: И-16
+    text: Надзорное ведомство установило, что весной прошлого года МТС в среднем на 8% повысил стоимость
+      услуг сотовой связи для более чем 30 млн абонентов. По версии ФАС, повышение являлось экономически
+      необоснованным и ущемляло интересы потребителей.
+    locator: абзац про декабрь 2025 года
+    publisher: ФАС России (через Хабр)
+    publisher_kind: СМИ
+    self_reported: false
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: f0099e304974ff4b539f039eaefaae7737bd2db11e9b54d643aa272ee3cfcda0
+      checked_at: '2026-11-21T17:24:48+03:00'
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:24:48+03:00'
+    by: агент
+  plan_question: ВП-1
+  step: 2б
+  attempt: 1
+- id: У-14
+  text: 'МТС в приложении «Мой МТС» позволяет привязать к основному номеру другие номера семьи и управлять
+    ими из одного места: после привязки достаточно зайти под основным номером'
+  type: факт
+  origin: источник
+  subject: единый кабинет для нескольких номеров у МТС
+  period: '2026'
+  basis: []
+  quotes:
+  - source: И-4
+    text: В будущем достаточно будет зайти в Мой МТС под основным номером, и все привязанные к нему номера
+      станут доступны для управления.
+    locator: Шаг 5/6
+    publisher: МТС (МТС Редспот)
+    publisher_kind: официальный первоисточник
+    self_reported: true
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: d2bdccf8c4b189b729192b04902d27b186b4d39178b33cd6b87dbba54b0916ae
+      checked_at: '2026-11-21T17:24:50+03:00'
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:24:50+03:00'
+    by: агент
+  plan_question: ВП-2
+  step: 2б
+  attempt: 1
+- id: У-15
+  text: 'МТС: владелец номера или человек с доступом к его кабинету может отменить привязку номера, то
+    есть единый кабинет ограничен согласием владельца номера'
+  type: факт
+  origin: источник
+  subject: условия привязки номеров в «Мой МТС»
+  period: '2026'
+  basis: []
+  quotes:
+  - source: И-4
+    text: Владелец номера или человек, имеющий доступ к личному кабинету этого номера, всегда может отменить
+      привязку.
+    locator: примечание под шагами
+    publisher: МТС (МТС Редспот)
+    publisher_kind: официальный первоисточник
+    self_reported: true
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: d2bdccf8c4b189b729192b04902d27b186b4d39178b33cd6b87dbba54b0916ae
+      checked_at: '2026-11-21T17:24:50+03:00'
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:24:50+03:00'
+    by: агент
+  plan_question: ВП-2
+  step: 2б
+  attempt: 1
+- id: У-16
+  text: 'МТС: на Android есть виджет «Мой МТС», который информирует о состоянии лицевого счёта и позволяет
+    быстро переключаться между номерами'
+  type: факт
+  origin: источник
+  subject: виджет остатка и переключения номеров у МТС
+  period: '2026'
+  basis: []
+  quotes:
+  - source: И-4
+    text: Новый элемент на вашем рабочем столе будет информировать о состоянии лицевого счёта и позволит
+      быстро переключаться между номерами, не открывая само приложение.
+    locator: абзац про виджет
+    publisher: МТС (МТС Редспот)
+    publisher_kind: официальный первоисточник
+    self_reported: true
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: d2bdccf8c4b189b729192b04902d27b186b4d39178b33cd6b87dbba54b0916ae
+      checked_at: '2026-11-21T17:24:50+03:00'
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:24:50+03:00'
+    by: агент
+  plan_question: ВП-2
+  step: 2б
+  attempt: 1
+- id: У-17
+  text: МегаФон заявляет, что услуга «Плати за близких» позволяет пополнять баланс абонентов МегаФона
+    и других операторов, подключается бесплатно в Личном кабинете, в список можно добавить до пяти номеров
+  type: факт
+  origin: источник
+  subject: пополнение баланса родных у МегаФона
+  period: '2026'
+  basis: []
+  quotes:
+  - source: И-6
+    text: Услуга "Плати за близких" позволяет пополнять баланс как абонентов "МегаФона", так и пользователей
+      других операторов. Подключение доступно бесплатно в Личном кабинете, при этом в список можно добавить
+      до пяти номеров.
+    locator: раздел «Оплата связи без привязки к оператору»
+    publisher: ПАО «МегаФон» (рекламная публикация ИА Амител)
+    publisher_kind: официальный первоисточник
+    self_reported: true
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: 9a73827ca7d6c92f6d2778e202b2242080f65cb81c7f44fcca44029eddfae875
+      checked_at: '2026-11-21T17:24:50+03:00'
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:24:50+03:00'
+    by: агент
+  plan_question: ВП-2
+  step: 2б
+  attempt: 1
+- id: У-18
+  text: 'МегаФон заявляет: номер другого оператора из списка «Плати за близких» автоматически пополняется
+    раз в 30 дней на заданную сумму без комиссии'
+  type: факт
+  origin: источник
+  subject: автопополнение номеров близких у МегаФона
+  period: '2026'
+  basis: []
+  quotes:
+  - source: И-6
+    text: Если в список добавлен номер другого оператора, его баланс автоматически пополняется раз в 30
+      дней на заданную сумму без комиссии.
+    locator: раздел «Как работает новая услуга»
+    publisher: ПАО «МегаФон» (рекламная публикация ИА Амител)
+    publisher_kind: официальный первоисточник
+    self_reported: true
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: 9a73827ca7d6c92f6d2778e202b2242080f65cb81c7f44fcca44029eddfae875
+      checked_at: '2026-11-21T17:24:50+03:00'
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:24:50+03:00'
+    by: агент
+  plan_question: ВП-2
+  step: 2б
+  attempt: 1
+- id: У-19
+  text: 'МегаФон заявляет: система отслеживает состояние счёта и переводит средства, когда их не хватает
+    для списаний, а пользователь может задать лимит, чтобы расходы не превышали установленную сумму'
+  type: факт
+  origin: источник
+  subject: лимит и автоплатёж за близких у МегаФона
+  period: '2026'
+  basis: []
+  quotes:
+  - source: И-6
+    text: Система отслеживает состояние счета и переводит средства, когда их не хватает для списаний.
+    locator: абзац про «умный» платёж
+    publisher: ПАО «МегаФон» (рекламная публикация ИА Амител)
+    publisher_kind: официальный первоисточник
+    self_reported: true
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: 9a73827ca7d6c92f6d2778e202b2242080f65cb81c7f44fcca44029eddfae875
+      checked_at: '2026-11-21T17:24:50+03:00'
+  - source: И-6
+    text: Пользователь может задать лимит и контролировать списания, чтобы расходы не превышали установленную
+      сумму.
+    locator: следующий абзац
+    publisher: ПАО «МегаФон» (рекламная публикация ИА Амител)
+    publisher_kind: официальный первоисточник
+    self_reported: true
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: 9a73827ca7d6c92f6d2778e202b2242080f65cb81c7f44fcca44029eddfae875
+      checked_at: '2026-11-21T17:24:50+03:00'
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:24:50+03:00'
+    by: агент
+  plan_question: ВП-2
+  step: 2б
+  attempt: 1
+- id: У-20
+  text: 'МегаФон заявляет по данным собственного опроса: 53% клиентов регулярно оплачивают связь за родных,
+    62% признались, что иногда забывают вовремя внести средства за близких; это данные компании о себе,
+    не оценка рынка'
+  type: факт
+  origin: источник
+  subject: опрос МегаФона о платежах за близких
+  period: '2026'
+  basis: []
+  quotes:
+  - source: И-6
+    text: По данным собственного опроса компании, 53% клиентов регулярно оплачивают связь за родных, еще
+      29% делают это время от времени.
+    locator: абзац с опросом
+    publisher: ПАО «МегаФон»
+    publisher_kind: официальный первоисточник
+    self_reported: true
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: 9a73827ca7d6c92f6d2778e202b2242080f65cb81c7f44fcca44029eddfae875
+      checked_at: '2026-11-21T17:24:50+03:00'
+  - source: И-6
+    text: При этом 62% признались, что иногда забывают вовремя внести средства за близких.
+    locator: тот же абзац
+    publisher: ПАО «МегаФон»
+    publisher_kind: официальный первоисточник
+    self_reported: true
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: 9a73827ca7d6c92f6d2778e202b2242080f65cb81c7f44fcca44029eddfae875
+      checked_at: '2026-11-21T17:24:50+03:00'
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:24:50+03:00'
+    by: агент
+  plan_question: ВП-2
+  step: 2б
+  attempt: 1
+- id: У-21
+  text: 'МегаФон сообщает: в МегаСемье организатор может назначить участнику роль «Ребёнок», «Взрослый»
+    или «Устройство», и в зависимости от роли автоматически подключаются функции безопасности, контроля
+    расходов и управления связью'
+  type: факт
+  origin: источник
+  subject: роли участников в МегаСемье
+  period: '2026'
+  basis: []
+  quotes:
+  - source: И-15
+    text: Теперь организатор может назначить каждому роль — "Ребёнок", "Взрослый" или "Устройство". В
+      зависимости от нее автоматически подключаются функции безопасности, контроля расходов и управления
+      связью.
+    locator: первый абзац
+    publisher: Пресс-служба ПАО «МегаФон»
+    publisher_kind: официальный первоисточник
+    self_reported: true
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: 549eb7fcf0dc37ec5665ea8e9ce4edb365855a48c52eb027372e2866203114c8
+      checked_at: '2026-11-21T17:24:50+03:00'
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:24:50+03:00'
+    by: агент
+  plan_question: ВП-2
+  step: 2б
+  attempt: 1
+- id: У-22
+  text: 'МегаФон сообщает: для роли «Ребёнок» в МегаСемье доступна блокировка платных подписок и дополнительных
+    списаний, а ребёнок остаётся на связи при нулевом или отрицательном балансе, расход идёт из тарифа
+    организатора'
+  type: факт
+  origin: источник
+  subject: контроль расходов и связь при нулевом балансе в МегаСемье
+  period: '2026'
+  basis: []
+  quotes:
+  - source: И-15
+    text: блокировать платные подписки и дополнительные списания, а также видеть местоположение детей
+      в режиме реального времени. При этом ребёнок останется на связи даже при нулевом или отрицательном
+      балансе — минуты, гигабайты и SMS расходуются из тарифа организатора семейной группы.
+    locator: третий абзац
+    publisher: Пресс-служба ПАО «МегаФон»
+    publisher_kind: официальный первоисточник
+    self_reported: true
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: 549eb7fcf0dc37ec5665ea8e9ce4edb365855a48c52eb027372e2866203114c8
+      checked_at: '2026-11-21T17:24:50+03:00'
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:24:50+03:00'
+    by: агент
+  plan_question: ВП-2
+  step: 2б
+  attempt: 1
+- id: У-23
+  text: МегаФон заявляет, что с начала года количество МегаСемей выросло на 127%
+  type: факт
+  origin: источник
+  subject: рост числа МегаСемей
+  period: '2026'
+  basis: []
+  quotes:
+  - source: И-15
+    text: С начала года количество наших МегаСемей выросло на 127%.
+    locator: цитата коммерческого директора
+    publisher: ПАО «МегаФон»
+    publisher_kind: официальный первоисточник
+    self_reported: true
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: 549eb7fcf0dc37ec5665ea8e9ce4edb365855a48c52eb027372e2866203114c8
+      checked_at: '2026-11-21T17:24:51+03:00'
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:24:51+03:00'
+    by: агент
+  plan_question: ВП-2
+  step: 2б
+  attempt: 1
+- id: У-24
+  text: Comviva (поставщик ПО для операторов) заявляет, что по отраслевым исследованиям 10-15 процентов
+    голосовых вызовов не проходят из-за недостатка средств на счёте абонента предоплаты; ссылки на исследования
+    на странице нет
+  type: факт
+  origin: источник
+  subject: доля неудачных вызовов из-за нехватки баланса
+  period: '2015'
+  basis: []
+  quotes:
+  - source: И-3
+    text: Industry studies show that 10-15 per cent of voice calls fail due to insufficient balance in
+      a prepaid subscriber’s account.
+    locator: блог «What is a low-balance suite?», второй абзац
+    publisher: Comviva
+    publisher_kind: вторичный пересказ
+    self_reported: true
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: 7da90460055a666cabc2348e945f074f937a856fd5ada3840ab217db9c9c75ea
+      checked_at: '2026-11-21T17:24:53+03:00'
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:24:53+03:00'
+    by: агент
+  plan_question: ВП-3
+  step: 2б
+  attempt: 1
+- id: У-25
+  text: Comviva заявляет, что набор услуг для низкого баланса приносит операторам выгоды, в том числе
+    снижение оттока и поддержание ARPU; числового эффекта и метода оценки на странице нет
+  type: факт
+  origin: источник
+  subject: заявленные выгоды сервисов низкого баланса для оператора
+  period: '2015'
+  basis: []
+  quotes:
+  - source: И-3
+    text: 'Benefits of low-balance suite for operators
+
+      Restore revenue leaks
+
+      Enhanced customer experience, with always-on and seamless connectivity
+
+      Lower Customer Churn
+
+      Maintenance of ARPU'
+    locator: блог «What is a low-balance suite?», список выгод
+    publisher: Comviva
+    publisher_kind: вторичный пересказ
+    self_reported: true
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: 7da90460055a666cabc2348e945f074f937a856fd5ada3840ab217db9c9c75ea
+      checked_at: '2026-11-21T17:24:53+03:00'
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:24:53+03:00'
+    by: агент
+  plan_question: ВП-3
+  step: 2б
+  attempt: 1
+- id: У-26
+  text: Pushwoosh (поставщик платформы push-уведомлений) заявляет, что операторы, использующие его для
+    проактивного удержания, видят снижение добровольного оттока до 25 процентов; метод и контрольная группа
+    не названы, цифра относится к кампаниям удержания в целом, а не к уведомлениям о низком балансе
+  type: факт
+  origin: источник
+  subject: заявленный эффект push-кампаний удержания на отток
+  period: '2026'
+  basis: []
+  quotes:
+  - source: И-14
+    text: Telecom operators using Pushwoosh for proactive retention see up to 25% reduction in voluntary
+      churn rates.
+    locator: страница Mobile push for Telecom, раздел FAQ
+    publisher: Pushwoosh
+    publisher_kind: вторичный пересказ
+    self_reported: true
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: 6622d36dff8a9dcbbc82f2766a8ff8d5c4d577e5fc98ddbd8a1a8f6e642682fc
+      checked_at: '2026-11-21T17:24:53+03:00'
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:24:53+03:00'
+    by: агент
+  plan_question: ВП-3
+  step: 2б
+  attempt: 1
+- id: У-27
+  text: Pushwoosh заявляет, что оповещения предоплатных абонентов о низком балансе с пополнением в одно
+    касание сокращают перебои в обслуживании; чисел и измерения на странице нет
+  type: факт
+  origin: источник
+  subject: заявленный эффект оповещений о низком балансе на перебои связи
+  period: '2026'
+  basis: []
+  quotes:
+  - source: И-14
+    text: Notify prepaid subscribers when their balance is running low, with one-tap top-up options that
+      reduce service interruptions
+    locator: страница Mobile push for Telecom, блок о платёжных напоминаниях
+    publisher: Pushwoosh
+    publisher_kind: вторичный пересказ
+    self_reported: true
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: 6622d36dff8a9dcbbc82f2766a8ff8d5c4d577e5fc98ddbd8a1a8f6e642682fc
+      checked_at: '2026-11-21T17:24:53+03:00'
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:24:53+03:00'
+    by: агент
+  plan_question: ВП-3
+  step: 2б
+  attempt: 1
+- id: У-28
+  text: Рекомендации Lewin и Milne (Plum Consulting), приведённые на digitalregulation.org, предлагают
+    для базового предоплатного пакета требование о сообщениях или письмах с предупреждением о скорой деактивации
+    редко используемой SIM и о скачках расхода данных; это рекомендация, а не измеренный эффект
+  type: факт
+  origin: источник
+  subject: регуляторные рекомендации по предупреждениям предоплатным пользователям
+  period: '2022'
+  basis: []
+  quotes:
+  - source: И-12
+    text: A requirement for texts or emails to warn of impending deactivation of a rarely used SIM and
+      of sudden surges in use of data services which might lead to bill shock.
+    locator: таблица «Recommended features of a no-frills prepayment package»
+    publisher: Lewin and Milne 2010 (Plum Consulting), цитируется на digitalregulation.org
+    publisher_kind: отраслевое исследование
+    self_reported: false
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: 6013cd116385ee03cd392ca1c4dc04e41eb80b82519bcde13f7b9ac038b209dc
+      checked_at: '2026-11-21T17:24:53+03:00'
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:24:53+03:00'
+    by: агент
+  plan_question: ВП-3
+  step: 2б
+  attempt: 1
+- id: У-29
+  text: Регулятор Индии (TRAI, Consumer Handbook, по пересказу на digitalregulation.org) требует сообщать
+    предоплатному абоненту по SMS или USSD баланс на счёте после каждого вызова; данных об эффекте на
+    отток или перебои нет
+  type: факт
+  origin: источник
+  subject: обязательные уведомления о балансе в Индии
+  period: '2018'
+  basis: []
+  quotes:
+  - source: И-12
+    text: 'Immediately on making any deduction from the account of a prepaid subscriber, the TSP needs
+      to inform them through SMS or USSD, the following information: (a) After every call: (i) Duration
+      of the call; (ii) Charges deducted for the call; (iii) Balance in the account;'
+    locator: врезка «Special provisions in India for prepaid consumers»
+    publisher: TRAI (Telecom Regulatory Authority of India), Consumer Handbook 2018
+    publisher_kind: официальный первоисточник
+    self_reported: false
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: 6013cd116385ee03cd392ca1c4dc04e41eb80b82519bcde13f7b9ac038b209dc
+      checked_at: '2026-11-21T17:24:53+03:00'
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:24:53+03:00'
+    by: агент
+  plan_question: ВП-3
+  step: 2б
+  attempt: 1
+- id: У-30
+  text: По данным исследования Emory (Goizueta), уведомления об использовании помогают клиентам оставаться
+    в пределах пакета данных; на тех, у кого пакет больше, они действуют заметно сильнее, чем на тех,
+    у кого малый пакет
+  type: факт
+  origin: источник
+  subject: влияние уведомлений об остатке пакета на поведение абонентов
+  period: '2022'
+  basis: []
+  quotes:
+  - source: И-17
+    text: they do help all customers adjust their behavior to stay within their allowance
+    locator: основной текст, 4-й абзац
+    publisher: Goizueta Business School, Emory University
+    publisher_kind: отраслевое исследование
+    self_reported: false
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: 7c40606c7e979c216833bf7287e4ec48f007267fe595102391983517a36604d2
+      checked_at: '2026-11-21T17:29:33+03:00'
+  - source: И-17
+    text: these consumption nudges seem to be significantly more effective with customers who have purchased
+      higher data allowance than those who opt for low-capped packages
+    locator: основной текст, 5-й абзац
+    publisher: Goizueta Business School, Emory University
+    publisher_kind: отраслевое исследование
+    self_reported: false
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: 7c40606c7e979c216833bf7287e4ec48f007267fe595102391983517a36604d2
+      checked_at: '2026-11-21T17:29:33+03:00'
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:29:33+03:00'
+    by: агент
+  plan_question: ВП-3
+  step: '3'
+  attempt: 1
+  verdict:
+    verdict: подтверждает
+    type_ok: true
+    reason: помогают удержаться в пакете, сильнее при большом пакете, как в цитате
+    by: критик
+    model: sonnet
+    upgraded: false
+    critic_call: подтверждён
+    at: '2026-11-21T17:53:26+03:00'
+- id: У-31
+  text: По данным исследования Emory (Goizueta), уведомления, пришедшие позже в расчётном цикле, например
+    перед выставлением счёта, действуют заметно сильнее
+  type: факт
+  origin: источник
+  subject: время отправки уведомлений об остатке пакета
+  period: '2022'
+  basis: []
+  quotes:
+  - source: И-17
+    text: When notifications arrive later in the billing cycle—right before a bill is due, say—they have
+      significantly more impact across the board
+    locator: основной текст, 5-й абзац
+    publisher: Goizueta Business School, Emory University
+    publisher_kind: отраслевое исследование
+    self_reported: false
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: 7c40606c7e979c216833bf7287e4ec48f007267fe595102391983517a36604d2
+      checked_at: '2026-11-21T17:29:33+03:00'
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:29:33+03:00'
+    by: агент
+  plan_question: ВП-3
+  step: '3'
+  attempt: 1
+- id: У-32
+  text: 'По исследованию Genakos, Roumanias, Valletti (Journal of Economic Behavior and Organization),
+    в пересказе Cambridge Judge Business School: при учёте экономии смена тарифа внутри оператора вероятнее,
+    если клиенту начислили плату за перерасход пакета'
+  type: факт
+  origin: источник
+  subject: связь перерасхода пакета и смены тарифа абонентами
+  period: '2023'
+  basis: []
+  quotes:
+  - source: И-20
+    text: controlling for savings, switching to a different plan is more likely if the customer was charged
+      overage fees
+    locator: цитата соавтора, раздел «Avoiding bill shocks»
+    publisher: Cambridge Judge Business School
+    publisher_kind: отраслевое исследование
+    self_reported: false
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: 4bb1ca2d49f536f42ecafa85fdf2b55fc692bb7aec15775250f3acdf5ff69d5a
+      checked_at: '2026-11-21T17:29:33+03:00'
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:29:33+03:00'
+    by: агент
+  plan_question: ВП-3
+  step: '3'
+  attempt: 1
+- id: У-33
+  text: 'Эффект предупреждений об остатке на отток и перебои в расчёт не закладывается: пилот планируется
+    как проверка эффекта, а не как его использование'
+  type: допущение
+  origin: агент
+  subject: эффект предупреждений на отток и перебои
+  period: '2026'
+  basis: []
+  taken_from: 'пробел П-1: независимого измерения эффекта нет'
+  quotes: []
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:29:54+03:00'
+    by: агент
+  step: '3'
+  attempt: 1
+- id: У-34
+  text: Доли причин перебоя (исчерпание общего пакета, неоплата, непонятные списания) для семейных групп
+    неизвестны; принимаем, что значимы все три, и первая проверка идёт на данных самого оператора
+  type: допущение
+  origin: агент
+  subject: доли причин перебоя в семейных группах
+  period: '2026'
+  basis: []
+  taken_from: 'пробел П-2: открытые данные показывают жалобы на счета и платные услуги, а не причины перебоя
+    семейных групп'
+  quotes: []
+  suspicious: false
+  status: заменено
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:29:54+03:00'
+    by: агент
+  - status: заменено
+    at: '2026-11-21T17:33:22+03:00'
+    by: пользователь
+    reason: заменено на У-37
+  replaced_by: У-37
+  step: '3'
+  attempt: 1
+- id: У-35
+  text: Конверсию подключения и активации берём только как цели брифа, а не как наблюдаемые значения
+  type: допущение
+  origin: агент
+  subject: конверсия подключения и активации
+  period: '2026'
+  basis: []
+  taken_from: 'пробел П-3: открытых наблюдений по этому продукту нет'
+  quotes: []
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:29:54+03:00'
+    by: агент
+  step: '3'
+  attempt: 1
+- id: У-36
+  text: Выручку и затраты считаем только по учебным числам брифа; внешних значений нет
+  type: допущение
+  origin: агент
+  subject: выручка и затраты
+  period: '2026'
+  basis: []
+  taken_from: 'пробел П-4: рынок вымышленный, открытых значений нет, стоимость разработки вне рамки'
+  quotes: []
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:29:54+03:00'
+    by: агент
+  step: '3'
+  attempt: 1
+- id: У-37
+  text: По опыту поддержки, в семейных группах чаще всего жалуются на исчерпание общего пакета, на неоплату
+    реже; это учебная оценка руководителя, не факт
+  type: допущение
+  origin: пользователь
+  subject: доли причин перебоя в семейных группах
+  period: '2026'
+  basis: []
+  taken_from: 'слова руководителя в чате: опыт поддержки, учебная оценка'
+  quotes: []
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:33:22+03:00'
+    by: пользователь
+  replaces: У-34
+  step: '3'
+  attempt: 1
+- id: У-38
+  text: По брифу (учебные числа), без изменений в плановом году ожидаются 5 000 активных семейных групп
+    и 279 млн руб. валовой прибыли при цели не ниже 8 000 групп и 285 млн руб.
+  type: допущение
+  origin: пользователь
+  subject: 'плановый год: ожидание без изменений и цель'
+  period: '2026'
+  basis: []
+  taken_from: бриф И-1, стр. 3, таблица «Рынок и исходные показатели»
+  quotes: []
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:35:20+03:00'
+    by: агент
+  step: '4'
+  attempt: 1
+- id: У-39
+  text: Журналы обращений оператора не отделяют перебой из-за исчерпания пакета от перебоя из-за неоплаты,
+    и причину придётся размечать вручную
+  type: гипотеза
+  origin: агент
+  subject: различимость причин перебоя в обращениях
+  period: '2026'
+  basis:
+  - У-9
+  check_method: выгрузить обращения семейных групп за месяц, вручную разметить причину по сотне случаев
+    и посмотреть, у какой доли причина читается из записи
+  quotes: []
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:35:20+03:00'
+    by: агент
+  step: '4'
+  attempt: 1
+- id: У-40
+  text: Приглашение участника принимают реже, если вместе с остатком пакета просят открыть и начисления
+  type: гипотеза
+  origin: агент
+  subject: принятие приглашения при разной глубине доступа
+  period: '2026'
+  basis:
+  - У-7
+  check_method: в пилоте разделить новые приглашения на две формулировки (только остаток и остаток с начислениями)
+    и сравнить долю принятых
+  quotes: []
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:35:20+03:00'
+    by: агент
+  step: '4'
+  attempt: 1
+- id: У-41
+  text: 'Организаторы групп реагируют на предупреждения вяло: меньше трети действуют в течение суток'
+  type: гипотеза
+  origin: агент
+  subject: реакция организатора на предупреждение об остатке
+  period: '2026'
+  basis:
+  - У-20
+  check_method: в пилотной группе посчитать долю нажатий кнопки «добавить из остатка» в течение суток
+    после предупреждения за первые две недели
+  quotes: []
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:38:19+03:00'
+    by: агент
+  step: '4'
+  attempt: 1
+- id: У-42
+  text: Перебои из-за исчерпания общего пакета редки в одной группе, и за квартал разницу между пилотной
+    и контрольной группой не измерить
+  type: гипотеза
+  origin: агент
+  subject: частота перебоев в одной группе
+  period: '2026'
+  basis:
+  - У-24
+  check_method: до пилота посчитать по журналу оператора частоту перебоев из-за пакета на группу за квартал
+  quotes: []
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:38:19+03:00'
+    by: агент
+  step: '4'
+  attempt: 1
+- id: У-43
+  text: Владельцы пополняют номер роутера сразу после остановки, и остановка не уводит клиента
+  type: гипотеза
+  origin: агент
+  subject: реакция владельца на остановку роутера
+  period: '2026'
+  basis:
+  - У-24
+  check_method: по журналу остановок и пополнений номеров роутеров посчитать долю пополнений в течение
+    суток
+  quotes: []
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:38:19+03:00'
+    by: агент
+  step: '4'
+  attempt: 1
+- id: У-44
+  text: Клиенты недовольны суммой списания, а не тем, что не понимают его, и расшифровка недовольство
+    не снимет
+  type: гипотеза
+  origin: агент
+  subject: причина недовольства начислениями
+  period: '2026'
+  basis:
+  - У-13
+  check_method: сравнить долю обращений по теме счёта у пилотной и контрольной групп после показа расшифровки
+  quotes: []
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:38:19+03:00'
+    by: агент
+  step: '4'
+  attempt: 1
+- id: У-45
+  text: Ручная разметка причин в обращениях занимает больше времени, чем настройка пилота
+  type: гипотеза
+  origin: агент
+  subject: затраты времени на проверку причины
+  period: '2026'
+  basis:
+  - У-39
+  check_method: замерить время разметки на пробной выборке в двадцать обращений
+  quotes: []
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:38:19+03:00'
+    by: агент
+  step: '4'
+  attempt: 1
+- id: У-46
+  text: Выгрузка обращений определяет причину перебоя, но не отвечает на вопрос об эффекте предупреждений,
+    поэтому после неё всё равно понадобится пилот с контрольной группой
+  type: гипотеза
+  origin: агент
+  subject: достаточность проверки причины без пилота
+  period: '2026'
+  basis:
+  - У-30
+  check_method: 'решение руководителя после выгрузки: хватает ли причины или нужна оценка эффекта'
+  quotes: []
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:38:19+03:00'
+    by: агент
+  step: '4'
+  attempt: 1
+- id: У-47
+  text: 'Просьба близких доходит до организатора раньше, чем предупреждение: «поздно» узнаёт не организатор,
+    а оператор, и предупреждение ничего не добавляет'
+  type: гипотеза
+  origin: агент
+  subject: 'пре-мортем: организатор знает о нехватке раньше предупреждения'
+  period: '2026'
+  basis:
+  - У-20
+  check_method: в пробном месяце спросить организаторов пилотной группы после каждого предупреждения,
+    знали ли они о нехватке до него, и сверить с журналом времени предупреждений
+  quotes: []
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:42:38+03:00'
+    by: агент
+  step: '5'
+  attempt: 1
+- id: У-48
+  text: Учёт расхода общего пакета обновляется с задержкой, поэтому предупреждение приходит к моменту
+    или после исчерпания пакета, а не заранее
+  type: гипотеза
+  origin: агент
+  subject: 'пре-мортем: задержка данных об остатке'
+  period: '2026'
+  basis:
+  - У-31
+  check_method: сравнить в журнале оператора время исчерпания пакета группы со временем отправки предупреждения
+    на пробной выборке из двадцати групп
+  quotes: []
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:42:38+03:00'
+    by: агент
+  step: '5'
+  attempt: 1
+- id: У-49
+  text: 'Вар-2 удерживает существующие группы и не даёт притока, а цель брифа по числу групп требует роста:
+    удержание групп, ушедших из-за перебоев, может быть меньше нужного разрыва'
+  type: гипотеза
+  origin: агент
+  subject: 'пре-мортем: пилот не закрывает разрыв по числу групп'
+  period: '2026'
+  basis:
+  - У-23
+  check_method: по данным оператора разложить прошлогодний прирост групп на приток и удержание и сопоставить
+    число групп, потерянных из-за перебоев, с разрывом из У-38
+  quotes: []
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:42:38+03:00'
+    by: агент
+  step: '5'
+  attempt: 1
+- id: У-50
+  text: По брифу, если у близкого закончилась выделенная ему доля общего пакета, организатор группы уже
+    может добавить интернет из свободного остатка
+  type: факт
+  origin: источник
+  subject: действие организатора при исчерпании доли участника
+  period: '2026'
+  basis: []
+  quotes:
+  - source: И-1
+    text: организатор группы уже может добавить интернет из свободного остатка
+    locator: стр. 1
+    publisher: бриф учебного оператора
+    publisher_kind: материал пользователя
+    self_reported: true
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: bd5ad42b64ebdfa7bccb807d1956dfd494502724d174e3daca4ef48d6d363a1b
+      checked_at: '2026-11-21T17:44:30+03:00'
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:44:30+03:00'
+    by: агент
+  step: '5'
+  attempt: 1
+  verdict:
+    verdict: частично
+    type_ok: true
+    reason: возможность добавить из остатка есть, условия «закончилась доля близкого» в цитате нет
+    by: критик
+    model: sonnet
+    upgraded: false
+    critic_call: подтверждён
+    at: '2026-11-21T17:53:26+03:00'
+- id: У-51
+  text: По брифу, участник семейной группы решает, какие сведения о его номере можно видеть, и в любой
+    момент может отозвать согласие
+  type: факт
+  origin: источник
+  subject: согласие участника и его отзыв
+  period: '2026'
+  basis: []
+  quotes:
+  - source: И-1
+    text: Участник решает, какие сведения о его номере можно видеть, и в любой момент может отозвать согласие
+    locator: стр. 1
+    publisher: бриф учебного оператора
+    publisher_kind: материал пользователя
+    self_reported: true
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: bd5ad42b64ebdfa7bccb807d1956dfd494502724d174e3daca4ef48d6d363a1b
+      checked_at: '2026-11-21T17:44:30+03:00'
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:44:30+03:00'
+    by: агент
+  step: '5'
+  attempt: 1
+  verdict:
+    verdict: подтверждает
+    type_ok: true
+    reason: 'цитата совпадает по смыслу: участник решает, что видно, и может отозвать согласие'
+    by: критик
+    model: sonnet
+    upgraded: false
+    critic_call: подтверждён
+    at: '2026-11-21T17:53:26+03:00'
+- id: У-52
+  text: Предупреждение организатору об остатке общего пакета снижает долю групп с перебоем из-за пакета
+    за квартал по сравнению с сопоставимой контрольной группой
+  type: гипотеза
+  origin: агент
+  subject: эффект предупреждения организатору на перебои
+  period: '2026'
+  basis:
+  - У-30
+  check_method: 'пилот с контрольной группой, сопоставимой по периоду и составу групп: сравнить долю групп
+    с перебоем из-за пакета за квартал'
+  quotes: []
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:44:30+03:00'
+    by: агент
+  step: '5'
+  attempt: 1
+- id: У-53
+  text: ComNews пишет, что ни один из операторов «большой четвёрки» России (МТС, МегаФон, Билайн, Т2)
+    не раскрывает статистику по ARPU
+  type: факт
+  origin: источник
+  subject: раскрытие ARPU российскими операторами
+  period: '2026'
+  basis: []
+  quotes:
+  - source: И-22
+    text: Ни один из операторов связи "большой четверки" (МТС, "МегаФон", "Билайн", Т2) не раскрывает
+      статистику по показателю ARPU - среднему доходу с абонента.
+    locator: абзац 2 статьи
+    publisher: ComNews
+    publisher_kind: СМИ
+    self_reported: false
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: baa905161af117632897c5e0e77dcc25fbec7b7bc83f87e04e10db52c31faa0e
+      checked_at: '2026-11-21T17:50:44+03:00'
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:50:44+03:00'
+    by: агент
+  step: '6'
+  attempt: 1
+- id: У-54
+  text: Analysys Mason называет семейные пакеты одним из немногих оставшихся у операторов рычагов роста
+    выручки от потребительского сегмента; цифр конверсии и ARPU на странице отчёта нет
+  type: факт
+  origin: источник
+  subject: роль семейных пакетов в росте выручки операторов
+  period: '2026'
+  basis: []
+  quotes:
+  - source: И-27
+    text: Family bundles are one of the few remaining levers available to telecoms operators to drive
+      growth in consumer revenue.
+    locator: аннотация отчёта
+    publisher: Analysys Mason
+    publisher_kind: отраслевое исследование
+    self_reported: false
+    check:
+      method: точное вхождение
+      similarity: 100.0
+      snapshot_sha256: 2da184995fd2abde88eb71b882be78764047cb2909dc6adf94c2a9b6d681d1d9
+      checked_at: '2026-11-21T17:50:44+03:00'
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:50:44+03:00'
+    by: агент
+  step: '6'
+  attempt: 1
+- id: У-55
+  text: 'Условия семейных тарифов учебного оператора принимаем по брифу: организатор добавляет интернет
+    из свободного остатка, участник сам решает, что видно, и может отозвать согласие; справку по тарифам
+    не видели'
+  type: допущение
+  origin: агент
+  subject: условия семейных тарифов оператора
+  period: '2026'
+  basis: []
+  taken_from: 'пробел П-5: страница справки из запроса не открылась, взяты только слова брифа'
+  quotes: []
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T17:52:34+03:00'
+    by: агент
+  step: '6'
+  attempt: 1
+- id: У-56
+  text: 'Учебный итог квартала пилота: доля групп с перебоем из-за пакета — 10 % в пилотной группе и 12
+    % в контрольной (числа придуманы руководителем для демонстрации)'
+  type: допущение
+  origin: пользователь
+  subject: итог пилота по ПП-1, доля групп с перебоем
+  period: '2027'
+  basis: []
+  taken_from: материал пользователя И-31, учебные данные, не факт о реальном операторе
+  quotes: []
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T20:47:50+03:00'
+    by: агент
+  step: '8'
+  attempt: 1
+- id: У-57
+  text: 'Учебный итог пилота: 41 % организаторов добавили интернет в течение суток после предупреждения
+    (число придумано руководителем для демонстрации)'
+  type: допущение
+  origin: пользователь
+  subject: итог пилота по ПП-5, доля организаторов, добавивших интернет за сутки
+  period: '2027'
+  basis: []
+  taken_from: материал пользователя И-31, учебные данные, не факт о реальном операторе
+  quotes: []
+  suspicious: false
+  status: действует
+  status_history:
+  - status: действует
+    at: '2026-11-21T20:47:50+03:00'
+    by: агент
+  step: '8'
+  attempt: 1

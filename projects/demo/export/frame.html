@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Рамка задачи</title>
+<style>
+:root { color-scheme: light; }
+* { box-sizing: border-box; }
+html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+body {
+  margin: 0 auto; padding: 24px 20px 48px; max-width: 54rem; color: #1b1b1f; background: #fff;
+  font: 11pt/1.5 "Segoe UI", Arial, "DejaVu Sans", sans-serif; overflow-wrap: anywhere;
+}
+h1 { font-size: 1.7rem; line-height: 1.25; margin: 0 0 1rem; }
+h2 { font-size: 1.3rem; margin: 1.8rem 0 .6rem; border-bottom: 1px solid #c8c8d0; padding-bottom: .2rem; }
+h3 { font-size: 1.1rem; margin: 1.2rem 0 .4rem; }
+h1, h2, h3, h4 { break-after: avoid; }
+p, ul, ol { margin: .5rem 0; }
+code, pre { font-family: Consolas, "DejaVu Sans Mono", monospace; font-size: .92em; }
+pre { background: #f3f3f6; border: 1px solid #d8d8e0; padding: .6rem .8rem; white-space: pre-wrap; }
+blockquote { margin: .6rem 0; padding: .1rem 1rem; border-left: 4px solid #c8c8d0; color: #3a3a44; }
+a { color: #0b4fb3; text-decoration: underline; }
+a.ref { font-weight: 600; white-space: nowrap; }
+table { border-collapse: collapse; width: 100%; margin: .8rem 0; }
+th, td { border: 1px solid #7a7a86; padding: 4px 8px; text-align: left; vertical-align: top; }
+th { background: #ececf1; }
+tr { break-inside: avoid; }
+section.grounds { margin-top: 2.5rem; border-top: 2px solid #1b1b1f; }
+article.ground { border: 1px solid #c8c8d0; border-radius: 4px; padding: .5rem .9rem; margin: .8rem 0;
+  break-inside: avoid; }
+article.ground h3 { margin: 0 0 .3rem; }
+article.ground.replaced, article.ground.revoked { border-style: dashed; background: #fbf6ea; }
+.tag { font-size: .85rem; font-weight: 400; color: #4a4a55; }
+.tag.alert { color: #8a2a00; font-weight: 600; }
+dl { margin: .3rem 0 0; display: grid; grid-template-columns: 9rem 1fr; gap: .15rem .8rem; }
+dt { color: #4a4a55; }
+dd { margin: 0; }
+.quote { margin: 0 0 .3rem; }
+.note { color: #4a4a55; font-size: .95rem; }
+@page { size: A4; margin: 16mm 15mm 18mm; }
+@media print {
+  body { max-width: none; padding: 0; font-size: 10.5pt; }
+  a, a.ref { color: #0b4fb3; text-decoration: underline; }
+}
+@media (max-width: 40rem) { dl { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<h1>Рамка задачи</h1>
+<h2>Кратко</h2>
+<p>Решение: к концу первого квартала — какой первой проблеме и группе клиентов («Связь для близких и собственных устройств») посвятить пилот и выделять ли на него людей и деньги; к концу второго — расширять охват, менять предложение или продолжать наблюдение.
+Из десяти полей рамки допущением принято три: вопрос исследования, регион, вне рамки; формулировку решения дал человек. Остальные взяты из брифа (<a href="#source-1" class="ref">И-1</a>). Страница справки по ссылке не открылась, из неё в рамке ничего нет.</p>
+<h2>Поля рамки</h2>
+<table>
+<thead>
+<tr>
+<th>Поле</th>
+<th>Значение</th>
+<th>Откуда</th>
+<th>Источник</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Решение</td>
+<td>к концу первого квартала — какой первой проблеме и группе клиентов посвятить пилот и выделять ли на него людей и деньги; к концу второго — расширять охват, менять предложение или продолжать наблюдение</td>
+<td>ответ человека</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Варианты решения</td>
+<td>1) пилот для семейных групп: предупреждение о перебое общего пакета и действие по нему; 2) пилот для владельцев нескольких номеров: предупреждение о платеже или остатке по собственным номерам, например роутера; 3) пилот для семей по разбору начислений; 4) сначала дешёвая проверка одной причины, без полноценного пилота; 5) сохранить нынешнее обслуживание и продолжить наблюдение</td>
+<td>—</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Срок</td>
+<td>решение о пилоте — к концу первого квартала; решение о расширении, изменении предложения или наблюдении — к концу второго квартала</td>
+<td>из материалов</td>
+<td><a href="#source-1" class="ref">И-1</a></td>
+</tr>
+<tr>
+<td>Вопрос исследования</td>
+<td>у каких клиентов и в какой момент перебой связи или непонятное списание наносят наибольший ущерб, когда оператор ещё может помочь и какая первая услуга даст пользу клиенту и валовую прибыль оператору</td>
+<td>допущение</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Получатель</td>
+<td>руководитель направления (ответственный уже определён), с участием финансовой команды на втором решении</td>
+<td>из материалов</td>
+<td><a href="#source-1" class="ref">И-1</a></td>
+</tr>
+<tr>
+<td>Ограничения</td>
+<td>учебные числа брифа; дизайнер и аналитик по половине ставки (не выделены), три человеко-месяца разработчиков на второй квартал (предварительно), один человеко-месяц тестирования не подтверждён; документ из пяти частей; только открытые источники и материалы пользователя</td>
+<td>из материалов</td>
+<td><a href="#source-1" class="ref">И-1</a></td>
+</tr>
+<tr>
+<td>Данные</td>
+<td>бриф с рынком и показателями учебного оператора (<a href="#source-1" class="ref">И-1</a>); страница справки по семейным тарифам не открылась, её содержание в рамку не входит</td>
+<td>из материалов</td>
+<td><a href="#source-1" class="ref">И-1</a></td>
+</tr>
+<tr>
+<td>Регион</td>
+<td>вымышленный учебный рынок; реальный регион не задан</td>
+<td>допущение</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Критерии успеха</td>
+<td>план на год и измеримый ориентир на конец третьего года; цели планового года не ниже: валовая прибыль 285 млн руб., 8 000 активных семейных групп, 12 000 подключённых групп, 2 000 подключённых владельцев, 60 % активации за 14 дней; для недостижимых целей — разрыв и цена его устранения; пилот с проверяемой пользой и порогом решения</td>
+<td>из материалов</td>
+<td><a href="#source-1" class="ref">И-1</a></td>
+</tr>
+<tr>
+<td>Вне рамки</td>
+<td>реальные данные настоящих операторов и персональные данные клиентов; определение местоположения участника и совместная подписка с партнёром как первая услуга (только как отдельная проверка); расчёт стоимости разработки, пока она неизвестна</td>
+<td>допущение</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<h2>Было</h2>
+<table>
+<thead>
+<tr>
+<th>Поле</th>
+<th>Было</th>
+<th>Стало</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Решение</td>
+<td>какой первой клиентской проблеме и какой группе клиентов (семьи или владельцы нескольких номеров) посвятить пилот и выделять ли на него людей и деньги (допущение)</td>
+<td>формулировка человека: к концу первого квартала — какой первой проблеме и группе клиентов посвятить пилот и выделять ли на него людей и деньги; к концу второго — расширять охват, менять предложение или продолжать наблюдение</td>
+</tr>
+</tbody>
+</table>
+<section class="grounds only" id="istochniki"><h2>Источники</h2><article class="ground" id="source-1"><h3>И-1</h3><dl><dt>Вид</dt><dd>PDF</dd><dt>Файл</dt><dd>inputs/Бриф — связь для близких.pdf</dd></dl></article></section>
+</body>
+</html>

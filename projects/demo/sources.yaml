@@ -1,0 +1,549 @@
+schema_version: 1
+sources:
+- id: И-1
+  kind: PDF
+  path: inputs/Бриф — связь для близких.pdf
+  access: получен
+  text_path: inputs/Бриф — связь для близких.pdf.txt
+  text_sha256: bd5ad42b64ebdfa7bccb807d1956dfd494502724d174e3daca4ef48d6d363a1b
+  suspicious: false
+  untrusted: true
+  anonymized: []
+  anonymization_confirmed: false
+  closed_markers: []
+  closed_confirmed: false
+  no_personal_data_confirmed: false
+  material_sha256: 558d2c665caa4f4954135c8bbfb69d791e398dcdc5b625d5ded7bdb2d0eb0fa5
+- id: И-2
+  kind: страница
+  url: https://spravka.invalid/semeynye-tarify
+  access: 'источник недоступен: ошибка'
+  access_note: имя spravka.invalid не найдено
+  fetch:
+    accessed_at: '2026-11-21T17:16:37+03:00'
+  suspicious: false
+  untrusted: true
+  anonymized: []
+  anonymization_confirmed: false
+  closed_markers: []
+  closed_confirmed: false
+  no_personal_data_confirmed: false
+- id: И-3
+  kind: страница
+  url: https://www.comviva.com/blog/what-is-a-low-balance-suite/
+  access: получен
+  fetch:
+    accessed_at: '2026-11-21T17:22:34+03:00'
+    final_url: https://www.comviva.com/blog/what-is-a-low-balance-suite/
+    encoding: utf-8
+    extractor: lxml-visible-text 6.1.3
+    raw_sha256: 39051b374807ee20151c2a40de253751c4af54916dcc7fd3edc3ce111a913a03
+  text_path: sources/i-3.txt
+  text_sha256: 7da90460055a666cabc2348e945f074f937a856fd5ada3840ab217db9c9c75ea
+  suspicious: false
+  untrusted: true
+  anonymized: []
+  anonymization_confirmed: false
+  closed_markers: []
+  closed_confirmed: false
+  no_personal_data_confirmed: false
+- id: И-4
+  kind: страница
+  url: https://media.mts.ru/internet/145684
+  access: получен
+  fetch:
+    accessed_at: '2026-11-21T17:22:34+03:00'
+    final_url: https://media.mts.ru/internet/145684
+    encoding: utf-8
+    extractor: lxml-visible-text 6.1.3
+    raw_sha256: 46fbea03d9a2844af2cdc53227b9e8d173f3c9b6a77ce5735ba5787bf49794ea
+  text_path: sources/i-4.txt
+  text_sha256: d2bdccf8c4b189b729192b04902d27b186b4d39178b33cd6b87dbba54b0916ae
+  suspicious: false
+  untrusted: true
+  anonymized: []
+  anonymization_confirmed: false
+  closed_markers: []
+  closed_confirmed: false
+  no_personal_data_confirmed: false
+- id: И-5
+  kind: страница
+  url: https://www.apple.com/legal/privacy/data/en/family-sharing/
+  access: получен
+  fetch:
+    accessed_at: '2026-11-21T17:22:34+03:00'
+    final_url: https://www.apple.com/legal/privacy/data/en/family-sharing/
+    encoding: utf-8
+    extractor: trafilatura 2.3.1
+    raw_sha256: b9da4062a243c735e5a6827e564b29713239c1cbd2b2236c9f30ab8158e9f9c1
+  text_path: sources/i-5.txt
+  text_sha256: 6f5318a1b542ffd426c10e49674bf2eec6c69cfb9b2fdf22a4690c227eb36f57
+  suspicious: true
+  untrusted: true
+  anonymized: []
+  anonymization_confirmed: false
+  closed_markers: []
+  closed_confirmed: false
+  no_personal_data_confirmed: false
+- id: И-6
+  kind: страница
+  url: https://www.amic.ru/news/megafon-uprostil-oplatu-svyazi-dlya-blizkih-580246
+  access: получен
+  fetch:
+    accessed_at: '2026-11-21T17:22:39+03:00'
+    final_url: https://www.amic.ru/news/megafon-uprostil-oplatu-svyazi-dlya-blizkih-580246
+    encoding: utf-8
+    extractor: lxml-visible-text 6.1.3
+    raw_sha256: 6a51e2c593777d80298a9223d2a0c79507139b2c80b8dae37921555356fd4871
+  text_path: sources/i-6.txt
+  text_sha256: 9a73827ca7d6c92f6d2778e202b2242080f65cb81c7f44fcca44029eddfae875
+  suspicious: false
+  untrusted: true
+  anonymized: []
+  anonymization_confirmed: false
+  closed_markers: []
+  closed_confirmed: false
+  no_personal_data_confirmed: false
+- id: И-7
+  kind: страница
+  url: https://company.ding.com/research/
+  access: нужен браузер
+  access_note: в ответе нет текста (страница строится скриптом или PDF без текстового слоя); сохраните
+    страницу вручную в папку inputs/
+  fetch:
+    accessed_at: '2026-11-21T17:22:55+03:00'
+    final_url: https://company.ding.com/research/
+  suspicious: false
+  untrusted: true
+  anonymized: []
+  anonymization_confirmed: false
+  closed_markers: []
+  closed_confirmed: false
+  no_personal_data_confirmed: false
+- id: И-8
+  kind: страница
+  url: https://www.verizon.com/about/privacy/verizon-family-privacy-policy-for-kids
+  access: получен
+  fetch:
+    accessed_at: '2026-11-21T17:22:40+03:00'
+    final_url: https://www.verizon.com/about/privacy/verizon-family-privacy-policy-for-kids
+    encoding: utf-8
+    extractor: trafilatura 2.3.1
+    raw_sha256: 376da41e64b0d08c4e1de2f9b9863f30e32f8835c7e540669e7a62e218bee809
+  text_path: sources/i-8.txt
+  text_sha256: 09f91a9bdd0e52195929fc4e6c8342777f28773cee5ad75cbde6a002b6b3e20f
+  suspicious: false
+  untrusted: true
+  anonymized:
+  - адреса почты
+  anonymization_confirmed: false
+  closed_markers: []
+  closed_confirmed: false
+  no_personal_data_confirmed: false
+- id: И-9
+  kind: страница
+  url: https://www.tbank.ru/mobile-operator/help/communication/sim-card/start-using/number-control/
+  access: запрещено robots.txt
+  access_note: 'robots.txt недоступен (ошибка сервера или нет связи): по RFC 9309 загрузка запрещена;
+    повторите позже или сохраните страницу вручную в папку inputs/ проекта'
+  fetch:
+    accessed_at: '2026-11-21T17:22:51+03:00'
+  suspicious: false
+  untrusted: true
+  anonymized: []
+  anonymization_confirmed: false
+  closed_markers: []
+  closed_confirmed: false
+  no_personal_data_confirmed: false
+- id: И-10
+  kind: страница
+  url: https://kod.ru/zhaloby-na-operatorov/
+  access: получен
+  fetch:
+    accessed_at: '2026-11-21T17:22:45+03:00'
+    final_url: https://kod.ru/zhaloby-na-operatorov
+    encoding: utf-8
+    extractor: lxml-visible-text 6.1.3
+    raw_sha256: 553a42469870835ebb01d88daed3d5815b1e36eb5c75ea5cfba5760ba1e22756
+  text_path: sources/i-10.txt
+  text_sha256: 544865148e120dd91e0d2452dddd0d6b8ccc3b313f171e92343537b49b6512ea
+  suspicious: false
+  untrusted: true
+  anonymized: []
+  anonymization_confirmed: false
+  closed_markers: []
+  closed_confirmed: false
+  no_personal_data_confirmed: false
+- id: И-11
+  kind: страница
+  url: https://www.fontanka.ru/2026/07/24/76551634/
+  access: 'источник недоступен: ошибка'
+  access_note: ответ 428
+  fetch:
+    accessed_at: '2026-11-21T17:23:24+03:00'
+    final_url: https://www.fontanka.ru/2026/07/24/76551634/
+  suspicious: false
+  untrusted: true
+  anonymized: []
+  anonymization_confirmed: false
+  closed_markers: []
+  closed_confirmed: false
+  no_personal_data_confirmed: false
+- id: И-12
+  kind: страница
+  url: https://digitalregulation.org/protection-of-consumers-with-prepaid-accounts/
+  access: получен
+  fetch:
+    accessed_at: '2026-11-21T17:22:48+03:00'
+    final_url: https://digitalregulation.org/protection-of-consumers-with-prepaid-accounts/
+    encoding: utf-8
+    extractor: trafilatura 2.3.1
+    raw_sha256: 62e84b0a0724cf414fb3ea4adc6defb60332ef230d9db7f334e897bd5a0c0b30
+  text_path: sources/i-12.txt
+  text_sha256: 6013cd116385ee03cd392ca1c4dc04e41eb80b82519bcde13f7b9ac038b209dc
+  suspicious: false
+  untrusted: true
+  anonymized: []
+  anonymization_confirmed: false
+  closed_markers: []
+  closed_confirmed: false
+  no_personal_data_confirmed: false
+- id: И-13
+  kind: страница
+  url: https://www.interfax.ru/russia/668678
+  access: получен
+  fetch:
+    accessed_at: '2026-11-21T17:22:50+03:00'
+    final_url: https://www.interfax.ru/russia/668678
+    encoding: utf-8
+    extractor: lxml-visible-text 6.1.3
+    raw_sha256: 22e0d52897208aa820d878cbdb27e33c19de8a3ea59dafc40111b47be3da4e6d
+  text_path: sources/i-13.txt
+  text_sha256: dd27c825c334279880538887bb3e98b180e18e252f2df24ceb9208179baebede
+  suspicious: false
+  untrusted: true
+  anonymized: []
+  anonymization_confirmed: false
+  closed_markers: []
+  closed_confirmed: false
+  no_personal_data_confirmed: false
+- id: И-14
+  kind: страница
+  url: https://www.pushwoosh.com/products/mobile-push-telecom/
+  access: получен
+  fetch:
+    accessed_at: '2026-11-21T17:23:05+03:00'
+    final_url: https://www.pushwoosh.com/products/mobile-push-telecom/
+    encoding: utf-8
+    extractor: lxml-visible-text 6.1.3
+    raw_sha256: cf57d83e88e25d4d50b92dcd638f05851efda6f29720fe32242c85f7562ee0a8
+  text_path: sources/i-14.txt
+  text_sha256: 6622d36dff8a9dcbbc82f2766a8ff8d5c4d577e5fc98ddbd8a1a8f6e642682fc
+  suspicious: false
+  untrusted: true
+  anonymized: []
+  anonymization_confirmed: false
+  closed_markers: []
+  closed_confirmed: false
+  no_personal_data_confirmed: false
+- id: И-15
+  kind: страница
+  url: https://www.dp.ru/a/2026/07/24/v-megaseme-pojavilis-roli
+  access: получен
+  fetch:
+    accessed_at: '2026-11-21T17:23:06+03:00'
+    final_url: https://www.dp.ru/a/2026/07/24/v-megaseme-pojavilis-roli
+    encoding: utf-8
+    extractor: lxml-visible-text 6.1.3
+    raw_sha256: 0e33c78bca600494ee4b39d2ed133780f257e667c95fe74dd89473b9fbbaa795
+  text_path: sources/i-15.txt
+  text_sha256: 549eb7fcf0dc37ec5665ea8e9ce4edb365855a48c52eb027372e2866203114c8
+  suspicious: false
+  untrusted: true
+  anonymized:
+  - адреса почты
+  - телефоны
+  anonymization_confirmed: false
+  closed_markers: []
+  closed_confirmed: false
+  no_personal_data_confirmed: false
+- id: И-16
+  kind: страница
+  url: https://habr.com/ru/post/989074
+  access: получен
+  fetch:
+    accessed_at: '2026-11-21T17:23:18+03:00'
+    final_url: https://habr.com/ru/articles/989074/
+    encoding: utf-8
+    extractor: lxml-visible-text 6.1.3
+    raw_sha256: 139d3d961902a34718c28f3a0861de66c3fd83a08eadad784db948eed08f85f5
+  text_path: sources/i-16.txt
+  text_sha256: f0099e304974ff4b539f039eaefaae7737bd2db11e9b54d643aa272ee3cfcda0
+  suspicious: false
+  untrusted: true
+  anonymized: []
+  anonymization_confirmed: false
+  closed_markers: []
+  closed_confirmed: false
+  no_personal_data_confirmed: false
+- id: И-17
+  kind: страница
+  url: https://goizueta.emory.edu/research-spotlight/check-your-phone-emory-experts-are-asking-do-alerts-actually-help-customers
+  access: получен
+  fetch:
+    accessed_at: '2026-11-21T17:28:08+03:00'
+    final_url: https://goizueta.emory.edu/research-spotlight/check-your-phone-emory-experts-are-asking-do-alerts-actually-help-customers
+    encoding: utf-8
+    extractor: lxml-visible-text 6.1.3
+    raw_sha256: 738add3d6fd2dc4b2703451eeed1db8bdca3fed6bf8c733d0de245e94ba09f35
+  text_path: sources/i-17.txt
+  text_sha256: 7c40606c7e979c216833bf7287e4ec48f007267fe595102391983517a36604d2
+  suspicious: false
+  untrusted: true
+  anonymized: []
+  anonymization_confirmed: false
+  closed_markers: []
+  closed_confirmed: false
+  no_personal_data_confirmed: false
+- id: И-18
+  kind: страница
+  url: https://www.mbs.edu/news/How-effective-are-nudges-in-preventing-monthly-bill-shock
+  access: 'источник недоступен: защита'
+  access_note: сайт отвечает проверкой или запретом для программ; обход не выполняется
+  fetch:
+    accessed_at: '2026-11-21T17:28:15+03:00'
+    final_url: https://www.mbs.edu/news/How-effective-are-nudges-in-preventing-monthly-bill-shock
+  suspicious: false
+  untrusted: true
+  anonymized: []
+  anonymization_confirmed: false
+  closed_markers: []
+  closed_confirmed: false
+  no_personal_data_confirmed: false
+- id: И-19
+  kind: страница
+  url: https://www.sciencedaily.com/releases/2015/03/150326162702.htm
+  access: получен
+  fetch:
+    accessed_at: '2026-11-21T17:28:25+03:00'
+    final_url: https://www.sciencedaily.com/releases/2015/03/150326162702.htm
+    encoding: utf-8
+    extractor: lxml-visible-text 6.1.3
+    raw_sha256: 75eb3f55c523ab7d59d444559f36cd8b03055d98ea61f42c44d6b609e73e18b8
+  text_path: sources/i-19.txt
+  text_sha256: 5763d681ada4c1e3284b78bb30cbf0185083314700d17b9940b91a18c3970e5a
+  suspicious: false
+  untrusted: true
+  anonymized: []
+  anonymization_confirmed: false
+  closed_markers: []
+  closed_confirmed: false
+  no_personal_data_confirmed: false
+- id: И-20
+  kind: страница
+  url: https://www.jbs.cam.ac.uk/2023/mobile-phone-customers-want-peace-of-mind-not-just-savings/
+  access: получен
+  fetch:
+    accessed_at: '2026-11-21T17:28:42+03:00'
+    final_url: https://www.jbs.cam.ac.uk/2023/mobile-phone-customers-want-peace-of-mind-not-just-savings/
+    encoding: utf-8
+    extractor: trafilatura 2.3.1
+    raw_sha256: 80ccde5a0a49a2e2a0baaba73f946dd7cfa484d38ef870515348d0211c206ff1
+  text_path: sources/i-20.txt
+  text_sha256: 4bb1ca2d49f536f42ecafa85fdf2b55fc692bb7aec15775250f3acdf5ff69d5a
+  suspicious: false
+  untrusted: true
+  anonymized: []
+  anonymization_confirmed: false
+  closed_markers: []
+  closed_confirmed: false
+  no_personal_data_confirmed: false
+- id: И-21
+  kind: страница
+  url: https://www.lightreading.com/services/mobile-services/avoiding-the-prepaid-death-spiral/a/d-id/750696
+  access: получен
+  fetch:
+    accessed_at: '2026-11-21T17:28:50+03:00'
+    final_url: https://www.lightreading.com/mobile-core/avoiding-the-prepaid-death-spiral
+    encoding: utf-8
+    extractor: lxml-visible-text 6.1.3
+    raw_sha256: 85ce02c0fcd333f8cefc6391750c26e44f3c68be1a93163114debbf588f5c17d
+  text_path: sources/i-21.txt
+  text_sha256: d8302fc13201a0611e8927eb6c0b917af9a00b9d8e75236af6a3473180dd0900
+  suspicious: false
+  untrusted: true
+  anonymized: []
+  anonymization_confirmed: false
+  closed_markers: []
+  closed_confirmed: false
+  no_personal_data_confirmed: false
+- id: И-22
+  kind: страница
+  url: https://www.comnews.ru/content/244130/2026-03-10/2026-w11/1002/demping-ili-loyalnost-buduschee-cenoobrazovaniya-mobilnykh-operatorov
+  access: получен
+  fetch:
+    accessed_at: '2026-11-21T17:49:47+03:00'
+    final_url: https://www.comnews.ru/content/244130/2026-03-10/2026-w11/1002/demping-ili-loyalnost-buduschee-cenoobrazovaniya-mobilnykh-operatorov
+    encoding: utf-8
+    extractor: lxml-visible-text 6.1.3
+    raw_sha256: 80762917059cd2cf4b875d246c1c7b5d9d35d69d273564060bfa3619feb76d79
+  text_path: sources/i-22.txt
+  text_sha256: baa905161af117632897c5e0e77dcc25fbec7b7bc83f87e04e10db52c31faa0e
+  suspicious: false
+  untrusted: true
+  anonymized: []
+  anonymization_confirmed: false
+  closed_markers: []
+  closed_confirmed: false
+  no_personal_data_confirmed: false
+- id: И-23
+  kind: страница
+  url: https://www.ofcom.org.uk/phones-and-broadband/service-quality/latest-telecoms-and-pay-tv-complaints-revealed-q4-2025
+  access: 'источник недоступен: защита'
+  access_note: сайт отвечает проверкой или запретом для программ; обход не выполняется
+  fetch:
+    accessed_at: '2026-11-21T17:50:05+03:00'
+    final_url: https://www.ofcom.org.uk/phones-and-broadband/service-quality/latest-telecoms-and-pay-tv-complaints-revealed-q4-2025
+  suspicious: false
+  untrusted: true
+  anonymized: []
+  anonymization_confirmed: false
+  closed_markers: []
+  closed_confirmed: false
+  no_personal_data_confirmed: false
+- id: И-24
+  kind: страница
+  url: https://www.comnews.ru/content/203299/2019-12-03/2019-w49/obektivnaya-ucenka-spros-semeynye-tarify-udvoilsya
+  access: получен
+  fetch:
+    accessed_at: '2026-11-21T17:49:54+03:00'
+    final_url: https://www.comnews.ru/content/203299/2019-12-03/2019-w49/obektivnaya-ucenka-spros-semeynye-tarify-udvoilsya
+    encoding: utf-8
+    extractor: trafilatura 2.3.1
+    raw_sha256: 877346a2a31af26c37b59bfcbed20e3c177c44e41a8156ed12ab14b93c9ac825
+  text_path: sources/i-24.txt
+  text_sha256: 00375f3966372c8dac34d65eb86066f61829e8bcbdacd832b870a59cfc84c210
+  suspicious: false
+  untrusted: true
+  anonymized: []
+  anonymization_confirmed: false
+  closed_markers: []
+  closed_confirmed: false
+  no_personal_data_confirmed: false
+- id: И-25
+  kind: страница
+  url: https://www.ofcom.org.uk/research-and-data/multi-sector-research/telecoms-complaints-data
+  access: 'источник недоступен: защита'
+  access_note: сайт отвечает проверкой или запретом для программ; обход не выполняется
+  fetch:
+    accessed_at: '2026-11-21T17:49:59+03:00'
+    final_url: https://www.ofcom.org.uk/research-and-data/multi-sector-research/telecoms-complaints-data
+  suspicious: false
+  untrusted: true
+  anonymized: []
+  anonymization_confirmed: false
+  closed_markers: []
+  closed_confirmed: false
+  no_personal_data_confirmed: false
+- id: И-26
+  kind: страница
+  url: https://www.ofcom.org.uk/__data/assets/pdf_file/0026/283148/complaints-report-q2-2023.pdf
+  access: 'источник недоступен: защита'
+  access_note: сайт отвечает проверкой или запретом для программ; обход не выполняется
+  fetch:
+    accessed_at: '2026-11-21T17:50:14+03:00'
+    final_url: https://www.ofcom.org.uk/__data/assets/pdf_file/0026/283148/complaints-report-q2-2023.pdf
+  suspicious: false
+  untrusted: true
+  anonymized: []
+  anonymization_confirmed: false
+  closed_markers: []
+  closed_confirmed: false
+  no_personal_data_confirmed: false
+- id: И-27
+  kind: страница
+  url: https://www.analysysmason.com/research/content/reports/operator-strategies-family-bundles/
+  access: получен
+  fetch:
+    accessed_at: '2026-11-21T17:50:14+03:00'
+    final_url: https://www.analysysmason.com/research/content/reports/operator-strategies-family-bundles/
+    encoding: utf-8
+    extractor: lxml-visible-text 6.1.3
+    raw_sha256: d3ff26be13e74344aa48c9288690f7923465f93a810995c07d9b5de46c48778f
+  text_path: sources/i-27.txt
+  text_sha256: 2da184995fd2abde88eb71b882be78764047cb2909dc6adf94c2a9b6d681d1d9
+  suspicious: false
+  untrusted: true
+  anonymized: []
+  anonymization_confirmed: false
+  closed_markers: []
+  closed_confirmed: false
+  no_personal_data_confirmed: false
+- id: И-28
+  kind: страница
+  url: https://www.acma.gov.au/articles/2026-10/telco-complaints-down-ombudsman-referrals-still-too-high
+  access: запрещено robots.txt
+  access_note: 'robots.txt недоступен (ошибка сервера или нет связи): по RFC 9309 загрузка запрещена;
+    повторите позже или сохраните страницу вручную в папку inputs/ проекта'
+  fetch:
+    accessed_at: '2026-11-21T17:51:09+03:00'
+  suspicious: false
+  untrusted: true
+  anonymized: []
+  anonymization_confirmed: false
+  closed_markers: []
+  closed_confirmed: false
+  no_personal_data_confirmed: false
+- id: И-29
+  kind: страница
+  url: https://rkn.gov.ru/treatments/p436/doc988.htm
+  access: получен
+  fetch:
+    accessed_at: '2026-11-21T17:51:28+03:00'
+    final_url: https://rkn.gov.ru/treatments/p436/doc988.htm
+    encoding: utf-8
+    extractor: trafilatura 2.3.1
+    raw_sha256: 8981fbd1bd155fbf53d208b3028a6309733f6d9031f099642ac39438d8cd12cf
+  text_path: sources/i-29.txt
+  text_sha256: d76e138b6ddc1a376ca9e22d3f1120bbdc243b2d1b8b9eaf0ce98c2973ea134d
+  suspicious: false
+  untrusted: true
+  anonymized: []
+  anonymization_confirmed: false
+  closed_markers: []
+  closed_confirmed: false
+  no_personal_data_confirmed: false
+- id: И-30
+  kind: страница
+  url: https://fas.gov.ru/questions/question_categories/14
+  access: получен
+  fetch:
+    accessed_at: '2026-11-21T17:51:35+03:00'
+    final_url: https://fas.gov.ru/questions/question_categories/14
+    encoding: utf-8
+    extractor: lxml-visible-text 6.1.3
+    raw_sha256: 5044f67aecdf02b2964c5b34791a2c36fd27839ee15c03c82bfe230fd802aa44
+  text_path: sources/i-30.txt
+  text_sha256: 054def7a23c8416bdef00188e71da59e3e66300c81c775e617580b545a0129d5
+  suspicious: false
+  untrusted: true
+  anonymized:
+  - телефоны
+  anonymization_confirmed: false
+  closed_markers: []
+  closed_confirmed: false
+  no_personal_data_confirmed: false
+- id: И-31
+  kind: заметка пользователя
+  path: inputs/итог-пилота.md
+  access: получен
+  text_path: inputs/итог-пилота.md.txt
+  text_sha256: 7eecd63b02f66778a01a67d7a2dc220434a96311ab8487c436280f117261c953
+  suspicious: false
+  untrusted: false
+  anonymized: []
+  anonymization_confirmed: false
+  closed_markers: []
+  closed_confirmed: false
+  no_personal_data_confirmed: false
+  material_sha256: 7eecd63b02f66778a01a67d7a2dc220434a96311ab8487c436280f117261c953

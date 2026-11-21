@@ -1,0 +1,127 @@
+schema_version: 1
+step: '6'
+checked_at: '2026-11-21T17:53:47+03:00'
+by: критик
+part_a:
+- id: А-1
+  answer: да
+- id: А-2
+  answer: да
+- id: А-3
+  answer: да
+- id: А-4
+  answer: да
+- id: А-5
+  answer: да
+- id: А-6
+  answer: да
+- id: А-7
+  answer: да
+- id: А-8
+  answer: да
+- id: А-9
+  answer: да
+- id: А-10
+  answer: да
+- id: А-11
+  answer: да
+- id: А-12
+  answer: да
+- id: А-13
+  answer: да
+- id: А-14
+  answer: да
+- id: А-15
+  answer: да
+- id: А-16
+  answer: да
+- id: А-17
+  answer: да
+- id: А-18
+  answer: да
+- id: А-19
+  answer: да
+- id: А-21
+  answer: да
+- id: А-22
+  answer: да
+- id: А-23
+  answer: да
+- id: А-24
+  answer: да
+- id: А-25
+  answer: да
+part_b:
+- id: Б-1
+  answer: да
+  where: plan.yaml, ВП-1…ВП-4
+  why: у каждого вопроса две ветки с разными действиями
+- id: Б-2
+  answer: да
+  where: options.yaml, differs
+  why: варианты различаются аудиторией, ценностью и результатом, а не масштабом
+- id: Б-3
+  answer: нет
+  where: gaps.yaml, П-2, П-3, П-4
+  why: по П-2 только СМИ, один вид источника; запросы П-3 и П-4 про уведомления, а не про конверсию и
+    затраты
+- id: Б-4
+  answer: нет
+  where: options.yaml, recommendation
+  why: довод «только он закрывает П-2» верен по определению; нет сравнения с Вар-3; ответ про задержку
+    помощи не говорит о сроке
+- id: Б-5
+  answer: нет
+  where: recommendation.claims, У-7, У-9
+  why: цитата У-7 о показе сайтов подана как довод об остатке и начислениях; У-9 без периода 2019 и общей
+    статистики
+- id: Б-6
+  answer: да
+  where: promises.yaml, comms-strategy.md
+  why: числа компании поданы как данные компании, обещания результата не подтверждены и не идут в сообщения
+- id: Б-7
+  answer: нет
+  where: comms-strategy.md, сообщения 1 и 2
+  why: фраза «за пару касаний» и фраза о начислениях не входят в обещания О-2 и О-3
+- id: Б-8
+  answer: да
+  where: comms-strategy.md, product-strategy.md
+  why: сообщения опираются на направление и аудиторию, отказов не касаются
+- id: Б-9
+  answer: нет
+  where: sources.yaml И-2, gaps.yaml
+  why: страница справки из запроса не открылась, пробела по ней нет
+- id: Б-10
+  answer: нет
+  where: gaps.yaml, metric_coverage
+  why: охват закрыт соседними величинами, причина not_relevant для качества продукта общая
+- id: Б-11
+  answer: да
+  where: verification.yaml, premortem
+  why: У-47 бьёт по допущению выбора и отмечена, остановка в журнале есть
+- id: Б-12
+  answer: да
+  where: product-strategy.md, отказы
+  why: у каждого отказа названы потеря и условие возврата
+- id: Б-13
+  answer: нет
+  where: verification.yaml, ПП-6, ПП-7, ПП-9, ПП-1
+  why: пороги ПП-6, ПП-7, ПП-9 не обоснованы; минимальный эффект ПП-1 противоречит диапазону
+- id: Б-14
+  answer: да
+  where: product-strategy.md, Альтернативы
+  why: первой стоит текущая практика
+- id: Б-15
+  answer: да
+  where: product-strategy.md, Польза, затраты и доходы
+  why: расчёт с формулой и входами У-38, затраты по П-4
+result: не пройдено
+failed:
+- Б-3
+- Б-4
+- Б-5
+- Б-7
+- Б-9
+- Б-10
+- Б-13
+critic_call: подтверждён

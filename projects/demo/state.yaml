@@ -1,0 +1,79 @@
+schema_version: 1
+id: brif-strategiya
+mode: автопилот
+step: '8'
+gates:
+  В1: отвечено
+  В2: пройдены автоматически
+  В3: пройдены автоматически
+  В4: отвечено
+  В5: пройдены автоматически
+budget:
+  limit_usd: 8.0
+  spent_usd: 7.849025
+  limit_minutes: 60.0
+  spent_minutes: 30.55
+next_action: пересмотр выполнен; решение Вар-2 в силе, следующее — «что решать сейчас»
+files:
+  claims.yaml: 5401af0aadfbcb4f01f802790e17a0764bac396e415bf77888f801085572234e
+  completeness.yaml: 2725f1718e89ed61d6993778f0e39b3e8abeaf16ba92a1c89f7ae32c893f981d
+  cost.jsonl: 097e6c9d1d4820424324e9aae7cb17d7c0ce1ea7658361259992c0e7aca951ea
+  decisions.yaml: 083821d073797684ff072228242edaf34894ab2ec292657a1bd56c8d0e215a1f
+  frame.yaml: 17edc315fdd6bf6c5aa5e812155ce6e7a1fde42e5013d4074228db43d7a60563
+  gaps.yaml: 11269da772898c7e1689c543fbb774b3fb56428a2d06c93c9d71dc67227a67b5
+  history/completeness.v1.yaml: 5d61172c7349c65fade71a4b66d083f5dcca07acb168273f8046df10c0db78e2
+  history/gaps.v1.yaml: 9fd259104f98cbfb862a4ead4d65bcc7690e83c7f1c0bba777a1f48b3d31b3fc
+  history/gaps.v2.yaml: b7cee615faada020d49331cc5360f4f0f18bc3b3dde5777b61fc7af0a27d91a8
+  history/gaps.v3.yaml: 9347349ceb30d609b1dfb4e32d362f9f5d06ccfd2e14f59fe8204c10cf331167
+  history/options.v1.yaml: fc7e529d118e4c435ebfc705ca544818b6520dd956dc37d018b73cf5d82d9416
+  history/options.v2.yaml: 05213094f3801be06eb94b3c140b64f32405b8c8e2c2e238fe9bf89085b9c1b6
+  history/options.v3.yaml: b2ff3eb867da0c378d5c64ba5a1a2a01028dd71ee6fb730afe9de358fe343249
+  history/plan.v1.yaml: 85f8f3f059bb59efe78055f64c48943881a3acef4810136be1ec56499aae93ab
+  history/release-1/decisions.yaml: 083821d073797684ff072228242edaf34894ab2ec292657a1bd56c8d0e215a1f
+  history/release-1/frame.yaml: 17edc315fdd6bf6c5aa5e812155ce6e7a1fde42e5013d4074228db43d7a60563
+  history/release-1/gaps.yaml: 11269da772898c7e1689c543fbb774b3fb56428a2d06c93c9d71dc67227a67b5
+  history/release-1/options.yaml: 242a02f8e96a774a288e6555c4434c9b213f7bd1c142eac0b78695bca096d7ce
+  history/release-1/outputs/comms-strategy.md: 5cf45de2f004082a7a30aadc45103f2c4b4f82ac0c62a2a3615e58174b0eaa38
+  history/release-1/outputs/frame.md: a2c53f51636676b1e67ba69614a0a5a51f5dfcea8156e722142221666fcec9ed
+  history/release-1/outputs/one-pager.md: 2dd1513ac895c865b48e9d25d1e8af00d7ebed3d246de1c72ce47e9077a8c8e3
+  history/release-1/outputs/options.md: 1552cfd0c5678d6ddb3019d9b7ae0a9989dc9cfb9a949e3bce41790fbcc553b2
+  history/release-1/outputs/plan.md: a4e1186ec10c2be37ca16eb66114bc992d79fbd20d661db67d22b158d470aa95
+  history/release-1/outputs/product-strategy.md: 4c33fa62c8e02b80e8a45ae87a11b52be258f421ef9e285df451ab28849b1480
+  history/release-1/outputs/report.md: 889b7891cafcb5b45c750d552e48229c43e0bfb20b4ac1b160de2a5904998eab
+  history/release-1/outputs/run-report.md: cb3e717b50c00ae144e0a115e186f738f1f201edfb2a1702a57f87cb5ebf9762
+  history/release-1/outputs/situation.md: 34f86c4c7fd933a985e2517dee0d340af6742d4cee224d5276843b35491c2cd3
+  history/release-1/outputs/verification-plan.md: b6d6da064415d80b0a8c0a3601dfe327d18208ab5545e88e4f1518bfb1406b79
+  history/release-1/plan.yaml: c8a85e9ad7ed1e80905a155624611ca124c978882bfe23a9c51c4819b7466d2d
+  history/release-1/promises.yaml: b88b672c8955192f70f195b6f2bec39a489af186c8ce6c7292ed0fe992470a9b
+  history/release-1/verification.yaml: 8f5127b3a2f8246802a18f20c8e9eac94ec377ccadf3ab32ab668694e3da5e43
+  history/verification.v1.yaml: bf03455de63ef4e1f5ec4a11afec2419af602fac7778d0e4983536e84da198c4
+  history/verification.v2.yaml: fd18e6bca4e42e712cbc7b1c39518149a9dd22ecf346c58d3cc860606be0d574
+  inputs/Бриф — связь для близких.pdf.txt: bd5ad42b64ebdfa7bccb807d1956dfd494502724d174e3daca4ef48d6d363a1b
+  inputs/итог-пилота.md.txt: 7eecd63b02f66778a01a67d7a2dc220434a96311ab8487c436280f117261c953
+  journal.jsonl: e52d689fd829789cfed1b70c62bc9c84335fe254ea5d6cb64f0e9d3777c953f5
+  metrics.yaml: 1a58a4803b3d3f3ba52fd229518437469b6d760ecadb9148963750a124056f79
+  options.yaml: 242a02f8e96a774a288e6555c4434c9b213f7bd1c142eac0b78695bca096d7ce
+  plan.yaml: c8a85e9ad7ed1e80905a155624611ca124c978882bfe23a9c51c4819b7466d2d
+  promises.yaml: b88b672c8955192f70f195b6f2bec39a489af186c8ce6c7292ed0fe992470a9b
+  sources.yaml: 747940f8994b06085f17eb79709cc3fdc2ea250a42545d439fa3ea06e0478aa6
+  sources/i-10.txt: 544865148e120dd91e0d2452dddd0d6b8ccc3b313f171e92343537b49b6512ea
+  sources/i-12.txt: 6013cd116385ee03cd392ca1c4dc04e41eb80b82519bcde13f7b9ac038b209dc
+  sources/i-13.txt: dd27c825c334279880538887bb3e98b180e18e252f2df24ceb9208179baebede
+  sources/i-14.txt: 6622d36dff8a9dcbbc82f2766a8ff8d5c4d577e5fc98ddbd8a1a8f6e642682fc
+  sources/i-15.txt: 549eb7fcf0dc37ec5665ea8e9ce4edb365855a48c52eb027372e2866203114c8
+  sources/i-16.txt: f0099e304974ff4b539f039eaefaae7737bd2db11e9b54d643aa272ee3cfcda0
+  sources/i-17.txt: 7c40606c7e979c216833bf7287e4ec48f007267fe595102391983517a36604d2
+  sources/i-19.txt: 5763d681ada4c1e3284b78bb30cbf0185083314700d17b9940b91a18c3970e5a
+  sources/i-20.txt: 4bb1ca2d49f536f42ecafa85fdf2b55fc692bb7aec15775250f3acdf5ff69d5a
+  sources/i-21.txt: d8302fc13201a0611e8927eb6c0b917af9a00b9d8e75236af6a3473180dd0900
+  sources/i-22.txt: baa905161af117632897c5e0e77dcc25fbec7b7bc83f87e04e10db52c31faa0e
+  sources/i-24.txt: 00375f3966372c8dac34d65eb86066f61829e8bcbdacd832b870a59cfc84c210
+  sources/i-27.txt: 2da184995fd2abde88eb71b882be78764047cb2909dc6adf94c2a9b6d681d1d9
+  sources/i-29.txt: d76e138b6ddc1a376ca9e22d3f1120bbdc243b2d1b8b9eaf0ce98c2973ea134d
+  sources/i-3.txt: 7da90460055a666cabc2348e945f074f937a856fd5ada3840ab217db9c9c75ea
+  sources/i-30.txt: 054def7a23c8416bdef00188e71da59e3e66300c81c775e617580b545a0129d5
+  sources/i-4.txt: d2bdccf8c4b189b729192b04902d27b186b4d39178b33cd6b87dbba54b0916ae
+  sources/i-5.txt: 6f5318a1b542ffd426c10e49674bf2eec6c69cfb9b2fdf22a4690c227eb36f57
+  sources/i-6.txt: 9a73827ca7d6c92f6d2778e202b2242080f65cb81c7f44fcca44029eddfae875
+  sources/i-8.txt: 09f91a9bdd0e52195929fc4e6c8342777f28773cee5ad75cbde6a002b6b3e20f
+  verification.yaml: 8f5127b3a2f8246802a18f20c8e9eac94ec377ccadf3ab32ab668694e3da5e43
