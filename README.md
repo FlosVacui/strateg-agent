@@ -10,7 +10,7 @@
 1. **Установите uv** и откройте новое окно терминала.
    - Windows (PowerShell): `powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"`
    - macOS: `curl -LsSf https://astral.sh/uv/install.sh | sh`
-2. **Получите проект:** `git clone https://github.com/FlosVacui/strateg-agent.git` или распакуйте архив, затем `cd strateg-agent`.
+2. **Получите проект:** `git clone <адрес репозитория>` или распакуйте архив, затем `cd strateg-agent`.
 3. **Поставьте зависимости и проверьте среду** (на Windows и macOS одинаково):
 
    ```bash
