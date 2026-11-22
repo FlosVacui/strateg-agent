@@ -5,6 +5,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
+import strateg
 from helpers import open_fixture
 from pdf_builder import make_pdf
 from strateg import fetch
@@ -27,7 +28,7 @@ def fetcher(net, tmp_path):
 
 def test_user_agent_has_version_and_repository():
     ua = fetch.user_agent()
-    assert ua.startswith("strateg/0.0.1 (+https://")
+    assert ua.startswith(f"strateg/{strateg.__version__} (+https://")
     assert ua.endswith(")")
 
 

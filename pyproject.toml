@@ -1,6 +1,6 @@
 [project]
 name = "strateg"
-version = "0.0.1"
+version = "1.0.0"
 description = "«Стратег» — ИИ-агент для руководителя цифрового продукта: от размытого запроса до продуктовой и коммуникационной стратегии"
 readme = "README.md"
 license = "Apache-2.0"
